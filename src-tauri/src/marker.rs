@@ -66,7 +66,10 @@ pub fn interpret(doc: Option<&serde_json::Value>, instance: &str, protected: boo
     let mut m = match doc {
         None => Marker::default(),
         Some(v) => match serde_json::from_value::<Raw>(v.clone()) {
-            Err(_) => Marker { state: MarkerState::Unreadable, ..Default::default() },
+            Err(_) => Marker {
+                state: MarkerState::Unreadable,
+                ..Default::default()
+            },
             Ok(raw) if raw.version > KNOWN_VERSION || raw.version == 0 => Marker {
                 state: MarkerState::Unreadable,
                 manager: non_empty(Some(raw.manager)),
@@ -75,7 +78,11 @@ pub fn interpret(doc: Option<&serde_json::Value>, instance: &str, protected: boo
             Ok(raw) => {
                 let inherited = raw.instance != instance;
                 Marker {
-                    state: if inherited { MarkerState::Inherited } else { MarkerState::Active },
+                    state: if inherited {
+                        MarkerState::Inherited
+                    } else {
+                        MarkerState::Active
+                    },
                     manager: non_empty(Some(raw.manager)),
                     url: non_empty(raw.url),
                     group: non_empty(raw.group),
@@ -83,7 +90,10 @@ pub fn interpret(doc: Option<&serde_json::Value>, instance: &str, protected: boo
                     locked: if inherited {
                         vec![]
                     } else {
-                        raw.locked.into_iter().filter(|a| MUTATING.contains(&a.as_str())).collect()
+                        raw.locked
+                            .into_iter()
+                            .filter(|a| MUTATING.contains(&a.as_str()))
+                            .collect()
                     },
                     source: None,
                 }
@@ -100,7 +110,12 @@ pub fn interpret(doc: Option<&serde_json::Value>, instance: &str, protected: boo
 }
 
 /// Read an instance's marker: `config.meta.managedBy` first (once Lima has `meta`), then the file.
-pub fn read(dir: &Path, instance: &str, protected: bool, config: Option<&serde_json::Value>) -> Marker {
+pub fn read(
+    dir: &Path,
+    instance: &str,
+    protected: bool,
+    config: Option<&serde_json::Value>,
+) -> Marker {
     if let Some(meta) = config.and_then(|c| c.pointer("/meta/managedBy")) {
         let mut m = interpret(Some(meta), instance, protected);
         m.source = Some("meta".into());
@@ -156,7 +171,11 @@ mod tests {
 
     #[test]
     fn unreadable_or_newer_markers_lock_everything() {
-        for bad in [json!(null), json!({"version": 2, "instance": "a", "manager": "x"}), json!([1])] {
+        for bad in [
+            json!(null),
+            json!({"version": 2, "instance": "a", "manager": "x"}),
+            json!([1]),
+        ] {
             let m = interpret(Some(&bad), "a", false);
             assert_eq!(m.state, MarkerState::Unreadable);
             for a in MUTATING {
@@ -169,7 +188,8 @@ mod tests {
     fn meta_wins_over_the_file() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join(FILE), doc("acme").to_string()).unwrap();
-        let config = json!({"meta": {"managedBy": {"version": 1, "instance": "acme", "manager": "other"}}});
+        let config =
+            json!({"meta": {"managedBy": {"version": 1, "instance": "acme", "manager": "other"}}});
         let m = read(dir.path(), "acme", false, Some(&config));
         assert_eq!(m.manager.as_deref(), Some("other"));
         assert_eq!(m.source.as_deref(), Some("meta"));
@@ -182,6 +202,9 @@ mod tests {
     fn a_garbage_file_is_unreadable() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join(FILE), "{nope").unwrap();
-        assert_eq!(read(dir.path(), "a", false, None).state, MarkerState::Unreadable);
+        assert_eq!(
+            read(dir.path(), "a", false, None).state,
+            MarkerState::Unreadable
+        );
     }
 }

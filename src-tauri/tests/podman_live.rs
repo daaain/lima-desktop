@@ -5,7 +5,9 @@
 use lima_desktop_lib::podman::{ContainerAction, Libpod};
 
 fn socket() -> Option<String> {
-    std::env::var("LD_PODMAN_SOCKET").ok().filter(|s| !s.is_empty())
+    std::env::var("LD_PODMAN_SOCKET")
+        .ok()
+        .filter(|s| !s.is_empty())
 }
 
 #[tokio::test]
@@ -23,7 +25,10 @@ async fn lists_stats_logs_and_df_from_a_real_engine() {
     assert_eq!(web.state, "running");
 
     let stats = pod.stats().await.expect("stats");
-    let s = stats.iter().find(|s| s.id == web.id).expect("stats for the running container");
+    let s = stats
+        .iter()
+        .find(|s| s.id == web.id)
+        .expect("stats for the running container");
     assert!(s.mem_usage > 0, "memory usage reported: {s:?}");
     assert!(s.pids >= 1, "pids reported: {s:?}");
 
@@ -36,8 +41,12 @@ async fn lists_stats_logs_and_df_from_a_real_engine() {
     let df = pod.system_df().await.expect("df");
     assert!(df.get("Images").is_some(), "df: {df}");
 
-    pod.act(&web.id, ContainerAction::Restart).await.expect("restart");
-    pod.act(&web.id, ContainerAction::Start).await.expect("start on a running one is a no-op");
+    pod.act(&web.id, ContainerAction::Restart)
+        .await
+        .expect("restart");
+    pod.act(&web.id, ContainerAction::Start)
+        .await
+        .expect("start on a running one is a no-op");
 }
 
 #[tokio::test]

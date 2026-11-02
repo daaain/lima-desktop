@@ -88,7 +88,12 @@ impl Instance {
 
     pub fn from_raw(raw: RawInstance) -> Self {
         let podman_socket = podman_socket(&raw);
-        let marker = marker::read(Path::new(&raw.dir), &raw.name, raw.protected, raw.config.as_ref());
+        let marker = marker::read(
+            Path::new(&raw.dir),
+            &raw.name,
+            raw.protected,
+            raw.config.as_ref(),
+        );
         Instance {
             podman_socket,
             marker,
@@ -119,7 +124,10 @@ fn podman_socket(raw: &RawInstance) -> Option<String> {
         .and_then(|c| c.get("portForwards"))
         .and_then(|p| p.as_array());
     for fwd in forwards.into_iter().flatten() {
-        let guest = fwd.get("guestSocket").and_then(|g| g.as_str()).unwrap_or("");
+        let guest = fwd
+            .get("guestSocket")
+            .and_then(|g| g.as_str())
+            .unwrap_or("");
         let host = fwd.get("hostSocket").and_then(|h| h.as_str()).unwrap_or("");
         if guest.contains("podman") && guest.ends_with(".sock") && !host.is_empty() {
             let host = host.replace("{{.Dir}}", &raw.dir);
@@ -155,7 +163,9 @@ pub fn parse_list(stdout: &str) -> Vec<RawInstance> {
 }
 
 fn home() -> PathBuf {
-    std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default()
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_default()
 }
 
 /// Locate `limactl`: PATH first, then where Homebrew, MacPorts, the release tarball and
@@ -198,7 +208,12 @@ async fn run(args: &[&str]) -> Result<String, LimaError> {
     let out = command(args)?.output().await?;
     if !out.status.success() {
         let err = String::from_utf8_lossy(&out.stderr);
-        let last = err.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("").to_string();
+        let last = err
+            .lines()
+            .rev()
+            .find(|l| !l.trim().is_empty())
+            .unwrap_or("")
+            .to_string();
         return Err(LimaError::Failed(args.join(" "), last));
     }
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
@@ -206,7 +221,10 @@ async fn run(args: &[&str]) -> Result<String, LimaError> {
 
 pub async fn list() -> Result<Vec<Instance>, LimaError> {
     let out = run(&["list", "--format", "{{json .}}"]).await?;
-    Ok(parse_list(&out).into_iter().map(Instance::from_raw).collect())
+    Ok(parse_list(&out)
+        .into_iter()
+        .map(Instance::from_raw)
+        .collect())
 }
 
 pub async fn get(name: &str) -> Result<Instance, LimaError> {
@@ -241,7 +259,10 @@ impl Action {
 fn refuse_if_locked(inst: &Instance, actions: &[&str]) -> Result<(), LimaError> {
     if let Some(locked) = actions.iter().find(|a| inst.marker.locks(a)) {
         let who = inst.marker.manager.as_deref().unwrap_or("another tool");
-        let mut msg = format!("'{}' is managed by {who}: {locked} is left to it", inst.name);
+        let mut msg = format!(
+            "'{}' is managed by {who}: {locked} is left to it",
+            inst.name
+        );
         if let Some(hint) = &inst.marker.hint {
             msg.push_str(&format!(" — {hint}"));
         }
@@ -320,7 +341,9 @@ pub async fn resize(name: &str, r: &Resize) -> Result<(), LimaError> {
         )));
     }
     let expr = resize_expr(&inst, r)?;
-    run(&["edit", "--tty=false", name, "--set", &expr]).await.map(drop)
+    run(&["edit", "--tty=false", name, "--set", &expr])
+        .await
+        .map(drop)
 }
 
 #[cfg(test)]
@@ -363,7 +386,11 @@ mod tests {
 
     #[test]
     fn resize_expression() {
-        let r = Resize { cpus: Some(6), memory: Some(12 * GIB), disk: Some(120 * GIB) };
+        let r = Resize {
+            cpus: Some(6),
+            memory: Some(12 * GIB),
+            disk: Some(120 * GIB),
+        };
         assert_eq!(
             resize_expr(&stopped(), &r).unwrap(),
             r#".cpus = 6 | .memory = "12288MiB" | .disk = "120GiB""#
@@ -373,9 +400,49 @@ mod tests {
     #[test]
     fn resize_refuses_a_disk_shrink_and_odd_sizes() {
         let inst = stopped();
-        assert!(resize_expr(&inst, &Resize { cpus: None, memory: None, disk: Some(50 * GIB) }).is_err());
-        assert!(resize_expr(&inst, &Resize { cpus: None, memory: Some(100 * MIB), disk: None }).is_err());
-        assert!(resize_expr(&inst, &Resize { cpus: Some(0), memory: None, disk: None }).is_err());
-        assert!(resize_expr(&inst, &Resize { cpus: None, memory: None, disk: None }).is_err());
+        assert!(
+            resize_expr(
+                &inst,
+                &Resize {
+                    cpus: None,
+                    memory: None,
+                    disk: Some(50 * GIB)
+                }
+            )
+            .is_err()
+        );
+        assert!(
+            resize_expr(
+                &inst,
+                &Resize {
+                    cpus: None,
+                    memory: Some(100 * MIB),
+                    disk: None
+                }
+            )
+            .is_err()
+        );
+        assert!(
+            resize_expr(
+                &inst,
+                &Resize {
+                    cpus: Some(0),
+                    memory: None,
+                    disk: None
+                }
+            )
+            .is_err()
+        );
+        assert!(
+            resize_expr(
+                &inst,
+                &Resize {
+                    cpus: None,
+                    memory: None,
+                    disk: None
+                }
+            )
+            .is_err()
+        );
     }
 }

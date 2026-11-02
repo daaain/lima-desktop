@@ -90,7 +90,11 @@ impl From<RawContainer> for Container {
             _ => 0,
         };
         Container {
-            name: r.names.first().cloned().unwrap_or_else(|| r.id.chars().take(12).collect()),
+            name: r
+                .names
+                .first()
+                .cloned()
+                .unwrap_or_else(|| r.id.chars().take(12).collect()),
             compose_project: compose_label(&labels, "project"),
             compose_service: compose_label(&labels, "service"),
             pod_name: Some(r.pod_name).filter(|p| !p.is_empty()),
@@ -174,7 +178,9 @@ fn encode_component(s: &str) -> String {
 
 impl Libpod {
     pub fn new(socket: impl AsRef<Path>) -> Self {
-        Libpod { socket: socket.as_ref().to_path_buf() }
+        Libpod {
+            socket: socket.as_ref().to_path_buf(),
+        }
     }
 
     async fn request(&self, method: Method, path: &str) -> Result<Bytes, PodmanError> {
@@ -205,7 +211,9 @@ impl Libpod {
             }
             Ok(body)
         };
-        tokio::time::timeout(TIMEOUT, fut).await.map_err(|_| PodmanError::Timeout)?
+        tokio::time::timeout(TIMEOUT, fut)
+            .await
+            .map_err(|_| PodmanError::Timeout)?
     }
 
     async fn get_json<T: for<'de> Deserialize<'de>>(&self, path: &str) -> Result<T, PodmanError> {
@@ -244,7 +252,8 @@ impl Libpod {
     }
 
     pub async fn inspect(&self, id: &str) -> Result<serde_json::Value, PodmanError> {
-        self.get_json(&format!("/containers/{}/json", encode_component(id))).await
+        self.get_json(&format!("/containers/{}/json", encode_component(id)))
+            .await
     }
 
     pub async fn logs(&self, id: &str, tail: u32) -> Result<String, PodmanError> {
