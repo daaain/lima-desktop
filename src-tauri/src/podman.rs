@@ -176,6 +176,26 @@ fn encode_component(s: &str) -> String {
         .collect()
 }
 
+/// The longest socket path `connect` takes everywhere: `sun_path` is 104 bytes on macOS (108 on
+/// Linux), NUL included. A longer `LIMA_HOME` or user name makes Lima's own socket path too long
+/// to connect to directly, so we connect through a short symlink to it in the temp directory.
+const MAX_SOCKET_PATH: usize = 100;
+
+fn connectable(socket: &Path) -> std::io::Result<PathBuf> {
+    if socket.as_os_str().len() <= MAX_SOCKET_PATH {
+        return Ok(socket.to_path_buf());
+    }
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    socket.hash(&mut h);
+    let link = std::env::temp_dir().join(format!("lima-desktop-{:016x}.sock", h.finish()));
+    if std::fs::read_link(&link).ok().as_deref() != Some(socket) {
+        let _ = std::fs::remove_file(&link);
+        std::os::unix::fs::symlink(socket, &link)?;
+    }
+    Ok(link)
+}
+
 impl Libpod {
     pub fn new(socket: impl AsRef<Path>) -> Self {
         Libpod {
@@ -185,9 +205,9 @@ impl Libpod {
 
     async fn request(&self, method: Method, path: &str) -> Result<Bytes, PodmanError> {
         let fut = async {
-            let stream = UnixStream::connect(&self.socket)
-                .await
-                .map_err(|e| PodmanError::Connect(self.socket.display().to_string(), e))?;
+            let connect_err = |e| PodmanError::Connect(self.socket.display().to_string(), e);
+            let sock = connectable(&self.socket).map_err(connect_err)?;
+            let stream = UnixStream::connect(&sock).await.map_err(connect_err)?;
             let (mut sender, conn) =
                 hyper::client::conn::http1::handshake(TokioIo::new(stream)).await?;
             tokio::spawn(async move {
@@ -306,6 +326,25 @@ mod tests {
         framed.extend_from_slice(b"err\n");
         assert_eq!(demux_logs(&framed), "hello\nerr\n");
         assert_eq!(demux_logs(b"plain tty output\n"), "plain tty output\n");
+    }
+
+    #[test]
+    fn a_long_socket_path_is_reached_through_a_short_link() {
+        let dir = tempfile::tempdir().unwrap();
+        let deep = dir.path().join("x".repeat(60)).join("y".repeat(60));
+        std::fs::create_dir_all(&deep).unwrap();
+        let sock = deep.join("podman.sock");
+        let _listener = std::os::unix::net::UnixListener::bind(&sock)
+            .or_else(|_| {
+                // Binding needs a short path too: bind through the same kind of link.
+                let short = connectable(&sock).unwrap();
+                let _ = std::fs::remove_file(&short);
+                std::os::unix::net::UnixListener::bind(&short)
+            })
+            .unwrap();
+        let link = connectable(&sock).unwrap();
+        assert!(link.as_os_str().len() <= MAX_SOCKET_PATH);
+        assert_eq!(connectable(&link).unwrap(), link, "short paths are used as they are");
     }
 
     #[test]

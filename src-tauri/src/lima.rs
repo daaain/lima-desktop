@@ -47,9 +47,10 @@ pub struct RawInstance {
     pub disk: u64,
     #[serde(default)]
     pub ssh_config_file: String,
-    #[serde(default)]
+    // Lima spells these with a capital PID, which camelCase renaming would miss.
+    #[serde(default, rename = "hostAgentPID")]
     pub host_agent_pid: u32,
-    #[serde(default)]
+    #[serde(default, rename = "driverPID")]
     pub driver_pid: u32,
     #[serde(default)]
     pub protected: bool,
@@ -359,6 +360,8 @@ mod tests {
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0].name, "acme");
         assert_eq!(rows[0].memory, 8 * GIB);
+        assert_eq!((rows[0].host_agent_pid, rows[0].driver_pid), (4242, 4242));
+        assert_eq!(rows[0].ssh_config_file, "/Users/me/.lima/acme/ssh.config");
         assert_eq!(rows[1].name, "beta");
     }
 

@@ -1,156 +1,60 @@
 <script lang="ts">
-  import { invoke } from "@tauri-apps/api/core";
-
-  let name = $state("");
-  let greetMsg = $state("");
-
-  async function greet(event: Event) {
-    event.preventDefault();
-    // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-    greetMsg = await invoke("greet", { name });
-  }
+  import { live } from '$lib/live.svelte';
+  import { bytes, cores, permille } from '$lib/format';
+  import Meter from '$lib/Meter.svelte';
+  import VmActions from '$lib/VmActions.svelte';
 </script>
 
-<main class="container">
-  <h1>Welcome to Tauri + Svelte</h1>
-
-  <div class="row">
-    <a href="https://vite.dev" target="_blank">
-      <img src="/vite.svg" class="logo vite" alt="Vite Logo" />
-    </a>
-    <a href="https://tauri.app" target="_blank">
-      <img src="/tauri.svg" class="logo tauri" alt="Tauri Logo" />
-    </a>
-    <a href="https://svelte.dev" target="_blank">
-      <img src="/svelte.svg" class="logo svelte-kit" alt="SvelteKit Logo" />
-    </a>
+{#if !live.snapshot}
+  <p class="muted">Looking for Lima instances…</p>
+{:else if live.snapshot.vms.length === 0 && !live.snapshot.limaError}
+  <div class="panel empty">
+    <h2>No Lima instances</h2>
+    <p>Create one with <code>limactl create template://podman</code>, then start it here.</p>
   </div>
-  <p>Click on the Tauri, Vite, and SvelteKit logos to learn more.</p>
-
-  <form class="row" onsubmit={greet}>
-    <input id="greet-input" placeholder="Enter a name..." bind:value={name} />
-    <button type="submit">Greet</button>
-  </form>
-  <p>{greetMsg}</p>
-</main>
+{:else}
+  <div class="grid">
+    {#each live.snapshot.vms as vm (vm.instance.name)}
+      {@const i = vm.instance}
+      {@const l = vm.latest}
+      {@const running = i.status === 'Running'}
+      {@const ctRunning = vm.containers.filter((c) => c.state === 'running').length}
+      <article class="panel card">
+        <div class="head">
+          <a class="name" href={`/vm/${encodeURIComponent(i.name)}`}>{i.name}</a>
+          <span class="badge" class:running>{i.status}</span>
+          {#if i.marker.state === 'active'}<span class="badge managed" title={i.marker.hint}>{i.marker.manager}</span>{/if}
+          {#if i.marker.state === 'unreadable'}<span class="badge alert" title="Its managed-by marker can't be read; every change is locked">unreadable marker</span>{/if}
+          {#if (l.oom_kills ?? 0) > 0}<span class="badge alert" title="OOM kills since the VM booted">{l.oom_kills} OOM</span>{/if}
+        </div>
+        <p class="sub">{i.vmType} · {i.arch} · {i.cpus} CPU · {bytes(i.memory, 0)} · {bytes(i.disk, 0)} disk</p>
+        {#if running}
+          <div class="meters">
+            <Meter label="CPU" value={l.cpu_mc} max={i.cpus * 1000} text={`${cores(l.cpu_mc)} / ${i.cpus} cores`} />
+            <Meter label="Memory" value={l.mem_used} max={l.mem_total ?? i.memory} text={`${bytes(l.mem_used)} / ${bytes(l.mem_total ?? i.memory)}`} />
+            <Meter label="Disk" value={l.store_used ?? l.disk_used} max={l.store_size ?? l.disk_size} text={`${bytes(l.store_used ?? l.disk_used)} / ${bytes(l.store_size ?? l.disk_size)}`} />
+          </div>
+          <p class="sub">
+            pressure: memory {permille(l.psi_mem_some)}, cpu {permille(l.psi_cpu_some)}
+            · on your computer: {bytes(l.host_rss)} RAM
+            · {ctRunning}/{vm.containers.length} containers running
+          </p>
+          {#if vm.probeError}<p class="error">metrics: {vm.probeError}</p>{/if}
+          {#if vm.podmanError}<p class="error">podman: {vm.podmanError}</p>{/if}
+        {/if}
+        <VmActions inst={i} />
+      </article>
+    {/each}
+  </div>
+{/if}
 
 <style>
-.logo.vite:hover {
-  filter: drop-shadow(0 0 2em #747bff);
-}
-
-.logo.svelte-kit:hover {
-  filter: drop-shadow(0 0 2em #ff3e00);
-}
-
-:root {
-  font-family: Inter, Avenir, Helvetica, Arial, sans-serif;
-  font-size: 16px;
-  line-height: 24px;
-  font-weight: 400;
-
-  color: #0f0f0f;
-  background-color: #f6f6f6;
-
-  font-synthesis: none;
-  text-rendering: optimizeLegibility;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-  -webkit-text-size-adjust: 100%;
-}
-
-.container {
-  margin: 0;
-  padding-top: 10vh;
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  text-align: center;
-}
-
-.logo {
-  height: 6em;
-  padding: 1.5em;
-  will-change: filter;
-  transition: 0.75s;
-}
-
-.logo.tauri:hover {
-  filter: drop-shadow(0 0 2em #24c8db);
-}
-
-.row {
-  display: flex;
-  justify-content: center;
-}
-
-a {
-  font-weight: 500;
-  color: #646cff;
-  text-decoration: inherit;
-}
-
-a:hover {
-  color: #535bf2;
-}
-
-h1 {
-  text-align: center;
-}
-
-input,
-button {
-  border-radius: 8px;
-  border: 1px solid transparent;
-  padding: 0.6em 1.2em;
-  font-size: 1em;
-  font-weight: 500;
-  font-family: inherit;
-  color: #0f0f0f;
-  background-color: #ffffff;
-  transition: border-color 0.25s;
-  box-shadow: 0 2px 2px rgba(0, 0, 0, 0.2);
-}
-
-button {
-  cursor: pointer;
-}
-
-button:hover {
-  border-color: #396cd8;
-}
-button:active {
-  border-color: #396cd8;
-  background-color: #e8e8e8;
-}
-
-input,
-button {
-  outline: none;
-}
-
-#greet-input {
-  margin-right: 5px;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    color: #f6f6f6;
-    background-color: #2f2f2f;
-  }
-
-  a:hover {
-    color: #24c8db;
-  }
-
-  input,
-  button {
-    color: #ffffff;
-    background-color: #0f0f0f98;
-  }
-  button:active {
-    background-color: #0f0f0f69;
-  }
-}
-
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 1rem; align-items: start; }
+  .card { display: grid; grid-template-columns: minmax(0, 1fr); align-content: start; gap: 0.6rem; }
+  .head { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+  .name { font-weight: 700; font-size: 1.05rem; color: var(--fg); }
+  .sub { margin: 0; color: var(--muted); font-size: 0.8rem; }
+  .meters { display: grid; gap: 0.5rem; }
+  .empty { max-width: 32rem; }
+  .muted { color: var(--muted); }
 </style>

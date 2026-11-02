@@ -244,6 +244,7 @@ pub struct Band {
 #[derive(Debug, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct Summary {
+    pub min: Option<i64>,
     pub max: Option<i64>,
     pub avg: Option<i64>,
     /// From raw samples only; `None` when the window is answered from rollups.
@@ -559,9 +560,20 @@ impl Store {
             metrics: HashMap::new(),
         };
         let mut bands: Vec<Band> = (0..ncols).map(|_| Band::default()).collect();
-        for (i, b) in buckets.iter().enumerate() {
-            let Some((lo, hi, sum, n)) = b else { continue };
+        // Empty buckets stay in as nulls (from the first sample on), so a chart breaks its line
+        // over a gap (the app or the VM was down) instead of drawing through it.
+        let first = buckets.iter().position(Option::is_some).unwrap_or(buckets.len());
+        let last = buckets.iter().rposition(Option::is_some).map_or(0, |i| i + 1);
+        for (i, b) in buckets.iter().enumerate().take(last).skip(first) {
             series.ts.push(from + i as i64 * width);
+            let Some((lo, hi, sum, n)) = b else {
+                for band in bands.iter_mut() {
+                    band.min.push(None);
+                    band.max.push(None);
+                    band.avg.push(None);
+                }
+                continue;
+            };
             for c in 0..ncols {
                 let has = n[c] > 0;
                 bands[c].min.push(has.then_some(lo[c]));
@@ -601,6 +613,7 @@ impl Store {
                 vals.sort_unstable();
                 let n = vals.len();
                 let s = Summary {
+                    min: vals.first().copied(),
                     max: vals.last().copied(),
                     avg: (n > 0).then(|| {
                         (vals.iter().map(|&v| v as i128).sum::<i128>() / n as i128) as i64
@@ -613,14 +626,16 @@ impl Store {
         } else {
             let rows = self.rows_between("rollup", entity, from, to, HOUR)?;
             for (c, name) in names.iter().enumerate().take(ncols) {
-                let (mut max, mut sum, mut n) = (None::<i64>, 0i128, 0i128);
+                let (mut min, mut max, mut sum, mut n) = (None::<i64>, None::<i64>, 0i128, 0i128);
                 for (_, v) in &rows {
                     let w = v.first().copied().unwrap_or(0);
+                    let lo = v.get(1 + 3 * c).copied().unwrap_or(ABSENT);
                     let hi = v.get(2 + 3 * c).copied().unwrap_or(ABSENT);
                     let avg = v.get(3 + 3 * c).copied().unwrap_or(ABSENT);
                     if avg == ABSENT || w <= 0 {
                         continue;
                     }
+                    min = Some(min.map_or(lo, |m: i64| m.min(lo)));
                     max = Some(max.map_or(hi, |m: i64| m.max(hi)));
                     sum += avg as i128 * w as i128;
                     n += w as i128;
@@ -628,6 +643,7 @@ impl Store {
                 out.insert(
                     name.to_string(),
                     Summary {
+                        min,
                         max,
                         avg: (n > 0).then(|| (sum / n) as i64),
                         p95: None,
@@ -702,6 +718,8 @@ mod tests {
         }
         s.flush(start + 3 * HOUR).unwrap();
 
+        let gap = s.series(vm, start - HOUR, start + HOUR, 120).unwrap();
+        assert_eq!(gap.ts.len(), 60, "leading empty buckets are trimmed");
         let raw = s.series(vm, start, start + HOUR, 60).unwrap();
         assert_eq!(raw.resolution, "1s");
         assert_eq!(raw.ts.len(), 60);
@@ -724,6 +742,7 @@ mod tests {
         );
         let sum = s.summary(vm, start, start + 3 * HOUR, i64::MAX).unwrap();
         assert_eq!(sum["mem_used"].max, Some(9_000));
+        assert_eq!(sum["mem_used"].min, Some(1_000));
         assert_eq!(sum["mem_used"].p95, None);
     }
 
