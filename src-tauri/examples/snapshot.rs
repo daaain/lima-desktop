@@ -40,6 +40,7 @@ const ONCE: &[(&str, &str, &[&str])] = &[
     (podman::IMAGES, "images.json", &["Labels"]),
     (podman::VOLUMES, "volumes.json", &[]),
     (podman::SYSTEM_DF, "system-df.json", COMMANDS_AND_MOUNTS),
+    (podman::VERSION, "version.json", &[]),
 ];
 const STATS_FILE: &str = "stats.jsonl";
 /// What a list row keeps; the anonymiser reads the same file.

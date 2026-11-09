@@ -140,12 +140,20 @@ export function probeLooper(blocks) {
   };
 }
 
-/** podman.rs `RawStat`'s cumulative fields; the rest are readings. */
-const STAT_COUNTERS = ['CPUNano', 'NetInput', 'NetOutput', 'BlockInput', 'BlockOutput'];
+/** podman.rs `WireStat`'s cumulative fields; the rest are readings. */
+const STAT_COUNTERS = ['CPUNano', 'BlockInput', 'BlockOutput'];
+/** And per interface under `Network` (podman 5), the byte counters the app sums. */
+const INTERFACE_COUNTERS = ['RxBytes', 'TxBytes'];
 
-const statCounters = (doc) => (doc.Stats ?? []).flatMap((s) => STAT_COUNTERS
-  .filter((c) => typeof s[c] === 'number')
-  .map((c) => [`${s.ContainerID} ${c}`, s[c], s, c]));
+/** Every cumulative counter in a stats body: [key, value, the object holding it, its field]. */
+const counters = (key, obj, fields) => fields
+  .filter((f) => typeof obj[f] === 'number')
+  .map((f) => [`${key} ${f}`, obj[f], obj, f]);
+
+const statCounters = (doc) => (doc.Stats ?? []).flatMap((s) => [
+  ...counters(s.ContainerID, s, STAT_COUNTERS),
+  ...Object.entries(s.Network ?? {}).flatMap(([nic, i]) => counters(`${s.ContainerID} ${nic}`, i, INTERFACE_COUNTERS)),
+]);
 
 /** Request number → that stats body, cycling the recording with counters carried on. */
 export function statsLooper(bodies) {

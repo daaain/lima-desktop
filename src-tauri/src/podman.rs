@@ -13,7 +13,9 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tokio::net::UnixStream;
 
-const API: &str = "/v4.0.0/libpod";
+/// podman 5 is the minimum ([`supported`]); its libpod API answers under any version prefix up to
+/// its own, so name the oldest one we speak.
+const API: &str = "/v5.0.0/libpod";
 const TIMEOUT: Duration = Duration::from_secs(10);
 
 /// The read-only GETs the collector and the podman views make (a snapshot records each of them).
@@ -22,6 +24,7 @@ pub const STATS: &str = "/containers/stats?stream=false";
 pub const IMAGES: &str = "/images/json?all=true";
 pub const VOLUMES: &str = "/volumes/json";
 pub const SYSTEM_DF: &str = "/system/df";
+pub const VERSION: &str = "/version";
 
 #[derive(Debug, thiserror::Error)]
 pub enum PodmanError {
@@ -37,6 +40,21 @@ pub enum PodmanError {
     Decode(#[from] serde_json::Error),
     #[error("it's in use by a container, so podman won't remove it ({0})")]
     InUse(String),
+    #[error("podman {0} in this VM is too old: Lima Desktop needs podman 5 or newer")]
+    TooOld(String),
+    #[error("can't tell which podman this VM runs ({0:?}): Lima Desktop needs podman 5 or newer")]
+    UnknownVersion(String),
+}
+
+/// Lima Desktop speaks podman 5's libpod API only: older engines are refused, by name, rather
+/// than half-read (podman 4's stats and container list have different shapes).
+pub fn supported(version: &str) -> Result<(), PodmanError> {
+    let major = version.split('.').next().and_then(|m| m.parse::<u32>().ok());
+    match major {
+        Some(m) if m >= 5 => Ok(()),
+        Some(_) => Err(PodmanError::TooOld(version.to_string())),
+        None => Err(PodmanError::UnknownVersion(version.to_string())),
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -77,7 +95,7 @@ struct RawContainer {
     #[serde(default)]
     status: String,
     #[serde(default)]
-    created: serde_json::Value,
+    created: Option<String>,
     #[serde(default)]
     labels: Option<BTreeMap<String, String>>,
     #[serde(default)]
@@ -97,11 +115,12 @@ fn compose_label(labels: &BTreeMap<String, String>, key: &str) -> Option<String>
 impl From<RawContainer> for Container {
     fn from(r: RawContainer) -> Self {
         let labels = r.labels.unwrap_or_default();
-        // libpod's list gives Created as unix seconds; tolerate an RFC 3339 string too.
-        let created = match &r.created {
-            serde_json::Value::Number(n) => n.as_i64().unwrap_or(0),
-            _ => 0,
-        };
+        // podman 5's list gives Created as an RFC 3339 time; 0 when it's missing or unreadable.
+        let created = r
+            .created
+            .as_deref()
+            .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
+            .map_or(0, |t| t.timestamp());
         Container {
             name: r
                 .names
@@ -270,27 +289,79 @@ fn removal(result: Result<Bytes, PodmanError>) -> Result<(), PodmanError> {
 }
 
 /// One container's counters from `GET /libpod/containers/stats?stream=false`. Cumulative ones
-/// (`cpu_nano`, net, block) are turned into rates by the collector.
+/// (`cpu_nano`, net, block) are turned into rates by the collector. Traffic is `None` when podman
+/// gives no network reading, so it's recorded as unknown rather than as a false zero.
 #[derive(Debug, Clone, Deserialize)]
+#[serde(from = "WireStat")]
 pub struct RawStat {
-    #[serde(rename = "ContainerID")]
     pub id: String,
-    #[serde(rename = "CPUNano", default)]
     pub cpu_nano: u64,
-    #[serde(rename = "MemUsage", default)]
     pub mem_usage: u64,
-    #[serde(rename = "MemLimit", default)]
     pub mem_limit: u64,
-    #[serde(rename = "NetInput", default)]
-    pub net_in: u64,
-    #[serde(rename = "NetOutput", default)]
-    pub net_out: u64,
-    #[serde(rename = "BlockInput", default)]
+    pub net_in: Option<u64>,
+    pub net_out: Option<u64>,
     pub block_in: u64,
-    #[serde(rename = "BlockOutput", default)]
     pub block_out: u64,
-    #[serde(rename = "PIDs", default)]
     pub pids: u64,
+}
+
+/// podman 5's stats row as sent: traffic comes per interface, under `Network`.
+#[derive(Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct WireStat {
+    #[serde(rename = "ContainerID")]
+    id: String,
+    #[serde(rename = "CPUNano", default)]
+    cpu_nano: u64,
+    #[serde(default)]
+    mem_usage: u64,
+    #[serde(default)]
+    mem_limit: u64,
+    #[serde(default)]
+    network: Option<BTreeMap<String, Interface>>,
+    #[serde(default)]
+    block_input: u64,
+    #[serde(default)]
+    block_output: u64,
+    #[serde(rename = "PIDs", default)]
+    pids: u64,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct Interface {
+    #[serde(default)]
+    rx_bytes: u64,
+    #[serde(default)]
+    tx_bytes: u64,
+}
+
+impl From<WireStat> for RawStat {
+    fn from(w: WireStat) -> Self {
+        let total = |bytes: fn(&Interface) -> u64| w.network.as_ref().map(|n| n.values().map(bytes).sum());
+        RawStat {
+            net_in: total(|i| i.rx_bytes),
+            net_out: total(|i| i.tx_bytes),
+            id: w.id,
+            cpu_nano: w.cpu_nano,
+            mem_usage: w.mem_usage,
+            mem_limit: w.mem_limit,
+            block_in: w.block_input,
+            block_out: w.block_output,
+            pids: w.pids,
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct VersionReport {
+    #[serde(rename = "Version")]
+    version: String,
+}
+
+/// The body of `VERSION`: the podman release, e.g. "5.8.9".
+pub fn parse_version(body: &[u8]) -> Result<String, PodmanError> {
+    Ok(serde_json::from_slice::<VersionReport>(body)?.version)
 }
 
 #[derive(Debug, Deserialize)]
@@ -404,6 +475,16 @@ impl Libpod {
 
     async fn get_json<T: for<'de> Deserialize<'de>>(&self, path: &str) -> Result<T, PodmanError> {
         Ok(serde_json::from_slice(&self.get(path).await?)?)
+    }
+
+    /// The podman release this VM runs.
+    pub async fn version(&self) -> Result<String, PodmanError> {
+        parse_version(&self.get(VERSION).await?)
+    }
+
+    /// Ok for podman 5 or newer; otherwise the error to show for this VM.
+    pub async fn ensure_supported(&self) -> Result<(), PodmanError> {
+        supported(&self.version().await?)
     }
 
     pub async fn ping(&self) -> bool {
@@ -526,7 +607,7 @@ mod tests {
     fn container_from_list_row_reads_compose_labels() {
         let row = serde_json::json!({
             "Id": "abc123", "Names": ["web-1"], "Image": "docker.io/library/nginx:latest",
-            "State": "running", "Status": "Up 2 minutes", "Created": 1730000000,
+            "State": "running", "Status": "Up 2 minutes",
             "Labels": {"io.podman.compose.project": "shop", "com.docker.compose.service": "web"},
             "PodName": ""
         });
@@ -535,7 +616,63 @@ mod tests {
         assert_eq!(c.compose_project.as_deref(), Some("shop"));
         assert_eq!(c.compose_service.as_deref(), Some("web"));
         assert_eq!(c.pod_name, None);
-        assert_eq!(c.created, 1730000000);
+    }
+
+    #[test]
+    fn container_created_is_podman_5s_rfc3339_time() {
+        let row = serde_json::json!({"Id": "x", "Created": "2026-09-26T01:42:43.91021808+01:00"});
+        let c: Container = serde_json::from_value::<RawContainer>(row).unwrap().into();
+        assert_eq!(c.created, 1790383363);
+    }
+
+    #[test]
+    fn a_container_without_a_readable_created_time_has_none() {
+        for created in [serde_json::json!("yesterday"), serde_json::json!(null)] {
+            let row = serde_json::json!({"Id": "x", "Created": created});
+            let c: Container = serde_json::from_value::<RawContainer>(row).unwrap().into();
+            assert_eq!(c.created, 0);
+        }
+    }
+
+    #[test]
+    fn stats_sum_traffic_over_every_interface() {
+        let body = serde_json::json!({"Stats": [{
+            "ContainerID": "c", "CPUNano": 5,
+            "Network": {
+                "eth0": {"RxBytes": 100, "TxBytes": 10, "RxPackets": 7},
+                "eth1": {"RxBytes": 5, "TxBytes": 1}
+            }
+        }]});
+        let s = &parse_stats(body.to_string().as_bytes()).unwrap()[0];
+        assert_eq!((s.net_in, s.net_out), (Some(105), Some(11)));
+    }
+
+    #[test]
+    fn stats_without_a_network_reading_have_no_traffic() {
+        let body = serde_json::json!({"Stats": [{"ContainerID": "c", "Network": null}]});
+        let s = &parse_stats(body.to_string().as_bytes()).unwrap()[0];
+        assert_eq!((s.net_in, s.net_out), (None, None));
+    }
+
+    #[test]
+    fn podman_5_and_newer_is_supported() {
+        for v in ["5.0.0", "5.8.9", "6.0.2", "5.2.0-dev"] {
+            assert!(supported(v).is_ok(), "{v}");
+        }
+    }
+
+    #[test]
+    fn older_or_unreadable_podman_is_refused_with_why() {
+        let e = supported("4.9.3").unwrap_err().to_string();
+        assert_eq!(e, "podman 4.9.3 in this VM is too old: Lima Desktop needs podman 5 or newer");
+        assert!(supported("").is_err());
+        assert!(supported("banana").is_err());
+    }
+
+    #[test]
+    fn version_is_read_from_libpods_answer() {
+        let body = br#"{"Version":"5.8.9","ApiVersion":"1.44","MinAPIVersion":"1.24"}"#;
+        assert_eq!(parse_version(body).unwrap(), "5.8.9");
     }
 
     #[test]

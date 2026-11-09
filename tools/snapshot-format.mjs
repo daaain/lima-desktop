@@ -20,6 +20,7 @@ export const LIBPOD_ONCE = {
   '/images/json?all=true': 'images.json',
   '/volumes/json': 'volumes.json',
   '/system/df': 'system-df.json',
+  '/version': 'version.json',
 };
 /** Recorded once a second, one body per line of `STATS`. */
 export const LIBPOD_STATS = '/containers/stats?stream=false';

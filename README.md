@@ -4,7 +4,7 @@ A small desktop app for [Lima](https://lima-vm.io) VMs and the podman containers
 every instance at once, with a long history of CPU, memory, pressure and disk — for the VM and
 for each container — so you can see OOMs coming and right-size VMs.
 
-**Status:** early. macOS first (Linux builds too). Podman only; compose projects shown read-only.
+**Status:** early. macOS first (Linux builds too). Podman 5 or newer only (an older one is named, not half-read); compose projects shown read-only.
 
 - Every Lima instance, live: status, allocation vs use, memory/CPU pressure (PSI), OOM kills, and
   what each VM costs your computer (hypervisor RAM/CPU, the disk image's real size).

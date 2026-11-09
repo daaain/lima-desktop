@@ -188,7 +188,7 @@ fn libpods_lists_deserialise() {
 
 #[test]
 fn stats_samples_make_container_rows() {
-    let mut rates = 0;
+    let (mut rates, mut traffic) = (0, 0);
     for f in fixtures() {
         for (inst, dir) in recorded(&f) {
             let listed: HashSet<String> = containers(&dir).into_iter().map(|c| c.id).collect();
@@ -216,10 +216,41 @@ fn stats_samples_make_container_rows() {
                         container_row(Some(&(t0, p.clone())), t0 + Duration::from_secs(1), s, None);
                     let cpu = col(CT_METRICS, &row, "cpu_mc");
                     assert!(cpu >= 0, "{}: cpu {row:?}", inst.name);
+                    assert!(
+                        col(CT_METRICS, &row, "net_rx_bps") >= 0,
+                        "{}: podman 5 sends traffic per interface; it must be read, not absent: {row:?}",
+                        inst.name
+                    );
                     rates += 1;
                 }
             }
+            traffic += samples.iter().flatten().filter_map(|s| s.net_in).sum::<u64>();
         }
     }
     assert!(rates > 0, "at least one container's rates");
+    assert!(traffic > 0, "some container had network traffic (a false zero is the old bug)");
+}
+
+#[test]
+fn every_recorded_podman_is_one_the_app_supports() {
+    let mut seen = 0;
+    for f in fixtures() {
+        for (inst, dir) in recorded(&f) {
+            let v = podman::parse_version(read(&dir.join("libpod/version.json")).as_bytes()).unwrap();
+            podman::supported(&v).unwrap_or_else(|e| panic!("{}: {e}", inst.name));
+            seen += 1;
+        }
+    }
+    assert!(seen > 0);
+}
+
+#[test]
+fn every_containers_created_time_is_read() {
+    for f in fixtures() {
+        for (inst, dir) in recorded(&f) {
+            for c in containers(&dir) {
+                assert!(c.created > 1_600_000_000, "{}: {} created {}", inst.name, c.name, c.created);
+            }
+        }
+    }
 }

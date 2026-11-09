@@ -17,7 +17,7 @@ use tokio::task::JoinHandle;
 use crate::journal::{self, JournalError};
 use crate::lima::{self, Instance};
 use crate::oom::{self, OomEvent};
-use crate::podman::{Container, Libpod, RawStat};
+use crate::podman::{Container, Libpod, PodmanError, RawStat};
 use crate::probe::{self, Block};
 use crate::store::{ABSENT, CT_METRICS, Kind, Store, VM_METRICS};
 
@@ -339,6 +339,8 @@ impl Collector {
     async fn podman_loop(self: Arc<Self>, name: String) {
         let mut prev: HashMap<String, (Instant, RawStat)> = HashMap::new();
         let mut tick: u32 = 0;
+        // An unsupported podman: its error stands, and its stats aren't read, until it's upgraded.
+        let mut refused = false;
         let mut interval = tokio::time::interval(Duration::from_secs(1));
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
@@ -355,7 +357,14 @@ impl Collector {
             };
             let pod = Libpod::new(&sock);
             if tick.is_multiple_of(CONTAINERS_EVERY) {
-                match pod.containers().await {
+                // The version is checked with the list, so an upgraded VM is picked up within a
+                // few seconds, and an unsupported one is never half-read.
+                let list = match pod.ensure_supported().await {
+                    Ok(()) => pod.containers().await,
+                    Err(e) => Err(e),
+                };
+                refused = matches!(list, Err(PodmanError::TooOld(_) | PodmanError::UnknownVersion(_)));
+                match list {
                     Ok(list) => self.update_containers(&name, list),
                     Err(e) => {
                         self.set_vm(&name, |v| v.live.podman_error = Some(e.to_string()));
@@ -363,6 +372,9 @@ impl Collector {
                         continue;
                     }
                 }
+            } else if refused {
+                tick += 1;
+                continue;
             }
             tick += 1;
             let stats = match pod.stats().await {
@@ -626,8 +638,8 @@ pub fn container_row(
         peak.map_or(ABSENT, |p| p as i64),
         oom.map_or(ABSENT, |o| o as i64),
         s.pids as i64,
-        rate(s.net_in, old.map(|o| o.net_in)),
-        rate(s.net_out, old.map(|o| o.net_out)),
+        s.net_in.map_or(ABSENT, |cur| rate(cur, old.and_then(|o| o.net_in))),
+        s.net_out.map_or(ABSENT, |cur| rate(cur, old.and_then(|o| o.net_out))),
         rate(s.block_in, old.map(|o| o.block_in)),
         rate(s.block_out, old.map(|o| o.block_out)),
     ]
@@ -643,8 +655,8 @@ mod tests {
             cpu_nano,
             mem_usage: 100,
             mem_limit: 0,
-            net_in,
-            net_out: 0,
+            net_in: Some(net_in),
+            net_out: Some(0),
             block_in: 0,
             block_out: 0,
             pids: 3,
@@ -670,6 +682,14 @@ mod tests {
         assert_eq!(row[3], 4096);
         assert_eq!(row[4], 1);
         assert_eq!(row.len(), CT_METRICS.len());
+    }
+
+    #[test]
+    fn no_network_reading_is_absent_traffic_not_zero() {
+        let t0 = Instant::now();
+        let quiet = RawStat { net_in: None, net_out: None, ..stat(0, 0) };
+        let row = container_row(Some(&(t0, quiet.clone())), t0 + Duration::from_secs(1), &quiet, None);
+        assert_eq!((row[6], row[7]), (ABSENT, ABSENT));
     }
 
     #[test]

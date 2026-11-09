@@ -85,6 +85,8 @@ function syntheticSnapshot() {
       Labels: { 'org.opencontainers.image.source': 'https://github.com/acme-corp/web' }, Containers: 1 },
     { Id: IMG2, RepoTags: ['docker.io/library/postgres:16'], Size: 99, Labels: null, Containers: 1 },
   ]));
+  write(join(libpod, 'version.json'), JSON.stringify({
+    Version: '5.8.9', ApiVersion: '1.44', MinAPIVersion: '1.24', GitCommit: 'deadbeef', Built: 1, OsArch: 'linux/arm64' }));
   write(join(libpod, 'volumes.json'), JSON.stringify([
     { Name: 'acme_pgdata', Driver: 'local',
       Mountpoint: '/home/bob.guest/.local/share/containers/storage/volumes/acme_pgdata/_data',
@@ -190,6 +192,11 @@ test('volumes: names, the guest home and compose project mapped; options dropped
   assert.deepEqual(v.Labels, { 'com.docker.compose.project': 'project-1' });
   assert.ok(!('Options' in v));
   assert.equal(json('vms/vm-a/libpod/system-df.json').Volumes[0].VolumeName, 'volume-1');
+});
+
+test("podman's version is kept, and only its version numbers", () => {
+  const { json } = run();
+  assert.deepEqual(json('vms/vm-a/libpod/version.json'), { Version: '5.8.9', ApiVersion: '1.44', MinAPIVersion: '1.24' });
 });
 
 test('the marker keeps its locks, loses who and where', () => {

@@ -48,6 +48,7 @@ const KEEP = {
   dfImage: ['Repository', 'Tag', 'ImageID', 'Created', 'Size', 'SharedSize', 'UniqueSize', 'Containers'],
   dfContainer: ['ContainerID', 'Image', 'LocalVolumes', 'Size', 'RWSize', 'Created', 'Status', 'Names'],
   dfVolume: ['VolumeName', 'Links', 'Size', 'ReclaimableSize'],
+  version: ['Version', 'ApiVersion', 'MinAPIVersion'],
   journal: ['__REALTIME_TIMESTAMP', '__MONOTONIC_TIMESTAMP', '_BOOT_ID', 'MESSAGE'],
 };
 
@@ -256,7 +257,9 @@ const listOf = (docs, keep, f = (x) => x) => docs?.map((d) => f(pick(d, keep)));
 
 function cleanLibpod(libpod) {
   const out = {};
-  const { 'containers.json': cs, 'images.json': is, 'volumes.json': vs, 'system-df.json': df } = libpod;
+  const { 'containers.json': cs, 'images.json': is, 'volumes.json': vs, 'system-df.json': df,
+    'version.json': version } = libpod;
+  if (version !== undefined) out['version.json'] = pick(version, KEEP.version);
   if (cs !== undefined) out['containers.json'] = listOf(cs, KEEP.container, (c) => ({ ...c, Labels: composeOnly(c.Labels) }));
   if (is !== undefined) out['images.json'] = listOf(is, KEEP.image, (i) => ('Labels' in i ? { ...i, Labels: null } : i));
   if (vs !== undefined) out['volumes.json'] = listOf(vs, KEEP.volume, (v) => ({ ...v, Labels: composeOnly(v.Labels) }));

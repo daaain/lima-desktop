@@ -34,14 +34,18 @@ pub async fn vm_resize(c: C<'_>, name: String, resize: Resize) -> Result<(), Str
     result
 }
 
-fn libpod(c: &Collector, vm: &str) -> Result<Libpod, String> {
-    c.snapshot()
+/// A client for `vm`'s podman — refused, with why, unless it's podman 5 or newer.
+async fn libpod(c: &Collector, vm: &str) -> Result<Libpod, String> {
+    let pod = c
+        .snapshot()
         .vms
         .into_iter()
         .find(|v| v.instance.name == vm)
         .and_then(|v| v.instance.podman_socket)
         .map(Libpod::new)
-        .ok_or_else(|| format!("'{vm}' has no podman socket"))
+        .ok_or_else(|| format!("'{vm}' has no podman socket"))?;
+    pod.ensure_supported().await.map_err(err)?;
+    Ok(pod)
 }
 
 #[tauri::command]
@@ -51,7 +55,7 @@ pub async fn container_action(
     id: String,
     action: ContainerAction,
 ) -> Result<(), String> {
-    libpod(&c, &vm)?.act(&id, action).await.map_err(err)
+    libpod(&c, &vm).await?.act(&id, action).await.map_err(err)
 }
 
 #[tauri::command]
@@ -61,7 +65,7 @@ pub async fn container_logs(
     id: String,
     tail: Option<u32>,
 ) -> Result<String, String> {
-    libpod(&c, &vm)?
+    libpod(&c, &vm).await?
         .logs(&id, tail.unwrap_or(500))
         .await
         .map_err(err)
@@ -73,44 +77,44 @@ pub async fn container_inspect(
     vm: String,
     id: String,
 ) -> Result<serde_json::Value, String> {
-    libpod(&c, &vm)?.inspect(&id).await.map_err(err)
+    libpod(&c, &vm).await?.inspect(&id).await.map_err(err)
 }
 
 #[tauri::command]
 pub async fn images(c: C<'_>, vm: String) -> Result<Vec<Image>, String> {
-    libpod(&c, &vm)?.images().await.map_err(err)
+    libpod(&c, &vm).await?.images().await.map_err(err)
 }
 
 /// `reference`: a `repository:tag`, or an id for a dangling image.
 #[tauri::command]
 pub async fn image_remove(c: C<'_>, vm: String, reference: String) -> Result<(), String> {
-    libpod(&c, &vm)?.remove_image(&reference).await.map_err(err)
+    libpod(&c, &vm).await?.remove_image(&reference).await.map_err(err)
 }
 
 /// `all = false`: dangling images only; `true`: every image no container uses.
 #[tauri::command]
 pub async fn images_prune(c: C<'_>, vm: String, all: bool) -> Result<Pruned, String> {
-    libpod(&c, &vm)?.prune_images(all).await.map_err(err)
+    libpod(&c, &vm).await?.prune_images(all).await.map_err(err)
 }
 
 #[tauri::command]
 pub async fn volumes(c: C<'_>, vm: String) -> Result<Vec<Volume>, String> {
-    libpod(&c, &vm)?.volumes().await.map_err(err)
+    libpod(&c, &vm).await?.volumes().await.map_err(err)
 }
 
 #[tauri::command]
 pub async fn volume_remove(c: C<'_>, vm: String, name: String) -> Result<(), String> {
-    libpod(&c, &vm)?.remove_volume(&name).await.map_err(err)
+    libpod(&c, &vm).await?.remove_volume(&name).await.map_err(err)
 }
 
 #[tauri::command]
 pub async fn volumes_prune(c: C<'_>, vm: String) -> Result<Pruned, String> {
-    libpod(&c, &vm)?.prune_volumes().await.map_err(err)
+    libpod(&c, &vm).await?.prune_volumes().await.map_err(err)
 }
 
 #[tauri::command]
 pub async fn system_df(c: C<'_>, vm: String) -> Result<serde_json::Value, String> {
-    libpod(&c, &vm)?.system_df().await.map_err(err)
+    libpod(&c, &vm).await?.system_df().await.map_err(err)
 }
 
 #[tauri::command]

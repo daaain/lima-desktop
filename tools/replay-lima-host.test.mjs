@@ -98,10 +98,12 @@ test('a probe needs two blocks to loop', () => {
   assert.throws(() => probeLooper(splitBlocks(block('1.00', 1, 1, 1, 0, 0))), /two blocks/);
 });
 
+// podman 5's shape: traffic per interface, under Network.
 const stats = (cpu, net, mem) => JSON.stringify({
   Error: null,
-  Stats: [{ ContainerID: 'c1', Name: 'web', CPUNano: cpu, NetInput: net, NetOutput: 0,
-    BlockInput: 0, BlockOutput: 0, MemUsage: mem, SystemNano: 1794250573632955100 }],
+  Stats: [{ ContainerID: 'c1', Name: 'web', CPUNano: cpu, BlockInput: 0, BlockOutput: 0,
+    Network: { eth0: { RxBytes: net, TxBytes: 2 * net, RxPackets: 3 } },
+    MemUsage: mem, SystemNano: 1794250573632955100 }],
 });
 
 test('stats cycle per request, counters offset on later loops, gauges as recorded', () => {
@@ -110,7 +112,9 @@ test('stats cycle per request, counters offset on later loops, gauges as recorde
   assert.deepEqual([read(0).CPUNano, read(1).CPUNano], [1000, 3000]);
   assert.equal(read(2).CPUNano, 5000, 'loop 1: +2000 per step carries on');
   assert.equal(read(3).CPUNano, 7000);
-  assert.equal(read(2).NetInput, 250);
+  assert.equal(read(2).Network.eth0.RxBytes, 250, "each interface's bytes carry on too");
+  assert.equal(read(2).Network.eth0.TxBytes, 500);
+  assert.equal(read(2).Network.eth0.RxPackets, 3, 'packets are not read: left as recorded');
   assert.equal(read(2).MemUsage, 7, 'memory is a gauge');
   assert.ok(at(2).includes('1794250573632955100'), 'big integers keep their digits');
 });

@@ -1,140 +1,150 @@
-U 804.05
-C cpu  503 0 797 319977 52 141 65 0 0 0
+U 4159.72
+C cpu  43729 164 20335 1594036 2364 1649 687 0 0 0
 M MemTotal: 8098656
-M MemAvailable: 7645708
+M MemAvailable: 7455392
 M SwapTotal: 8097788
-M SwapFree: 8097788
-P memory some total=22
-P memory full total=22
-P cpu some total=683435
+M SwapFree: 8097604
+P memory some total=704436
+P memory full total=536394
+P cpu some total=29878243
 P cpu full total=0
 O 0
-D 62811116 1059448
-D 62811116 1059448
+D 62811116 6512224
+D 62811116 6512224
+G 3d2e84ec7f8dca322a775ba5d86ff06a86aeb78d9e986d79c556d3ff719eb540 7004426240 0
 .
-U 805.06
-C cpu  503 0 798 320379 52 142 65 0 0 0
+U 4160.73
+C cpu  43742 164 20358 1594398 2366 1651 688 0 0 0
 M MemTotal: 8098656
-M MemAvailable: 7645352
+M MemAvailable: 7458568
 M SwapTotal: 8097788
-M SwapFree: 8097788
-P memory some total=22
-P memory full total=22
-P cpu some total=684185
+M SwapFree: 8097604
+P memory some total=704445
+P memory full total=536403
+P cpu some total=29882272
 P cpu full total=0
 O 0
-D 62811116 1059448
-D 62811116 1059448
+D 62811116 6512224
+D 62811116 6512224
+G 3d2e84ec7f8dca322a775ba5d86ff06a86aeb78d9e986d79c556d3ff719eb540 7004426240 0
 .
-U 806.07
-C cpu  504 0 798 320780 52 142 65 0 0 0
+U 4161.73
+C cpu  43742 164 20364 1594791 2370 1651 688 0 0 0
 M MemTotal: 8098656
-M MemAvailable: 7645180
+M MemAvailable: 7458568
 M SwapTotal: 8097788
-M SwapFree: 8097788
-P memory some total=22
-P memory full total=22
-P cpu some total=684687
+M SwapFree: 8097604
+P memory some total=704445
+P memory full total=536403
+P cpu some total=29883289
 P cpu full total=0
 O 0
-D 62811116 1059448
-D 62811116 1059448
+D 62811116 6512224
+D 62811116 6512224
+G 3d2e84ec7f8dca322a775ba5d86ff06a86aeb78d9e986d79c556d3ff719eb540 7004426240 0
 .
-U 807.07
-C cpu  504 0 799 321180 52 142 65 0 0 0
+U 4162.74
+C cpu  43747 164 20367 1595184 2370 1652 688 0 0 0
 M MemTotal: 8098656
-M MemAvailable: 7645100
+M MemAvailable: 7464560
 M SwapTotal: 8097788
-M SwapFree: 8097788
-P memory some total=22
-P memory full total=22
-P cpu some total=685067
+M SwapFree: 8097604
+P memory some total=704445
+P memory full total=536403
+P cpu some total=29886226
 P cpu full total=0
 O 0
-D 62811116 1059448
-D 62811116 1059448
+D 62811116 6512224
+D 62811116 6512224
+G 3d2e84ec7f8dca322a775ba5d86ff06a86aeb78d9e986d79c556d3ff719eb540 7004426240 0
 .
-U 808.07
-C cpu  505 0 800 321580 52 142 66 0 0 0
+U 4163.74
+C cpu  43748 164 20368 1595582 2370 1652 689 0 0 0
 M MemTotal: 8098656
-M MemAvailable: 7645604
+M MemAvailable: 7464560
 M SwapTotal: 8097788
-M SwapFree: 8097788
-P memory some total=22
-P memory full total=22
-P cpu some total=685364
+M SwapFree: 8097604
+P memory some total=704445
+P memory full total=536403
+P cpu some total=29887134
 P cpu full total=0
 O 0
-D 62811116 1059448
-D 62811116 1059448
+D 62811116 6512224
+D 62811116 6512224
+G 3d2e84ec7f8dca322a775ba5d86ff06a86aeb78d9e986d79c556d3ff719eb540 7004426240 0
 .
-U 809.08
-C cpu  505 0 801 321980 52 142 66 0 0 0
+U 4164.75
+C cpu  43748 164 20371 1595982 2370 1652 689 0 0 0
 M MemTotal: 8098656
-M MemAvailable: 7645616
+M MemAvailable: 7464560
 M SwapTotal: 8097788
-M SwapFree: 8097788
-P memory some total=22
-P memory full total=22
-P cpu some total=685464
+M SwapFree: 8097604
+P memory some total=704445
+P memory full total=536403
+P cpu some total=29888876
 P cpu full total=0
 O 0
-D 62811116 1059448
-D 62811116 1059448
+D 62811116 6512224
+D 62811116 6512224
+G 3d2e84ec7f8dca322a775ba5d86ff06a86aeb78d9e986d79c556d3ff719eb540 7004426240 0
 .
-U 810.09
-C cpu  505 0 802 322379 53 143 66 0 0 0
+U 4165.76
+C cpu  43751 164 20375 1596377 2370 1653 689 0 0 0
 M MemTotal: 8098656
-M MemAvailable: 7645868
+M MemAvailable: 7457536
 M SwapTotal: 8097788
-M SwapFree: 8097788
-P memory some total=22
-P memory full total=22
-P cpu some total=685785
+M SwapFree: 8097604
+P memory some total=704445
+P memory full total=536403
+P cpu some total=29890970
 P cpu full total=0
 O 0
-D 62811116 1059448
-D 62811116 1059448
+D 62811116 6512224
+D 62811116 6512224
+G 3d2e84ec7f8dca322a775ba5d86ff06a86aeb78d9e986d79c556d3ff719eb540 7004426240 0
 .
-U 811.09
-C cpu  506 0 803 322779 53 143 66 0 0 0
+U 4166.76
+C cpu  43752 164 20376 1596775 2370 1653 689 0 0 0
 M MemTotal: 8098656
-M MemAvailable: 7646544
+M MemAvailable: 7457536
 M SwapTotal: 8097788
-M SwapFree: 8097788
-P memory some total=22
-P memory full total=22
-P cpu some total=686067
+M SwapFree: 8097604
+P memory some total=704445
+P memory full total=536403
+P cpu some total=29892722
 P cpu full total=0
 O 0
-D 62811116 1059448
-D 62811116 1059448
+D 62811116 6512224
+D 62811116 6512224
+G 3d2e84ec7f8dca322a775ba5d86ff06a86aeb78d9e986d79c556d3ff719eb540 7004426240 0
 .
-U 812.10
-C cpu  507 0 803 323181 53 143 66 0 0 0
+U 4167.77
+C cpu  43753 164 20378 1597174 2370 1654 689 0 0 0
 M MemTotal: 8098656
-M MemAvailable: 7646624
+M MemAvailable: 7457300
 M SwapTotal: 8097788
-M SwapFree: 8097788
-P memory some total=22
-P memory full total=22
-P cpu some total=686304
+M SwapFree: 8097604
+P memory some total=704445
+P memory full total=536403
+P cpu some total=29894174
 P cpu full total=0
 O 0
-D 62811116 1059448
-D 62811116 1059448
+D 62811116 6512224
+D 62811116 6512224
+G 3d2e84ec7f8dca322a775ba5d86ff06a86aeb78d9e986d79c556d3ff719eb540 7004426240 0
 .
-U 813.10
-C cpu  507 0 804 323580 53 143 66 0 0 0
+U 4168.77
+C cpu  43756 164 20382 1597569 2370 1654 689 0 0 0
 M MemTotal: 8098656
-M MemAvailable: 7646888
+M MemAvailable: 7454568
 M SwapTotal: 8097788
-M SwapFree: 8097788
-P memory some total=22
-P memory full total=22
-P cpu some total=688032
+M SwapFree: 8097604
+P memory some total=704445
+P memory full total=536403
+P cpu some total=29896403
 P cpu full total=0
 O 0
-D 62811116 1059448
-D 62811116 1059448
+D 62811116 6512224
+D 62811116 6512224
+G 3d2e84ec7f8dca322a775ba5d86ff06a86aeb78d9e986d79c556d3ff719eb540 7004426240 0
 .

@@ -1,1 +1,1 @@
-[]
+[{"Id":"3d2e84ec7f8dca322a775ba5d86ff06a86aeb78d9e986d79c556d3ff719eb540","Names":["container-5"],"Image":"registry.example/image-8:latest","ImageID":"3af13b54c45edd240901c1c4f9583182acfb953fae93aa4af02e6e23ecaa56b3","State":"running","Status":"","Created":"2026-11-09T19:49:30.443625803Z","CreatedAt":"","StartedAt":1794253770,"Exited":false,"ExitedAt":-62135596800,"ExitCode":0,"Labels":{},"Pod":"","PodName":"","IsInfra":false,"AutoRemove":false,"Restarts":0,"Pid":36303,"Size":null}]
