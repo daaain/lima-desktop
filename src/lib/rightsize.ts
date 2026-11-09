@@ -1,7 +1,8 @@
 // Right-sizing hints from a window of history. Advice, never applied automatically: the numbers
 // and the reasoning are shown so the person can disagree.
-import type { Instance, Summary } from './api';
+import type { Instance, OomEvent, Summary } from './api';
 import { GiB, bytes } from './format';
+import { oomLevel, type OomLevel } from './oom';
 
 export type Verdict = 'grow' | 'shrink' | 'ok' | 'unknown';
 export interface Hint {
@@ -19,18 +20,68 @@ function enoughHistory(s: Summary | undefined): boolean {
   return !!s && s.samples >= DAY_SAMPLES;
 }
 
-export function memoryHint(inst: Instance, s: Record<string, Summary>): Hint {
-  const used = s.mem_used;
+/** The window's OOM kills by what ran out: the whole VM, a container's (or cgroup's) own limit, or unknown. */
+export interface Kills {
+  vm: number;
+  ownLimit: number;
+  unknown: number;
+}
+
+/**
+ * Sorts the window's kills by level. Without events (not loaded, or unavailable) every kill the
+ * VM's counter saw is of unknown level; so are any it saw beyond the events (not yet in the journal).
+ */
+export function killsByLevel(s: Record<string, Summary>, events?: OomEvent[] | null): Kills {
   const oom = s.oom_kills;
+  const counted = oom?.max != null && oom.min != null ? oom.max - oom.min : 0;
+  const levels = (events ?? []).map(oomLevel);
+  const count = (...ls: OomLevel[]) => levels.filter((l) => ls.includes(l)).length;
+  return {
+    vm: count('vm'),
+    ownLimit: count('container', 'cgroup'),
+    unknown: count('unknown') + Math.max(0, counted - levels.length),
+  };
+}
+
+const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+const ownLimitNote = (n: number) =>
+  n === 1
+    ? '1 OOM kill was a container hitting its own memory limit'
+    : `${n} OOM kills were containers hitting their own memory limits`;
+
+/**
+ * Memory advice. Only a kill where the whole VM ran out argues for a bigger VM: a container
+ * hitting its own limit is fixed by raising that limit, so it's noted, never a reason to grow.
+ */
+export function memoryHint(inst: Instance, s: Record<string, Summary>, events?: OomEvent[] | null): Hint {
+  const kills = killsByLevel(s, events);
+  const hint = vmMemoryHint(inst, s, kills);
+  if (kills.ownLimit === 0 || kills.vm > 0) return hint;
+  return { ...hint, reason: `${hint.reason} ${ownLimitNote(kills.ownLimit)} — raise those, not the VM's.` };
+}
+
+function vmMemoryHint(inst: Instance, s: Record<string, Summary>, kills: Kills): Hint {
+  const used = s.mem_used;
   const full = s.psi_mem_full;
   const total = inst.memory;
   if (!used?.max) return { dimension: 'memory', verdict: 'unknown', reason: 'No memory history yet.' };
-  if (oom?.max != null && oom.min != null && oom.max > oom.min) {
-    const n = oom.max - oom.min;
+  if (kills.vm > 0) {
+    const others = [
+      kills.ownLimit && `${plural(kills.ownLimit, 'other kill was a container hitting its own limit', 'other kills were containers hitting their own limits')}.`,
+      kills.unknown && `${plural(kills.unknown, 'more has', 'more have')} no detail.`,
+    ].filter(Boolean);
     return {
       dimension: 'memory',
       verdict: 'grow',
-      reason: `The kernel killed ${n} process${n === 1 ? '' : 'es'} for lack of memory in this window.`,
+      reason: [`The VM ran out of memory ${kills.vm === 1 ? 'once' : `${kills.vm} times`} in this window.`, ...others].join(' '),
+      suggest: roundUpGiB(total * 1.5),
+    };
+  }
+  if (kills.unknown > 0) {
+    return {
+      dimension: 'memory',
+      verdict: 'grow',
+      reason: `${plural(kills.unknown, 'process was', 'processes were')} killed for lack of memory; without the kernel's detail it's unknown whether the VM or a container's own limit ran out.`,
       suggest: roundUpGiB(total * 1.5),
     };
   }

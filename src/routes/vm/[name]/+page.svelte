@@ -140,7 +140,7 @@
     {/each}
   </div>
 
-  <RightSizing inst={i} entity={vm.entity} latest={l} {from} {to} />
+  <RightSizing inst={i} entity={vm.entity} latest={l} {from} {to} oomEvents={oomError ? null : oomLoaded ? oom : undefined} />
 
   <div class="charts">
     <div class="panel"><Chart title="Memory" data={series} format={(v) => bytes(v)} ceiling={i.memory} markers={oomMarkers(oom)}

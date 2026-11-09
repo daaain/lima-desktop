@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { Instance, Summary } from './api';
+import type { Instance, OomEvent, Summary } from './api';
 import { GiB } from './format';
 import { cpuHint, diskHint, memoryHint } from './rightsize';
 
@@ -36,6 +36,45 @@ describe('memory', () => {
     const h = memoryHint(inst(), { mem_used: s({ max: 7.5 * GiB }) });
     expect(h.verdict).toBe('grow');
     expect(h.suggest).toBe(10 * GiB);
+  });
+});
+
+describe('memory, knowing which level each OOM kill was', () => {
+  const kill = (constraint: string | null, containerId: string | null = 'c'.repeat(64)): OomEvent => ({
+    ts: 0, vm: 'acme', source: constraint ? 'kernel' : 'counter', constraint, containerId, cgroup: null,
+    process: 'python3', pid: 1, memLimit: GiB, anonRss: null, detail: constraint ? null : 'journal unreadable',
+    containerName: null, composeProject: null, composeService: null,
+  });
+  const ownLimit = kill('CONSTRAINT_MEMCG');
+  const vmWide = kill('CONSTRAINT_NONE', null);
+  const counted = (n: number) => ({ oom_kills: s({ min: 0, max: n }) });
+
+  it("doesn't grow the VM for containers hitting their own limits, and says so", () => {
+    const h = memoryHint(inst(), { mem_used: s({ max: 5 * GiB }), ...counted(3) }, [ownLimit, ownLimit, ownLimit]);
+    expect(h.verdict).toBe('ok');
+    expect(h.reason).toContain("3 OOM kills were containers hitting their own memory limits — raise those, not the VM's");
+  });
+  it('still applies the other rules alongside container-limit kills', () => {
+    const h = memoryHint(inst(), { mem_used: s({ max: 1 * GiB }), ...counted(1) }, [ownLimit]);
+    expect(h.verdict).toBe('shrink');
+    expect(h.reason).toContain("1 OOM kill was a container hitting its own memory limit");
+  });
+  it('grows when the whole VM ran out, counting only those kills', () => {
+    const h = memoryHint(inst(), { mem_used: s({ max: 2 * GiB }), ...counted(3) }, [vmWide, ownLimit, ownLimit]);
+    expect(h.verdict).toBe('grow');
+    expect(h.reason).toContain('The VM ran out of memory once in this window');
+    expect(h.reason).toContain('2 other kills were containers hitting their own limits');
+    expect(h.suggest).toBe(12 * GiB);
+  });
+  it('grows, hedged, for kills without the kernel detail to tell', () => {
+    const h = memoryHint(inst(), { mem_used: s({ max: 2 * GiB }), ...counted(2) }, [kill(null), kill(null)]);
+    expect(h.verdict).toBe('grow');
+    expect(h.reason).toContain("2 processes were killed for lack of memory; without the kernel's detail");
+  });
+  it('treats kills the counter saw but no event explains (yet) as unknown', () => {
+    const h = memoryHint(inst(), { mem_used: s({ max: 2 * GiB }), ...counted(3) }, [ownLimit]);
+    expect(h.verdict).toBe('grow');
+    expect(h.reason).toContain('2 processes were killed');
   });
 });
 

@@ -1,9 +1,13 @@
 <script lang="ts">
-  import { api, locked, type Instance, type Latest, type Summary } from './api';
+  import { api, locked, type Instance, type Latest, type OomEvent, type Summary } from './api';
   import { bytes, GiB } from './format';
   import { cpuHint, diskHint, memoryHint, type Hint } from './rightsize';
 
-  let { inst, entity, latest, from, to }: { inst: Instance; entity?: number; latest: Latest; from: number; to: number } = $props();
+  let { inst, entity, latest, from, to, oomEvents }: {
+    inst: Instance; entity?: number; latest: Latest; from: number; to: number;
+    /** The range's OOM kills: undefined while loading, null when unavailable (then only the counter is known). */
+    oomEvents: OomEvent[] | null | undefined;
+  } = $props();
   let summary = $state<Record<string, Summary> | null>(null);
   let cpus = $state(0);
   let memGiB = $state(0);
@@ -22,7 +26,10 @@
     diskGiB = Math.round(inst.disk / GiB);
   });
 
-  const hints: Hint[] = $derived(summary ? [memoryHint(inst, summary), cpuHint(inst, summary), diskHint(inst, latest)] : []);
+  // Wait for the OOM events too, so a container-limit kill never flashes up as "grow the VM".
+  const hints: Hint[] = $derived(
+    summary && oomEvents !== undefined ? [memoryHint(inst, summary, oomEvents), cpuHint(inst, summary), diskHint(inst, latest)] : [],
+  );
   const stopped = $derived(inst.status === 'Stopped');
   const resizeLocked = $derived(locked(inst, 'resize'));
   const changed = $derived(cpus !== inst.cpus || memGiB * GiB !== inst.memory || diskGiB * GiB !== inst.disk);
