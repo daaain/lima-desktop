@@ -80,10 +80,13 @@ jobs:
 
       - name: Let the runner user use KVM
         run: |
+          if [ ! -e /dev/kvm ]; then echo "::error::this runner has no /dev/kvm"; exit 1; fi
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
             | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
+          sudo udevadm settle   # the trigger applies the rule asynchronously
+          ls -l /dev/kvm
           test -w /dev/kvm
 
       - name: System packages
