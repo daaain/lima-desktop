@@ -74,6 +74,8 @@ pub struct Container {
     pub state: String,
     pub status: String,
     pub created: i64,
+    /// Unix seconds of the last start; `None` if it never started.
+    pub started_at: Option<i64>,
     pub compose_project: Option<String>,
     pub compose_service: Option<String>,
     pub pod_name: Option<String>,
@@ -96,6 +98,8 @@ struct RawContainer {
     status: String,
     #[serde(default)]
     created: Option<String>,
+    #[serde(default)]
+    started_at: Option<i64>,
     #[serde(default)]
     labels: Option<BTreeMap<String, String>>,
     #[serde(default)]
@@ -122,6 +126,8 @@ impl From<RawContainer> for Container {
             .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
             .map_or(0, |t| t.timestamp());
         Container {
+            // podman sends Go's zero time (year 1, so negative) for a container never started.
+            started_at: r.started_at.filter(|&t| t > 0),
             name: r
                 .names
                 .first()
@@ -623,6 +629,23 @@ mod tests {
         let row = serde_json::json!({"Id": "x", "Created": "2026-09-26T01:42:43.91021808+01:00"});
         let c: Container = serde_json::from_value::<RawContainer>(row).unwrap().into();
         assert_eq!(c.created, 1790383363);
+    }
+
+    #[test]
+    fn container_started_at_is_podman_5s_unix_seconds() {
+        let row = serde_json::json!({"Id": "x", "State": "running", "StartedAt": 1794241663});
+        let c: Container = serde_json::from_value::<RawContainer>(row).unwrap().into();
+        assert_eq!(c.started_at, Some(1794241663));
+    }
+
+    #[test]
+    fn a_never_started_container_has_no_start_time() {
+        // Go's zero time, which podman sends for a time that was never set.
+        for started in [serde_json::json!(-62135596800_i64), serde_json::json!(0), serde_json::json!(null)] {
+            let row = serde_json::json!({"Id": "x", "State": "created", "StartedAt": started});
+            let c: Container = serde_json::from_value::<RawContainer>(row).unwrap().into();
+            assert_eq!(c.started_at, None, "{started}");
+        }
     }
 
     #[test]

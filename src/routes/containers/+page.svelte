@@ -2,7 +2,7 @@
   import { goto } from '$app/navigation';
   import { page } from '$app/state';
   import { live } from '$lib/live.svelte';
-  import { bytes, cores } from '$lib/format';
+  import { bytes, cores, uptime } from '$lib/format';
   import { containerRows, filterContainers, readContainerFilter } from '$lib/containers';
   import { podmanScope } from '$lib/perVm';
   import { withParam } from '$lib/url';
@@ -62,7 +62,7 @@
     {:else}
       <table class="list">
         <thead>
-          <tr><th>name</th><th>compose project</th><th>VM</th><th>image</th><th>state</th><th class="n">cpu</th><th class="n">memory</th><th></th></tr>
+          <tr><th>name</th><th>compose project</th><th>VM</th><th>image</th><th>state</th><th class="n" title="Since the container last started">uptime</th><th class="n">cpu</th><th class="n">memory</th><th></th></tr>
         </thead>
         <tbody>
           {#each rows as { vm, c } (`${vm}/${c.id}`)}
@@ -75,6 +75,9 @@
               <td>
                 <span class="badge" class:running={c.state === 'running'}>{c.state}</span>
                 {#if oom > 0}<span class="badge alert" title="Processes killed for running out of memory">{oom} OOM</span>{/if}
+              </td>
+              <td class="n" title={c.startedAt ? `Started ${new Date(c.startedAt * 1000).toLocaleString('en-GB')}` : undefined}>
+                {c.state === 'running' ? uptime(c.startedAt, live.snapshot?.updated) : '–'}
               </td>
               <td class="n">{cores(c.latest.cpu_mc)}</td>
               <td class="n">{bytes(c.latest.mem)}</td>

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { age, prunedText, shortId } from './format';
+import { age, prunedText, shortId, uptime } from './format';
 
 describe('age', () => {
   const now = Date.parse('2026-11-09T12:00:00Z');
@@ -15,6 +15,24 @@ describe('age', () => {
   it("shows nothing for an unknown time (reproducible builds say 1970)", () => {
     expect(age(0, now)).toBe('–');
     expect(age(NaN, now)).toBe('–');
+  });
+});
+
+describe('uptime', () => {
+  const now = Date.parse('2026-11-09T12:00:00Z');
+  const since = (s: number) => now / 1000 - s;
+  it('is compact, with the second unit only where it still says something', () => {
+    expect(uptime(since(45), now)).toBe('45 s');
+    expect(uptime(since(12 * 60 + 30), now)).toBe('12 min');
+    expect(uptime(since(3 * 3600 + 20 * 60), now)).toBe('3 h 20 min');
+    expect(uptime(since(3 * 3600), now)).toBe('3 h');
+    expect(uptime(since(2 * 86_400 + 4 * 3600 + 59 * 60), now)).toBe('2 d 4 h');
+    expect(uptime(since(40 * 86_400), now)).toBe('40 d');
+  });
+  it('is unknown without a start, and never negative (a clock a little ahead)', () => {
+    expect(uptime(null, now)).toBe('–');
+    expect(uptime(undefined, now)).toBe('–');
+    expect(uptime(since(-3), now)).toBe('0 s');
   });
 });
 

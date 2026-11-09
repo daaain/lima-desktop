@@ -9,7 +9,7 @@ export const instance = (o: Partial<Instance> = {}): Instance => ({
 
 export const container = (o: Partial<ContainerLive> = {}): ContainerLive => ({
   id: 'c1', name: 'web-1', image: 'docker.io/library/nginx:latest', imageId: 'img1',
-  state: 'running', status: 'Up', created: 0, labels: {}, latest: {}, ...o,
+  state: 'running', status: 'Up', created: 0, startedAt: null, labels: {}, latest: {}, ...o,
 });
 
 export const vm = (inst: Partial<Instance>, containers: ContainerLive[] = []): VmLive => ({

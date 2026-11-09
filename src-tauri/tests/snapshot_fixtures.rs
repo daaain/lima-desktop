@@ -250,6 +250,10 @@ fn every_containers_created_time_is_read() {
         for (inst, dir) in recorded(&f) {
             for c in containers(&dir) {
                 assert!(c.created > 1_600_000_000, "{}: {} created {}", inst.name, c.name, c.created);
+                if c.state == "running" {
+                    let started = c.started_at.unwrap_or_else(|| panic!("{}: {} has no start", inst.name, c.name));
+                    assert!(started >= c.created, "{}: {} started before it was created", inst.name, c.name);
+                }
             }
         }
     }

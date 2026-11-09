@@ -55,6 +55,25 @@ export function age(unixSeconds: number, now = Date.now()): string {
   return 'just now';
 }
 
+const UPTIME_UNITS: [number, string][] = [
+  [86_400, 'd'],
+  [3600, 'h'],
+  [60, 'min'],
+];
+
+/** Seconds since a start → "3 h 20 min": the biggest unit, plus the next while it's under 10. */
+export function uptime(startedAt: number | null | undefined, now = Date.now()): string {
+  if (startedAt == null || !Number.isFinite(startedAt)) return '–';
+  const s = Math.max(0, Math.floor(now / 1000 - startedAt));
+  const i = UPTIME_UNITS.findIndex(([size]) => s >= size);
+  if (i < 0) return `${s} s`;
+  const [size, unit] = UPTIME_UNITS[i];
+  const n = Math.floor(s / size);
+  const next = UPTIME_UNITS[i + 1];
+  const rest = next && n < 10 ? Math.floor((s % size) / next[0]) : 0;
+  return rest ? `${n} ${unit} ${rest} ${next[1]}` : `${n} ${unit}`;
+}
+
 /** The 12 hex digits podman shows for an id. */
 export function shortId(id: string): string {
   return id.replace(/^sha256:/, '').slice(0, 12);

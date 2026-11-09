@@ -37,6 +37,8 @@ export interface ContainerLive {
   state: string;
   status: string;
   created: number;
+  /** Unix seconds of the last start; null if it never started. */
+  startedAt: number | null;
   composeProject?: string;
   composeService?: string;
   podName?: string;
