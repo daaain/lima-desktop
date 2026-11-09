@@ -7,7 +7,12 @@ pnpm install
 pnpm tauri dev                 # the app, hot-reloading the UI
 pnpm check && pnpm test        # svelte-check + vitest (the UI's pure logic)
 cd src-tauri && cargo test && cargo clippy --all-targets
+just --list                    # the same and more as recipes; `just check` runs everything
 ```
+
+`LD_DATA_DIR=<dir>` makes the app keep its data (the metrics history, `metrics.db`) there instead of
+the platform's app data directory: anything run against fake or replayed VMs should set it, so the
+real history never mixes with theirs.
 
 Linux needs WebKitGTK to build: `libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev` (see Tauri's
 prerequisites). macOS needs Xcode's command-line tools.
@@ -62,10 +67,46 @@ for them.
   `LD_LIMA_VM=<running instance> cargo test journal_live -- --ignored`. OOM kills themselves are
   covered by fixtures in `oom.rs`; to make one for real, give a container a small limit
   (`podman run --rm -m 64m fedora python3 -c 'b = bytearray(1 << 30)'`) — in a VM you don't mind.
-- **The whole app without Lima:** `tools/fake-lima-host.sh /tmp/pd.sock` prints a directory of
-  test doubles (`limactl`, `ssh`); launch the built app with it first on `PATH`. Under Xvfb:
+- **The whole app without Lima, against a real engine:** `tools/fake-lima-host.sh /tmp/pd.sock`
+  prints a directory of test doubles (`limactl`, `ssh`); launch the built app with it first on
+  `PATH` (and `LD_DATA_DIR` set). Under Xvfb:
   `Xvfb :99 & DISPLAY=:99 PATH=<dir>:$PATH WEBKIT_DISABLE_DMABUF_RENDERER=1 src-tauri/target/debug/lima-desktop`.
+  Use it for what a replay can't do: container actions, removals and prunes, against a throwaway
+  engine. For realistic data, replay a snapshot (below).
 
-Not yet exercised against a real Lima VM: the probe over Lima's own ssh, a cgroup v2 guest's
-`memory.peak`, PSI on Lima's kernels, lifecycle verbs and `limactl edit`. That's the first thing to
-run on a Mac.
+## Real data without access: snapshot → replay → fixture
+
+The dev box can't reach the Mac's Lima VMs on purpose (`limactl` or a VM's podman socket would be
+control of every VM, other projects' included). So real data is recorded on the Mac and replayed:
+
+1. **`just snapshot [seconds]`** — on the Mac only (it refuses in a container). Records, read-only and
+   through the app's own code (`src-tauri/examples/snapshot.rs`), what the app reads: `limactl
+   list`'s rows cut to what the app reads (`tools/snapshot-row.json`: no provisioning, env, mounts or
+   messages), the instances' marker files, and per running VM `seconds` blocks of the probe, the
+   OOM reader's output, and libpod's list GETs (stats once a second). Never inspect, logs,
+   containers' commands and mounts, or images' labels. Into `.snapshots/<UTC time>/` (gitignored;
+   `.snapshots/latest` points at it), which the box sees through its mount — so it's kept only if
+   no line looks like a credential (`password`, `secret`, `token`, a private key); otherwise it's
+   deleted and the files and lines named. It is **not anonymised**: real VM, container and image
+   names and ids.
+2. **`just replay [snapshot]`** (the Mac) or **`just replay-headless [snapshot]`** (the box: Xvfb,
+   a screenshot into `.snapshots/screens/`) — `tools/replay-lima-host.mjs` builds a fake Lima home
+   with a fake `limactl` and `ssh` and serves each VM's libpod on its socket, then runs the app
+   against it with `LD_DATA_DIR` in the workdir. The probe replays at one block a second and stats
+   one sample per request, both looping: cumulative counters (uptime, CPU, PSI, container CPU, net,
+   block) carry on rising by one mean step per sample, OOM counters hold at their last value so no
+   kill is recorded twice. Anything that would change something is refused (`limactl` fails, libpod
+   answers 409); anything not recorded (inspect, logs) answers 404 and is logged to
+   `<workdir>/replay.log`. Host-side columns (hypervisor RSS/CPU, disk-image allocation) read as
+   absent.
+3. **`just fixture [snapshot] [name] [seconds]`** — `tools/anonymise-snapshot.mjs` keeps only what the
+   app reads, maps names, users, homes, image repositories (official `docker.io/library/*` ones
+   kept) and ports to neutral ones, hashes ids with a throwaway salt, keeps every number, and then
+   scans its output for every original it knew of: one survivor and nothing is written. Into
+   `src-tauri/tests/fixtures/<name>/`, which `tests/snapshot_fixtures.rs` puts through the real
+   parsers. A fixture replays like a snapshot: `just replay src-tauri/tests/fixtures/snapshot-1`.
+
+The tools are Node with no dependencies; their tests: `node --test 'tools/*.test.mjs'`.
+
+Exercised against real Lima 2.1 VMs (by recording `snapshot-1`): the probe over Lima's own ssh,
+cgroup v2 `memory.peak`, PSI, the OOM reader. Not yet: lifecycle verbs and `limactl edit`.

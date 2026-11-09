@@ -220,8 +220,13 @@ async fn run(args: &[&str]) -> Result<String, LimaError> {
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
+/// `limactl list --format '{{json .}}'`'s stdout, as `list` reads it (the snapshot recorder keeps it).
+pub async fn list_raw() -> Result<String, LimaError> {
+    run(&["list", "--format", "{{json .}}"]).await
+}
+
 pub async fn list() -> Result<Vec<Instance>, LimaError> {
-    let out = run(&["list", "--format", "{{json .}}"]).await?;
+    let out = list_raw().await?;
     Ok(parse_list(&out)
         .into_iter()
         .map(Instance::from_raw)

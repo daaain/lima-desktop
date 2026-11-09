@@ -34,7 +34,7 @@ const SSH_FAILED: i32 = 255;
 /// Sent on stdin to `sh -s`. Exits 0 with `E <reason>` when the journal can't be read: an empty
 /// answer from a user outside `systemd-journal` looks just like "no OOM kills", so readability is
 /// checked first against the current boot's latest kernel line, which always exists.
-fn script(since_ms: i64) -> String {
+pub fn script(since_ms: i64) -> String {
     format!(
         r#"# lima-desktop OOM reader. READ-ONLY: the kernel's OOM-killer lines since a time, as JSON.
 command -v journalctl >/dev/null 2>&1 || {{ echo "E there's no systemd journal in this VM"; exit 0; }}
@@ -51,19 +51,27 @@ rc=$?
     )
 }
 
+/// Run the reader script over Lima's ssh: its raw output, as `read_oom_lines` interprets it (the
+/// snapshot recorder keeps it).
+pub async fn run_script(
+    ssh_config: &str,
+    instance: &str,
+    since_ms: i64,
+) -> std::io::Result<std::process::Output> {
+    let mut child = probe::ssh(ssh_config, instance).spawn()?;
+    let mut stdin = child.stdin.take().expect("piped stdin");
+    stdin.write_all(script(since_ms).as_bytes()).await?;
+    drop(stdin);
+    child.wait_with_output().await
+}
+
 /// The OOM killer's kernel lines since `since_ms`, over Lima's ssh.
 pub async fn read_oom_lines(
     ssh_config: &str,
     instance: &str,
     since_ms: i64,
 ) -> Result<Vec<Entry>, JournalError> {
-    let run = async {
-        let mut child = probe::ssh(ssh_config, instance).spawn()?;
-        let mut stdin = child.stdin.take().expect("piped stdin");
-        stdin.write_all(script(since_ms).as_bytes()).await?;
-        drop(stdin);
-        child.wait_with_output().await
-    };
+    let run = run_script(ssh_config, instance, since_ms);
     let out = match tokio::time::timeout(TIMEOUT, run).await {
         Err(_) => {
             return Err(JournalError::Unreachable(

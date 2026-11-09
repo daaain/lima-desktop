@@ -16,6 +16,13 @@ use tokio::net::UnixStream;
 const API: &str = "/v4.0.0/libpod";
 const TIMEOUT: Duration = Duration::from_secs(10);
 
+/// The read-only GETs the collector and the podman views make (a snapshot records each of them).
+pub const CONTAINERS: &str = "/containers/json?all=true";
+pub const STATS: &str = "/containers/stats?stream=false";
+pub const IMAGES: &str = "/images/json?all=true";
+pub const VOLUMES: &str = "/volumes/json";
+pub const SYSTEM_DF: &str = "/system/df";
+
 #[derive(Debug, thiserror::Error)]
 pub enum PodmanError {
     #[error("can't reach podman at {0}: {1}")]
@@ -390,9 +397,13 @@ impl Libpod {
             .map_err(|_| PodmanError::Timeout)?
     }
 
+    /// A GET's raw body (under the libpod prefix): what the typed calls below decode.
+    pub async fn get(&self, path: &str) -> Result<Bytes, PodmanError> {
+        self.request(Method::GET, path).await
+    }
+
     async fn get_json<T: for<'de> Deserialize<'de>>(&self, path: &str) -> Result<T, PodmanError> {
-        let body = self.request(Method::GET, path).await?;
-        Ok(serde_json::from_slice(&body)?)
+        Ok(serde_json::from_slice(&self.get(path).await?)?)
     }
 
     pub async fn ping(&self) -> bool {
@@ -400,14 +411,12 @@ impl Libpod {
     }
 
     pub async fn containers(&self) -> Result<Vec<Container>, PodmanError> {
-        let raw: Vec<RawContainer> = self.get_json("/containers/json?all=true").await?;
-        Ok(raw.into_iter().map(Container::from).collect())
+        parse_containers(&self.get(CONTAINERS).await?)
     }
 
     /// Counters for every RUNNING container in one call.
     pub async fn stats(&self) -> Result<Vec<RawStat>, PodmanError> {
-        let report: StatsReport = self.get_json("/containers/stats?stream=false").await?;
-        Ok(report.stats.unwrap_or_default())
+        parse_stats(&self.get(STATS).await?)
     }
 
     pub async fn act(&self, id: &str, action: ContainerAction) -> Result<(), PodmanError> {
@@ -439,8 +448,7 @@ impl Libpod {
     }
 
     pub async fn images(&self) -> Result<Vec<Image>, PodmanError> {
-        let raw: Option<Vec<RawImage>> = self.get_json("/images/json?all=true").await?;
-        Ok(listed(raw.unwrap_or_default()))
+        parse_images(&self.get(IMAGES).await?)
     }
 
     /// Remove by `repository:tag` (untags; the image goes with its last tag) or by id (a dangling
@@ -456,12 +464,7 @@ impl Libpod {
     }
 
     pub async fn volumes(&self) -> Result<Vec<Volume>, PodmanError> {
-        let raw: Option<Vec<RawVolume>> = self.get_json("/volumes/json").await?;
-        Ok(raw
-            .unwrap_or_default()
-            .into_iter()
-            .map(Volume::from)
-            .collect())
+        parse_volumes(&self.get(VOLUMES).await?)
     }
 
     /// Never forced: a volume a container uses stays.
@@ -483,8 +486,36 @@ impl Libpod {
 
     /// `podman system df`: images, containers and volumes with their sizes.
     pub async fn system_df(&self) -> Result<serde_json::Value, PodmanError> {
-        self.get_json("/system/df").await
+        self.get_json(SYSTEM_DF).await
     }
+}
+
+/// The body of `CONTAINERS`, decoded.
+pub fn parse_containers(body: &[u8]) -> Result<Vec<Container>, PodmanError> {
+    let raw: Vec<RawContainer> = serde_json::from_slice(body)?;
+    Ok(raw.into_iter().map(Container::from).collect())
+}
+
+/// The body of `STATS`, decoded.
+pub fn parse_stats(body: &[u8]) -> Result<Vec<RawStat>, PodmanError> {
+    let report: StatsReport = serde_json::from_slice(body)?;
+    Ok(report.stats.unwrap_or_default())
+}
+
+/// The body of `IMAGES`, decoded into the rows worth listing.
+pub fn parse_images(body: &[u8]) -> Result<Vec<Image>, PodmanError> {
+    let raw: Option<Vec<RawImage>> = serde_json::from_slice(body)?;
+    Ok(listed(raw.unwrap_or_default()))
+}
+
+/// The body of `VOLUMES`, decoded.
+pub fn parse_volumes(body: &[u8]) -> Result<Vec<Volume>, PodmanError> {
+    let raw: Option<Vec<RawVolume>> = serde_json::from_slice(body)?;
+    Ok(raw
+        .unwrap_or_default()
+        .into_iter()
+        .map(Volume::from)
+        .collect())
 }
 
 #[cfg(test)]

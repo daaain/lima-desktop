@@ -46,3 +46,8 @@ strip = true
 
 [dev-dependencies]
 tempfile = "3.27.0"
+
+# The snapshot recorder's unit tests run with `cargo test`.
+[[example]]
+name = "snapshot"
+test = true

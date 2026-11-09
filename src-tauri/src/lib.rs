@@ -8,8 +8,20 @@ pub mod podman;
 pub mod probe;
 pub mod store;
 
+use std::path::PathBuf;
 use std::sync::Arc;
 use tauri::Manager;
+
+/// Overrides where the app keeps its data (the metrics history): a replay or a test run sets it so
+/// the real history is never written to.
+const DATA_DIR_ENV: &str = "LD_DATA_DIR";
+
+fn data_dir(app: &tauri::App) -> tauri::Result<PathBuf> {
+    match std::env::var_os(DATA_DIR_ENV).filter(|d| !d.is_empty()) {
+        Some(dir) => Ok(PathBuf::from(dir)),
+        None => app.path().app_data_dir(),
+    }
+}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -17,7 +29,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
-            let dir = app.path().app_data_dir()?;
+            let dir = data_dir(app)?;
             std::fs::create_dir_all(&dir)?;
             let path = dir.join("metrics.db");
             log::info!("metrics history in {}", path.display());

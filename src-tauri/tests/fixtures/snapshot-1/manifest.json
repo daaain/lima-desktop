@@ -1,0 +1,100 @@
+{
+  "format": 1,
+  "host": {
+    "home": "/Users/user",
+    "limaHome": "/Users/user/.lima",
+    "user": "user"
+  },
+  "limaVersion": "2.1.3",
+  "notRecorded": "host-side columns (hypervisor RSS/CPU by pid, disk-image allocation): a replay leaves them absent",
+  "recordedAt": 1794250869337,
+  "recordedAtUtc": "2026-11-09T19:01:09Z",
+  "seconds": 10,
+  "vms": [
+    {
+      "name": "vm-a",
+      "status": "Stopped"
+    },
+    {
+      "name": "vm-b",
+      "status": "Stopped"
+    },
+    {
+      "journal": {
+        "exit": 0,
+        "stderr": ""
+      },
+      "libpodErrors": {},
+      "name": "vm-c",
+      "podman": true,
+      "probeBlocks": 10,
+      "statsSamples": 10,
+      "status": "Running"
+    },
+    {
+      "journal": {
+        "exit": 0,
+        "stderr": ""
+      },
+      "libpodErrors": {},
+      "name": "vm-d",
+      "podman": true,
+      "probeBlocks": 10,
+      "statsSamples": 10,
+      "status": "Running"
+    },
+    {
+      "name": "vm-e",
+      "status": "Stopped"
+    },
+    {
+      "name": "vm-f",
+      "status": "Stopped"
+    },
+    {
+      "name": "vm-g",
+      "status": "Stopped"
+    },
+    {
+      "name": "vm-h",
+      "status": "Stopped"
+    },
+    {
+      "name": "vm-i",
+      "status": "Stopped"
+    },
+    {
+      "journal": {
+        "exit": 0,
+        "stderr": ""
+      },
+      "libpodErrors": {},
+      "name": "vm-j",
+      "podman": true,
+      "probeBlocks": 10,
+      "statsSamples": 10,
+      "status": "Running"
+    },
+    {
+      "name": "vm-k",
+      "status": "Stopped"
+    },
+    {
+      "name": "vm-l",
+      "status": "Stopped"
+    },
+    {
+      "journal": {
+        "exit": 0,
+        "stderr": ""
+      },
+      "libpodErrors": {},
+      "name": "vm-m",
+      "podman": true,
+      "probeBlocks": 10,
+      "statsSamples": 10,
+      "status": "Running"
+    }
+  ],
+  "anonymised": true
+}
