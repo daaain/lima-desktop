@@ -1,7 +1,10 @@
 //! The guest's kernel journal, read once on demand over Lima's ssh (never in the probe's
-//! per-second loop): only the OOM killer's lines, as `journalctl -o json`. Read-only and without
-//! sudo — on Lima's systemd templates the user is in `systemd-journal`, while `dmesg` is
-//! restricted. Anywhere else (no systemd, Alpine, a user outside that group) it says why not.
+//! per-second loop): only the OOM killer's lines, as `journalctl -o json`. Read-only. Lima puts the
+//! guest user in `systemd-journal` only when the host user's UID is under 1000 — macOS, not a
+//! Linux desktop (`00-systemd-user-group.sh`) — and `dmesg` is restricted, so where the user can't
+//! read it the same query runs under `sudo -n` (Lima's default passwordless sudo; non-interactive,
+//! so it fails at once rather than prompt). Where neither works (no systemd, a sudo that asks)
+//! it says why, and the fix.
 
 use std::time::Duration;
 use tokio::io::AsyncWriteExt;
@@ -33,16 +36,23 @@ const SSH_FAILED: i32 = 255;
 
 /// Sent on stdin to `sh -s`. Exits 0 with `E <reason>` when the journal can't be read: an empty
 /// answer from a user outside `systemd-journal` looks just like "no OOM kills", so readability is
-/// checked first against the current boot's latest kernel line, which always exists.
+/// checked first (as the user, then with `sudo -n`) against the current boot's latest kernel line,
+/// which always exists.
 pub fn script(since_ms: i64) -> String {
     format!(
         r#"# lima-desktop OOM reader. READ-ONLY: the kernel's OOM-killer lines since a time, as JSON.
 command -v journalctl >/dev/null 2>&1 || {{ echo "E there's no systemd journal in this VM"; exit 0; }}
-if [ -z "$(journalctl -q --no-pager _TRANSPORT=kernel -b -n 1 -o cat 2>/dev/null)" ]; then
-  echo "E the kernel journal isn't readable by $(id -un) (it isn't in the systemd-journal group)"
+readable() {{ [ -n "$("$@" -q --no-pager _TRANSPORT=kernel -b -n 1 -o cat 2>/dev/null)" ]; }}
+if readable journalctl; then
+  jc() {{ journalctl "$@"; }}
+elif readable sudo -n journalctl; then
+  jc() {{ sudo -n journalctl "$@"; }}
+else
+  u=$(id -un)
+  echo "E the kernel journal isn't readable by $u (not in the systemd-journal group, and sudo -n was refused); to fix: sudo usermod -aG systemd-journal $u, then restart the VM"
   exit 0
 fi
-journalctl -q --no-pager _TRANSPORT=kernel -o json --output-fields=MESSAGE,_BOOT_ID \
+jc -q --no-pager _TRANSPORT=kernel -o json --output-fields=MESSAGE,_BOOT_ID \
   --since "@{since}" --grep 'oom-kill:|Killed process|^memory: usage'
 rc=$?
 [ "$rc" -le 1 ] || echo "E journalctl failed (exit $rc)"
@@ -173,6 +183,75 @@ mod tests {
             .unwrap();
         drop(stdin);
         child.wait_with_output().unwrap()
+    }
+
+    /// A PATH of stand-ins: `id` says `runner`; `journalctl` shows the kernel's lines only when
+    /// `readable` or run through `sudo`; `sudo -n` works only when `sudo_ok`, and leaves a mark.
+    fn fake_guest(readable: bool, sudo_ok: bool) -> tempfile::TempDir {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let mark = dir.path().join("sudo-used");
+        let line = r#"{"_BOOT_ID":"b","__REALTIME_TIMESTAMP":"1794229820051400","MESSAGE":"oom-kill:constraint=CONSTRAINT_MEMCG,task=tail,pid=7"}"#;
+        let tools = [
+            ("id", "#!/bin/sh\necho runner\n".to_string()),
+            (
+                "journalctl",
+                format!(
+                    "#!/bin/sh\n[ {readable} = true ] || [ -n \"$AS_ROOT\" ] || exit 0\n\
+                     case \"$*\" in *json*) echo '{line}' ;; *) echo 'kernel: hello' ;; esac\n"
+                ),
+            ),
+            (
+                "sudo",
+                format!(
+                    "#!/bin/sh\ntouch '{}'\n[ \"$1\" = -n ] && shift\n\
+                     [ {sudo_ok} = true ] || {{ echo 'sudo: a password is required' >&2; exit 1; }}\n\
+                     AS_ROOT=1 exec \"$@\"\n",
+                    mark.display()
+                ),
+            ),
+        ];
+        for (name, body) in tools {
+            let path = dir.path().join(name);
+            std::fs::write(&path, body).unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        dir
+    }
+
+    fn read_with(guest: &tempfile::TempDir) -> Result<Vec<Entry>, JournalError> {
+        let out = run_script_locally(guest.path().to_str().unwrap());
+        assert!(out.status.success());
+        parse_output(&String::from_utf8_lossy(&out.stdout))
+    }
+
+    #[test]
+    fn a_readable_journal_is_read_without_sudo() {
+        let guest = fake_guest(true, true);
+        assert_eq!(read_with(&guest).unwrap().len(), 1);
+        assert!(!guest.path().join("sudo-used").exists(), "no sudo when it isn't needed");
+    }
+
+    #[test]
+    fn an_unreadable_journal_is_read_with_passwordless_sudo() {
+        // Lima only puts the user in systemd-journal when the host UID is under 1000 (macOS).
+        let entries = read_with(&fake_guest(false, true)).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert!(entries[0].message.contains("task=tail"));
+    }
+
+    #[test]
+    fn without_access_or_passwordless_sudo_it_says_why_and_the_fix() {
+        let err = read_with(&fake_guest(false, false)).unwrap_err();
+        assert_eq!(
+            err,
+            JournalError::Unavailable(
+                "the kernel journal isn't readable by runner (not in the systemd-journal group, \
+                 and sudo -n was refused); to fix: sudo usermod -aG systemd-journal runner, \
+                 then restart the VM"
+                    .into()
+            )
+        );
     }
 
     #[test]

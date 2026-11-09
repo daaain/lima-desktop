@@ -795,10 +795,21 @@ async fn check_oom(ctx: &mut Ctx) -> Outcome {
     }
     log(format!("oom: in the journal after {} s", t0.elapsed().as_secs()));
     pass(format!(
-        "oom: {} killed at {OOM_CT}'s own {} limit ({CONSTRAINT_MEMCG})",
+        "oom: {} killed at {OOM_CT}'s own {} limit ({CONSTRAINT_MEMCG}), journal read {}",
         e.process.as_deref().unwrap_or("?"),
-        bytes(OOM_LIMIT)
+        bytes(OOM_LIMIT),
+        journal_access(P5).await
     ))
+}
+
+/// How the app gets at the guest's kernel journal: Lima puts the user in `systemd-journal` only
+/// when the host UID is under 1000 (macOS); elsewhere the reader falls back to `sudo -n`.
+async fn journal_access(vm: &str) -> String {
+    let out = shell(vm, "id -un; id -nG", Duration::from_secs(20)).await;
+    let mut lines = out.stdout.lines();
+    let user = lines.next().unwrap_or("?").trim().to_string();
+    let in_group = lines.next().is_some_and(|g| g.split_whitespace().any(|g| g == "systemd-journal"));
+    if in_group { format!("as {user} (in systemd-journal)") } else { format!("with sudo -n ({user} isn't in systemd-journal)") }
 }
 
 /// A runtime that's shut down without blocking when dropped — even mid-check, on Ctrl-C, where
