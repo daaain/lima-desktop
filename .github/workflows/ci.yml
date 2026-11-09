@@ -69,6 +69,7 @@ jobs:
         with:
           name: headless-screenshot
           path: .snapshots/screens/*.png
+          include-hidden-files: true   # .snapshots/ is a dot-dir, skipped by default
           if-no-files-found: ignore
 
   e2e:
@@ -134,4 +135,5 @@ jobs:
         with:
           name: e2e-log
           path: .e2e/*.log
+          include-hidden-files: true   # .e2e/ is a dot-dir, skipped by default
           if-no-files-found: ignore
