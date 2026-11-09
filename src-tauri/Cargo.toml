@@ -52,3 +52,8 @@ tempfile = "3.27.0"
 [[example]]
 name = "snapshot"
 test = true
+
+# The end-to-end runner against a real Lima (`just e2e`); its pure parts' tests run with `cargo test`.
+[[example]]
+name = "e2e"
+test = true

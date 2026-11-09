@@ -22,3 +22,6 @@ vite.config.ts.timestamp-*
 
 # Recorded Lima data (just snapshot) and replay workdirs: real names and ids, never commit.
 .snapshots/
+
+# End-to-end runs against a real Lima (just e2e): their full logs.
+.e2e/

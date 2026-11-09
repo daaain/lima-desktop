@@ -49,6 +49,35 @@ replay-headless snapshot=(snapshots + "/latest") seconds="20":
 fixture snapshot=(snapshots + "/latest") name="snapshot-1" seconds="10":
     node tools/anonymise-snapshot.mjs "{{snapshot}}" "{{fixtures}}/{{name}}" --seconds {{seconds}}
 
+# End to end against this host's Lima: 2 small VMs in their own LIMA_HOME, deleted after (unless --keep)
+e2e *args:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ -f /run/.containerenv ] || [ -f /.dockerenv ] || [ -n "${container:-}" ]; then
+      echo "just e2e drives real Lima VMs, so it runs on the host (your Mac, or a Linux machine with KVM), not in a container or dev box." >&2
+      exit 1
+    fi
+    command -v limactl >/dev/null || { echo "just e2e needs limactl (Lima 2) on this host." >&2; exit 1; }
+    cargo build --quiet --manifest-path src-tauri/Cargo.toml --example e2e 2>/dev/null \
+      || cargo build --quiet --manifest-path src-tauri/Cargo.toml --example e2e
+    exec cargo run --quiet --manifest-path src-tauri/Cargo.toml --example e2e -- --log-dir .e2e {{args}}
+
+# Delete the ld-e2e-* VMs a failed or --keep run of `just e2e` left, in the e2e LIMA_HOME only
+e2e-clean:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    home="${LD_E2E_HOME:-$HOME/.lima-desktop-e2e}"
+    [ -d "$home" ] || { echo "no e2e LIMA_HOME at $home: nothing to clean"; exit 0; }
+    case "$(cd "$home" && pwd -P)" in
+      "$(cd "$HOME" && pwd -P)/.lima"|"$(cd "$HOME" && pwd -P)/.lima/"*) echo "refusing: $home is your own Lima home" >&2; exit 1 ;;
+    esac
+    export LIMA_HOME="$home"
+    left=$(limactl list --format '{{{{.Name}}' 2>/dev/null | grep '^ld-e2e-' || true)
+    [ -n "$left" ] || { echo "no ld-e2e-* VMs in $home"; exit 0; }
+    for vm in $left; do
+      if out=$(limactl delete --force --tty=false "$vm" 2>&1); then echo "deleted $vm"; else echo "$out" | tail -3 >&2; exit 1; fi
+    done
+
 # Everything CI would run: type checks, all tests, clippy
 check:
     pnpm check

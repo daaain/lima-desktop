@@ -109,4 +109,51 @@ control of every VM, other projects' included). So real data is recorded on the 
 The tools are Node with no dependencies; their tests: `node --test 'tools/*.test.mjs'`.
 
 Exercised against real Lima 2.1 VMs (by recording `snapshot-1`): the probe over Lima's own ssh,
-cgroup v2 `memory.peak`, PSI, the OOM reader. Not yet: lifecycle verbs and `limactl edit`.
+cgroup v2 `memory.peak`, PSI, the OOM reader. Lifecycle verbs and `limactl edit`: by `just e2e`
+(below).
+
+## End to end against a real Lima: `just e2e`
+
+Three layers, each catching what the one before can't:
+
+| | what it runs against | catches |
+| --- | --- | --- |
+| unit and fixture tests (`cargo test`, `pnpm test`) | canned strings, anonymised snapshots | parser and logic regressions, anywhere |
+| replay (`just replay*`) | a recorded snapshot behind a fake `limactl`/`ssh`/libpod | the whole app on real data, without access to the VMs |
+| **e2e** (`just e2e`) | live Lima VMs on this host | behaviour: what Lima, ssh, podman and the kernel actually do |
+
+`just e2e` (`src-tauri/examples/e2e.rs`) drives the crate's own modules as the app does. It creates
+two small VMs (2 CPUs, 2 GiB, 10 GiB, nothing mounted), `ld-e2e-p5` from Lima's `template:podman`
+(Fedora, podman 5) and `ld-e2e-p4` from `src-tauri/tests/e2e/podman4.yaml` (Debian 12, podman 4.3,
+its socket forwarded the same way), and checks, one line each: `lima::list` sees both with a podman
+socket; a socket path over `sun_path`'s limit is reached through the short link; libpod lists two
+compose-labelled containers with real start and created times, and stats show their traffic (one
+asks the other over a podman network: no internet needed past the image pull); the probe over
+Lima's ssh (memory, CPU, PSI, cgroup `G` lines); a real OOM kill (`tail /dev/zero` under a 32 MiB
+limit) read back from the kernel journal as that container's own limit; the real `Collector` for a
+few seconds (p5 with its containers and the kill stored; p4 with VM metrics, no containers, and
+"podman 4.3.1 in this VM is too old: Lima Desktop needs podman 5 or newer"); the commands' podman
+gate on p4; resize refused while running; then on p5 stop, resize (+1 GiB), start and restart via
+`lima::act`/`lima::resize`, each followed by the probe and podman coming back; and delete (stop,
+then delete, as the UI does). About 2 minutes on an M-series Mac once the images are cached.
+
+- **Host only.** It refuses inside a container or dev box, like `just snapshot`: the box has no Lima
+  on purpose.
+- **Isolated.** Its own `LIMA_HOME`: `~/.lima-desktop-e2e`, or `LD_E2E_HOME` (keep it short: unix
+  socket paths are limited to ~104 bytes). It's set before anything runs `limactl`, and the runner
+  refuses a home that is, or overlaps, `~/.lima` (symlinks resolved, before anything is created) or
+  holds an instance not named `ld-e2e-*`. Only Lima's image download cache is shared.
+- **Cleans up** at the end, on failure and on Ctrl-C; `just e2e --keep` leaves the VMs for a look
+  (`LIMA_HOME=~/.lima-desktop-e2e limactl shell ld-e2e-p5`), and `just e2e-clean` removes them.
+  A run also replaces any `ld-e2e-*` left from before.
+- **Made to paste.** stdout is a header, one line per check (✓ ✗ –), at most five indented lines of
+  evidence under a failure, and a summary naming the log; colour only on a terminal (and not with
+  `NO_COLOR`). limactl's output and whole errors go to `.e2e/<UTC time>.log` (gitignored). It exits
+  non-zero on any failure. `LD_E2E_IMAGE` overrides the test image (`docker.io/library/alpine:3`).
+- **The same runner on Linux.** VMs are vz on macOS and QEMU on Linux, nothing else differs. CI is
+  to run it on GitHub's `ubuntu-26.04` runner, pinned by name (not `ubuntu-latest`, mid-migration
+  until 19 Nov 2026), which has KVM; it needs Lima 2 and `qemu-system-*` installed, `/dev/kvm`
+  usable by the runner user, and ideally Lima's download cache (`~/.cache/lima`) cached between runs
+  — the Fedora and Debian images are a few hundred MiB each. Docker Hub's anonymous pull limit can
+  bite on shared runner IPs: point `LD_E2E_IMAGE` at a mirror if it does. (Ubuntu 26.04's own
+  podman, 5.7.0, would pass the app's podman ≥ 5 gate too, but the e2e uses the VMs' engines.)
