@@ -4,7 +4,7 @@
   import { live } from '$lib/live.svelte';
   import { bytes, cores, uptime } from '$lib/format';
   import { containerRows, filterContainers, readContainerFilter } from '$lib/containers';
-  import { podmanScope } from '$lib/perVm';
+  import { podmanFailures, podmanScope } from '$lib/perVm';
   import { withParam } from '$lib/url';
   import ContainerActions from '$lib/ContainerActions.svelte';
   import ContainerDetail from '$lib/ContainerDetail.svelte';
@@ -48,7 +48,7 @@
     <span class="muted">{rows.length} of {all.length}</span>
   </div>
 
-  <UnlistedVms {scope} what="containers" />
+  <UnlistedVms {scope} what="containers" failed={podmanFailures(live.snapshot)} />
   {#if urlFilter.vm && !scope.running.includes(urlFilter.vm)}
     <p class="muted">'{urlFilter.vm}' isn't running — <a href={`/vm/${encodeURIComponent(urlFilter.vm)}`}>start it</a> to see its containers.</p>
   {/if}

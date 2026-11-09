@@ -34,7 +34,9 @@
 
 {#if !live.snapshot}
   <p class="muted">Looking for Lima instances…</p>
-{:else if vms.length === 0 && !live.snapshot.limaError}
+{:else if live.snapshot.limaProblem && vms.length === 0}
+  <!-- The problem panel above says what's wrong; there are no VMs to show yet. -->
+{:else if vms.length === 0}
   <div class="panel empty">
     <h2>No Lima instances</h2>
     <p>Create one with <code>limactl create template://podman</code>, then start it here.</p>

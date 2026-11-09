@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { fromEachVm, podmanScope, unlistedText } from './perVm';
+import { fromEachVm, podmanFailures, podmanScope, unlistedText } from './perVm';
 import { snapshot, vm } from './testing';
 
 describe('podmanScope', () => {
@@ -41,5 +41,17 @@ describe('fromEachVm', () => {
     });
     expect(r.ok).toEqual([{ vm: 'a', value: ['a'] }, { vm: 'c', value: ['c'] }]);
     expect(r.failed).toEqual([{ vm: 'b', error: "can't reach podman" }]);
+  });
+});
+
+describe("podman failures from the snapshot", () => {
+  it("names running VMs whose podman is refused or failing, and only those", () => {
+    const old = { ...vm({ name: 'old' }), podmanError: 'podman 4.3.1 in this VM is too old: Lima Desktop needs podman 5 or newer' };
+    const ok = vm({ name: 'ok' });
+    const off = { ...vm({ name: 'off', status: 'Stopped' }), podmanError: 'stale' };
+    expect(podmanFailures(snapshot([old, ok, off]))).toEqual([
+      { vm: 'old', error: 'podman 4.3.1 in this VM is too old: Lima Desktop needs podman 5 or newer' },
+    ]);
+    expect(podmanFailures(null)).toEqual([]);
   });
 });

@@ -82,9 +82,20 @@ export interface OomEvent {
   composeService: string | null;
 }
 
+/** lima.rs `LimaProblem`. */
+export interface LimaProblem {
+  kind: 'notInstalled' | 'failed' | 'notAnswering' | 'other';
+  message: string;
+  /** Where limactl was looked for, when it wasn't found. */
+  searched: string[];
+  /** The OS the app runs on (Rust's std::env::consts::OS: 'macos', 'linux', …). */
+  os: string;
+}
+
 export interface Snapshot {
   vms: VmLive[];
-  limaError?: string;
+  /** What's wrong with Lima itself; the VMs are then as last seen. */
+  limaProblem?: LimaProblem | null;
   updated: number;
   storeBytes: number;
   retention?: { rawDays: number; rollupDays: number };

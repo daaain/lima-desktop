@@ -3,6 +3,7 @@
   import { live } from '$lib/live.svelte';
   import { bytes } from '$lib/format';
   import Sidebar from '$lib/Sidebar.svelte';
+  import LimaProblem from '$lib/LimaProblem.svelte';
   let { children } = $props();
   onMount(() => live.start());
 </script>
@@ -17,8 +18,8 @@
       </span>
     {/if}
   </header>
-  {#if live.snapshot?.limaError}
-    <p class="banner alert">{live.snapshot.limaError}</p>
+  {#if live.snapshot?.limaProblem}
+    <LimaProblem problem={live.snapshot.limaProblem} staleVms={live.snapshot.vms.length} />
   {/if}
   {#if live.error}
     <p class="banner alert">Backend: {live.error}</p>

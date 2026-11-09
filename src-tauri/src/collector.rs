@@ -90,7 +90,8 @@ pub struct VmLive {
 #[serde(rename_all = "camelCase")]
 pub struct Snapshot {
     pub vms: Vec<VmLive>,
-    pub lima_error: Option<String>,
+    /// What's wrong with Lima itself; the VMs are then as last seen.
+    pub lima_problem: Option<lima::LimaProblem>,
     pub updated: i64,
     pub store_bytes: i64,
     pub retention: Option<Retention>,
@@ -125,7 +126,7 @@ impl Drop for VmState {
 pub struct Collector {
     store: Mutex<Store>,
     vms: Mutex<HashMap<String, VmState>>,
-    lima_error: Mutex<Option<String>>,
+    lima_problem: Mutex<Option<lima::LimaProblem>>,
     retention: Retention,
 }
 
@@ -134,7 +135,7 @@ impl Collector {
         Arc::new(Collector {
             store: Mutex::new(store),
             vms: Mutex::new(HashMap::new()),
-            lima_error: Mutex::new(None),
+            lima_problem: Mutex::new(None),
             retention,
         })
     }
@@ -149,7 +150,7 @@ impl Collector {
         list.sort_by(|a, b| a.instance.name.cmp(&b.instance.name));
         Snapshot {
             vms: list,
-            lima_error: self.lima_error.lock().expect("lock").clone(),
+            lima_problem: self.lima_problem.lock().expect("lock").clone(),
             updated: now_ms(),
             store_bytes: self.store().file_size().unwrap_or(0),
             retention: Some(self.retention),
@@ -201,11 +202,12 @@ impl Collector {
     async fn reconcile(self: &Arc<Self>) {
         let instances = match lima::list().await {
             Ok(list) => {
-                *self.lima_error.lock().expect("lock") = None;
+                *self.lima_problem.lock().expect("lock") = None;
                 list
             }
             Err(e) => {
-                *self.lima_error.lock().expect("lock") = Some(e.to_string());
+                log::warn!("lima: {e}");
+                *self.lima_problem.lock().expect("lock") = Some(e.problem());
                 return;
             }
         };

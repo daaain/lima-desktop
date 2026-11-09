@@ -10,21 +10,65 @@
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::time::Duration;
 use tokio::process::Command;
 
 use crate::marker::{self, Marker};
 
 #[derive(Debug, thiserror::Error)]
 pub enum LimaError {
+    /// The dirs searched, in order, without repeats.
     #[error("limactl not found (looked on PATH and in the usual install locations)")]
-    NotFound,
+    NotFound(Vec<PathBuf>),
     #[error("`limactl {0}` failed: {1}")]
     Failed(String, String),
+    #[error("`limactl {0}` didn't answer within {1} s")]
+    TimedOut(String, u64),
     #[error("{0}")]
     Refused(String),
     #[error(transparent)]
     Io(#[from] std::io::Error),
 }
+
+/// What's wrong with Lima itself (not one VM), shaped for the app to say what to do about it.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct LimaProblem {
+    pub kind: LimaProblemKind,
+    pub message: String,
+    /// Where `limactl` was looked for, when it wasn't found.
+    pub searched: Vec<String>,
+    /// The OS this app runs on, which decides how Lima is installed.
+    pub os: &'static str,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum LimaProblemKind {
+    NotInstalled,
+    Failed,
+    NotAnswering,
+    Other,
+}
+
+impl LimaError {
+    pub fn problem(&self) -> LimaProblem {
+        let (kind, searched) = match self {
+            LimaError::NotFound(dirs) => (
+                LimaProblemKind::NotInstalled,
+                dirs.iter().map(|d| d.display().to_string()).collect(),
+            ),
+            LimaError::Failed(..) => (LimaProblemKind::Failed, vec![]),
+            LimaError::TimedOut(..) => (LimaProblemKind::NotAnswering, vec![]),
+            LimaError::Refused(_) | LimaError::Io(_) => (LimaProblemKind::Other, vec![]),
+        };
+        LimaProblem { kind, message: self.to_string(), searched, os: std::env::consts::OS }
+    }
+}
+
+/// How long `limactl list` may take: it reads every instance's files, so a hang (a stuck lock, a
+/// dead network home) would otherwise freeze the app's view of every VM without a word.
+const LIST_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// The fields of `limactl list --format '{{json .}}'` we read (Lima's `limatype.Instance`).
 #[derive(Debug, Clone, Deserialize)]
@@ -179,10 +223,21 @@ pub fn limactl() -> Result<PathBuf, LimaError> {
         dirs.push(PathBuf::from(extra));
     }
     dirs.push(home().join(".local/bin"));
-    dirs.into_iter()
-        .map(|d| d.join("limactl"))
-        .find(|p| p.is_file())
-        .ok_or(LimaError::NotFound)
+    find_limactl(dirs)
+}
+
+/// The first `limactl` in `dirs`; else the dirs searched, once each, to say where it wasn't.
+fn find_limactl(dirs: Vec<PathBuf>) -> Result<PathBuf, LimaError> {
+    if let Some(found) = dirs.iter().map(|d| d.join("limactl")).find(|p| p.is_file()) {
+        return Ok(found);
+    }
+    let mut searched: Vec<PathBuf> = Vec::new();
+    for d in dirs {
+        if !searched.contains(&d) {
+            searched.push(d);
+        }
+    }
+    Err(LimaError::NotFound(searched))
 }
 
 fn command(args: &[&str]) -> Result<Command, LimaError> {
@@ -206,7 +261,22 @@ fn command(args: &[&str]) -> Result<Command, LimaError> {
 }
 
 async fn run(args: &[&str]) -> Result<String, LimaError> {
-    let out = command(args)?.output().await?;
+    output_within(command(args)?, args, None).await
+}
+
+/// Run `cmd` (`limactl <args>`), giving up after `limit` if there is one: the child is killed
+/// with the future (`kill_on_drop`).
+async fn output_within(
+    mut cmd: Command,
+    args: &[&str],
+    limit: Option<Duration>,
+) -> Result<String, LimaError> {
+    let out = match limit {
+        None => cmd.output().await?,
+        Some(limit) => tokio::time::timeout(limit, cmd.output())
+            .await
+            .map_err(|_| LimaError::TimedOut(args.join(" "), limit.as_secs()))??,
+    };
     if !out.status.success() {
         let err = String::from_utf8_lossy(&out.stderr);
         let last = err
@@ -222,7 +292,8 @@ async fn run(args: &[&str]) -> Result<String, LimaError> {
 
 /// `limactl list --format '{{json .}}'`'s stdout, as `list` reads it (the snapshot recorder keeps it).
 pub async fn list_raw() -> Result<String, LimaError> {
-    run(&["list", "--format", "{{json .}}"]).await
+    let args = ["list", "--format", "{{json .}}"];
+    output_within(command(&args)?, &args, Some(LIST_TIMEOUT)).await
 }
 
 pub async fn list() -> Result<Vec<Instance>, LimaError> {
@@ -357,6 +428,43 @@ mod tests {
     use super::*;
 
     const ROW: &str = r#"{"name":"acme","hostname":"lima-acme","status":"Running","dir":"/Users/me/.lima/acme","vmType":"vz","arch":"aarch64","cpus":4,"memory":8589934592,"disk":107374182400,"network":[],"sshLocalPort":60022,"sshConfigFile":"/Users/me/.lima/acme/ssh.config","hostAgentPID":4242,"driverPID":4242,"config":{"portForwards":[{"guestSocket":"/run/user/501/podman/podman.sock","hostSocket":"{{.Dir}}/sock/podman.sock"}]},"sshAddress":"127.0.0.1","protected":false,"limaVersion":"2.1.3","param":{"x":"y"}}"#;
+
+    #[test]
+    fn limactl_is_found_in_the_first_dir_that_has_it() {
+        let (a, b) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        std::fs::write(b.path().join("limactl"), "").unwrap();
+        let found = find_limactl(vec![a.path().into(), b.path().into()]).unwrap();
+        assert_eq!(found, b.path().join("limactl"));
+    }
+
+    #[test]
+    fn not_finding_limactl_says_where_it_looked_once_each() {
+        let a = tempfile::tempdir().unwrap();
+        let err = find_limactl(vec![a.path().into(), a.path().into(), "/nowhere".into()]).unwrap_err();
+        let p = err.problem();
+        assert_eq!(p.kind, LimaProblemKind::NotInstalled);
+        assert_eq!(p.searched, [a.path().display().to_string(), "/nowhere".into()]);
+        assert_eq!(p.os, std::env::consts::OS);
+    }
+
+    #[test]
+    fn each_error_is_a_kind_of_problem_with_its_message() {
+        let failed = LimaError::Failed("list".into(), "permission denied".into()).problem();
+        assert_eq!((failed.kind, failed.message.as_str()), (LimaProblemKind::Failed, "`limactl list` failed: permission denied"));
+        assert!(failed.searched.is_empty());
+        let slow = LimaError::TimedOut("list".into(), 30).problem();
+        assert_eq!((slow.kind, slow.message.as_str()), (LimaProblemKind::NotAnswering, "`limactl list` didn't answer within 30 s"));
+    }
+
+    #[tokio::test]
+    async fn a_command_that_doesnt_answer_in_time_is_stopped_and_named() {
+        let mut slow = Command::new("sleep");
+        slow.arg("5").kill_on_drop(true);
+        let started = std::time::Instant::now();
+        let err = output_within(slow, &["list"], Some(Duration::from_millis(100))).await.unwrap_err();
+        assert!(matches!(err, LimaError::TimedOut(ref a, _) if a == "list"), "{err}");
+        assert!(started.elapsed() < Duration::from_secs(2));
+    }
 
     #[test]
     fn parses_rows_and_skips_junk() {

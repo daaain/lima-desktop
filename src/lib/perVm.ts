@@ -19,6 +19,13 @@ export function podmanScope(s: Snapshot | null): VmScope {
   return scope;
 }
 
+/** Running VMs whose podman the collector can't use (refused as too old, or failing), with why. */
+export function podmanFailures(s: Snapshot | null): VmError[] {
+  return (s?.vms ?? [])
+    .filter((v) => v.instance.status === 'Running' && v.podmanError)
+    .map((v) => ({ vm: v.instance.name, error: v.podmanError! }));
+}
+
 /** Sentences about the VMs a view leaves out, so nothing goes missing silently. */
 export function unlistedText(scope: VmScope, what: string): string[] {
   const lines: string[] = [];
