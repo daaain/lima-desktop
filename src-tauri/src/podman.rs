@@ -28,6 +28,8 @@ pub enum PodmanError {
     Status(StatusCode, String),
     #[error("unexpected podman response: {0}")]
     Decode(#[from] serde_json::Error),
+    #[error("it's in use by a container, so podman won't remove it ({0})")]
+    InUse(String),
 }
 
 #[derive(Clone, Debug)]
@@ -42,6 +44,8 @@ pub struct Container {
     pub id: String,
     pub name: String,
     pub image: String,
+    /// The image the container runs, by id: tags move, this doesn't.
+    pub image_id: String,
     pub state: String,
     pub status: String,
     pub created: i64,
@@ -59,6 +63,8 @@ struct RawContainer {
     names: Vec<String>,
     #[serde(default)]
     image: String,
+    #[serde(rename = "ImageID", default)]
+    image_id: String,
     #[serde(default)]
     state: String,
     #[serde(default)]
@@ -100,11 +106,159 @@ impl From<RawContainer> for Container {
             pod_name: Some(r.pod_name).filter(|p| !p.is_empty()),
             id: r.id,
             image: r.image,
+            image_id: r.image_id,
             state: r.state,
             status: r.status,
             created,
             labels,
         }
+    }
+}
+
+/// An image as libpod lists it: one row per image id, with all its tags.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Image {
+    pub id: String,
+    /// `repository:tag` references; empty for a dangling image.
+    pub tags: Vec<String>,
+    /// Unix seconds.
+    pub created: i64,
+    pub size: u64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct RawImage {
+    id: String,
+    #[serde(default)]
+    repo_tags: Option<Vec<String>>,
+    #[serde(default)]
+    created: Option<i64>,
+    #[serde(default)]
+    size: Option<u64>,
+    #[serde(default)]
+    parent_id: String,
+    /// How many containers use it (any state).
+    #[serde(default)]
+    containers: Option<u64>,
+}
+
+/// The images worth a row, from `images/json?all=true`: what `podman images` shows (no
+/// intermediate build steps, i.e. untagged parents of other images), plus any image a container
+/// uses — a container can run an image that lost its tag to a newer pull and is also the base of
+/// a local build; `podman images` hides it, and with it what the container keeps on disk.
+fn listed(raw: Vec<RawImage>) -> Vec<Image> {
+    let parents: std::collections::HashSet<String> =
+        raw.iter().map(|r| r.parent_id.clone()).collect();
+    raw.into_iter()
+        .filter(|r| {
+            let tagged = r
+                .repo_tags
+                .as_ref()
+                .is_some_and(|t| t.iter().any(|t| t != "<none>:<none>"));
+            tagged || r.containers.unwrap_or(0) > 0 || !parents.contains(&r.id)
+        })
+        .map(Image::from)
+        .collect()
+}
+
+impl From<RawImage> for Image {
+    fn from(r: RawImage) -> Self {
+        Image {
+            id: r.id,
+            // The Docker-compatible API spells "no tag" `<none>:<none>`; libpod sends null.
+            tags: r
+                .repo_tags
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|t| t != "<none>:<none>")
+                .collect(),
+            created: r.created.unwrap_or(0),
+            size: r.size.unwrap_or(0),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Volume {
+    pub name: String,
+    pub driver: String,
+    /// A path inside the guest.
+    pub mountpoint: String,
+    /// RFC 3339, as podman gives it.
+    pub created_at: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct RawVolume {
+    name: String,
+    #[serde(default)]
+    driver: String,
+    #[serde(default)]
+    mountpoint: String,
+    #[serde(default)]
+    created_at: String,
+}
+
+impl From<RawVolume> for Volume {
+    fn from(r: RawVolume) -> Self {
+        Volume {
+            name: r.name,
+            driver: r.driver,
+            mountpoint: r.mountpoint,
+            created_at: r.created_at,
+        }
+    }
+}
+
+/// One entry of libpod's prune answer (images and volumes alike).
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct RawPruneReport {
+    #[serde(default)]
+    id: String,
+    #[serde(default)]
+    err: Option<String>,
+    #[serde(default)]
+    size: Option<u64>,
+}
+
+/// What a prune did.
+#[derive(Debug, Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Pruned {
+    pub removed: usize,
+    /// Bytes freed.
+    pub reclaimed: u64,
+    pub errors: Vec<String>,
+}
+
+impl From<Vec<RawPruneReport>> for Pruned {
+    fn from(rows: Vec<RawPruneReport>) -> Self {
+        let mut p = Pruned::default();
+        for r in rows {
+            match r.err.filter(|e| !e.is_empty()) {
+                Some(e) => p.errors.push(format!("{}: {e}", r.id)),
+                None => {
+                    p.removed += 1;
+                    p.reclaimed += r.size.unwrap_or(0);
+                }
+            }
+        }
+        p
+    }
+}
+
+/// A removal's outcome, worded for a person: a conflict means a container still uses it, and
+/// something already gone is as good as removed.
+fn removal(result: Result<Bytes, PodmanError>) -> Result<(), PodmanError> {
+    match result {
+        Err(PodmanError::Status(StatusCode::CONFLICT, msg)) => Err(PodmanError::InUse(msg)),
+        Err(PodmanError::Status(StatusCode::NOT_FOUND, _)) => Ok(()),
+        other => other.map(drop),
     }
 }
 
@@ -284,6 +438,49 @@ impl Libpod {
         Ok(demux_logs(&self.request(Method::GET, &path).await?))
     }
 
+    pub async fn images(&self) -> Result<Vec<Image>, PodmanError> {
+        let raw: Option<Vec<RawImage>> = self.get_json("/images/json?all=true").await?;
+        Ok(listed(raw.unwrap_or_default()))
+    }
+
+    /// Remove by `repository:tag` (untags; the image goes with its last tag) or by id (a dangling
+    /// image). Never forced: an image a container uses stays.
+    pub async fn remove_image(&self, reference: &str) -> Result<(), PodmanError> {
+        let path = format!("/images/{}", encode_component(reference));
+        removal(self.request(Method::DELETE, &path).await)
+    }
+
+    /// `all = false`: dangling images only; `true`: every image no container uses.
+    pub async fn prune_images(&self, all: bool) -> Result<Pruned, PodmanError> {
+        self.prune(&format!("/images/prune?all={all}")).await
+    }
+
+    pub async fn volumes(&self) -> Result<Vec<Volume>, PodmanError> {
+        let raw: Option<Vec<RawVolume>> = self.get_json("/volumes/json").await?;
+        Ok(raw
+            .unwrap_or_default()
+            .into_iter()
+            .map(Volume::from)
+            .collect())
+    }
+
+    /// Never forced: a volume a container uses stays.
+    pub async fn remove_volume(&self, name: &str) -> Result<(), PodmanError> {
+        let path = format!("/volumes/{}", encode_component(name));
+        removal(self.request(Method::DELETE, &path).await)
+    }
+
+    /// Every volume no container uses.
+    pub async fn prune_volumes(&self) -> Result<Pruned, PodmanError> {
+        self.prune("/volumes/prune").await
+    }
+
+    async fn prune(&self, path: &str) -> Result<Pruned, PodmanError> {
+        let body = self.request(Method::POST, path).await?;
+        let rows: Option<Vec<RawPruneReport>> = serde_json::from_slice(&body)?;
+        Ok(rows.unwrap_or_default().into())
+    }
+
     /// `podman system df`: images, containers and volumes with their sizes.
     pub async fn system_df(&self) -> Result<serde_json::Value, PodmanError> {
         self.get_json("/system/df").await
@@ -308,6 +505,126 @@ mod tests {
         assert_eq!(c.compose_service.as_deref(), Some("web"));
         assert_eq!(c.pod_name, None);
         assert_eq!(c.created, 1730000000);
+    }
+
+    #[test]
+    fn container_from_list_row_keeps_its_image_id() {
+        let row = serde_json::json!({"Id": "x", "ImageID": "56ec3db60e93abc"});
+        let c: Container = serde_json::from_value::<RawContainer>(row).unwrap().into();
+        assert_eq!(c.image_id, "56ec3db60e93abc");
+    }
+
+    #[test]
+    fn image_from_list_row_keeps_every_tag() {
+        let row = serde_json::json!({
+            "Id": "98d186b0759c", "ParentId": "",
+            "RepoTags": ["localhost/shop_web:latest", "localhost/shop_worker:latest"],
+            "Created": 1787529600, "Size": 286402757, "Containers": 2, "Labels": null
+        });
+        let i: Image = serde_json::from_value::<RawImage>(row).unwrap().into();
+        assert_eq!(i.id, "98d186b0759c");
+        assert_eq!(
+            i.tags,
+            ["localhost/shop_web:latest", "localhost/shop_worker:latest"]
+        );
+        assert_eq!(i.created, 1787529600);
+        assert_eq!(i.size, 286402757);
+    }
+
+    #[test]
+    fn a_dangling_image_has_no_tags() {
+        // libpod sends `null` for a dangling image; the Docker-compatible API `<none>:<none>`.
+        for tags in [
+            serde_json::Value::Null,
+            serde_json::json!(["<none>:<none>"]),
+        ] {
+            let row = serde_json::json!({"Id": "7c7a710f0394", "RepoTags": tags, "Dangling": true});
+            let i: Image = serde_json::from_value::<RawImage>(row).unwrap().into();
+            assert!(i.tags.is_empty(), "{:?}", i.tags);
+        }
+    }
+
+    #[test]
+    fn intermediate_images_are_hidden_unless_a_container_runs_one() {
+        // From `images/json?all=true`: build steps are untagged parents of other images.
+        let rows = serde_json::json!([
+            {"Id": "base", "RepoTags": ["docker.io/library/debian:trixie-slim"], "ParentId": ""},
+            {"Id": "step", "RepoTags": null, "ParentId": "base", "Containers": 0},
+            {"Id": "built", "RepoTags": ["localhost/app:latest"], "ParentId": "step"},
+            {"Id": "old-build", "RepoTags": null, "ParentId": "step", "Dangling": true},
+            {"Id": "retagged-away", "RepoTags": null, "ParentId": "", "Containers": 1},
+            {"Id": "step-in-use", "RepoTags": null, "ParentId": "", "Containers": 1},
+            {"Id": "child", "RepoTags": ["localhost/x:1"], "ParentId": "step-in-use"}
+        ]);
+        let ids: Vec<String> = listed(serde_json::from_value(rows).unwrap())
+            .into_iter()
+            .map(|i| i.id)
+            .collect();
+        assert_eq!(
+            ids,
+            [
+                "base",
+                "built",
+                "old-build",
+                "retagged-away",
+                "step-in-use",
+                "child"
+            ]
+        );
+    }
+
+    #[test]
+    fn an_image_row_with_null_numbers_reads_as_zero() {
+        let row = serde_json::json!({"Id": "x", "Created": null, "Size": null});
+        let i: Image = serde_json::from_value::<RawImage>(row).unwrap().into();
+        assert_eq!((i.created, i.size), (0, 0));
+    }
+
+    #[test]
+    fn volume_from_list_row() {
+        let row = serde_json::json!({
+            "Name": "shop_db", "Driver": "local",
+            "Mountpoint": "/home/me.guest/.local/share/containers/storage/volumes/shop_db/_data",
+            "CreatedAt": "2026-11-09T15:52:27.624173599Z", "Labels": null, "Scope": "local",
+            "Options": {}, "MountCount": 0
+        });
+        let v: Volume = serde_json::from_value::<RawVolume>(row).unwrap().into();
+        assert_eq!(v.name, "shop_db");
+        assert_eq!(v.driver, "local");
+        assert!(v.mountpoint.ends_with("/shop_db/_data"));
+        assert_eq!(v.created_at, "2026-11-09T15:52:27.624173599Z");
+    }
+
+    #[test]
+    fn a_prune_report_totals_what_went_and_keeps_what_failed() {
+        let rows = serde_json::json!([
+            {"Id": "a", "Size": 1000},
+            {"Id": "b", "Size": 24, "Err": null},
+            {"Id": "c", "Err": "image is in use by a container"}
+        ]);
+        let p = Pruned::from(serde_json::from_value::<Vec<RawPruneReport>>(rows).unwrap());
+        assert_eq!(p.removed, 2);
+        assert_eq!(p.reclaimed, 1024);
+        assert_eq!(p.errors, ["c: image is in use by a container"]);
+        let empty = Pruned::from(
+            serde_json::from_value::<Option<Vec<RawPruneReport>>>(serde_json::Value::Null)
+                .unwrap()
+                .unwrap_or_default(),
+        );
+        assert_eq!(empty.removed, 0);
+    }
+
+    #[test]
+    fn removing_something_in_use_says_so_and_something_gone_is_done() {
+        let conflict = PodmanError::Status(StatusCode::CONFLICT, "image used by abc".into());
+        let e = removal(Err(conflict)).unwrap_err();
+        assert!(matches!(e, PodmanError::InUse(_)), "{e:?}");
+        assert!(e.to_string().contains("in use"), "{e}");
+        assert!(e.to_string().contains("image used by abc"), "{e}");
+        let gone = PodmanError::Status(StatusCode::NOT_FOUND, "no such image".into());
+        assert!(removal(Err(gone)).is_ok());
+        let other = PodmanError::Status(StatusCode::INTERNAL_SERVER_ERROR, "boom".into());
+        assert!(matches!(removal(Err(other)), Err(PodmanError::Status(..))));
     }
 
     #[test]
@@ -344,7 +661,11 @@ mod tests {
             .unwrap();
         let link = connectable(&sock).unwrap();
         assert!(link.as_os_str().len() <= MAX_SOCKET_PATH);
-        assert_eq!(connectable(&link).unwrap(), link, "short paths are used as they are");
+        assert_eq!(
+            connectable(&link).unwrap(),
+            link,
+            "short paths are used as they are"
+        );
     }
 
     #[test]

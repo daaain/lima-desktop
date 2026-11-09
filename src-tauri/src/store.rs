@@ -14,6 +14,8 @@ use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
+use crate::oom::{OomEvent, Source};
+
 /// A value the sample didn't have (PSI on a kernel without it, a counter's first reading).
 pub const ABSENT: i64 = -1;
 const CODEC_VERSION: u64 = 1;
@@ -197,6 +199,22 @@ fn rollup_minute(rows: &[(i64, Vec<i64>)], ncols: usize) -> Vec<i64> {
 
 // ---- the store ------------------------------------------------------------------------------
 
+/// Schema evolution for a database an older build created.
+fn add_column(db: &Connection, table: &str, column: &str, decl: &str) -> rusqlite::Result<()> {
+    let exists = db
+        .prepare(&format!(
+            "SELECT 1 FROM pragma_table_info('{table}') WHERE name=?1"
+        ))?
+        .exists([column])?;
+    if !exists {
+        db.execute(
+            &format!("ALTER TABLE {table} ADD COLUMN {column} {decl}"),
+            [],
+        )?;
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Entity {
@@ -240,6 +258,18 @@ pub struct Band {
     pub avg: Vec<Option<i64>>,
 }
 
+/// An OOM kill as the UI shows it: the event, and its container's name and compose labels from
+/// the entity table — still there after the container itself is gone.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OomRecord {
+    #[serde(flatten)]
+    pub event: OomEvent,
+    pub container_name: Option<String>,
+    pub compose_project: Option<String>,
+    pub compose_service: Option<String>,
+}
+
 /// Right-sizing summary of one metric over a window.
 #[derive(Debug, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -274,8 +304,18 @@ impl Store {
                PRIMARY KEY(entity, t0)) WITHOUT ROWID;
              CREATE TABLE IF NOT EXISTS rollup(
                entity INTEGER NOT NULL, t0 INTEGER NOT NULL, blob BLOB NOT NULL,
-               PRIMARY KEY(entity, t0)) WITHOUT ROWID;",
+               PRIMARY KEY(entity, t0)) WITHOUT ROWID;
+             -- One row per OOM kill; `key` (see oom.rs) makes a re-read of the journal a no-op.
+             CREATE TABLE IF NOT EXISTS oom_event(
+               vm TEXT NOT NULL, key TEXT NOT NULL, ts INTEGER NOT NULL, source TEXT NOT NULL,
+               oom_constraint TEXT, container_id TEXT, cgroup TEXT, process TEXT, pid INTEGER,
+               mem_limit INTEGER, anon_rss INTEGER, detail TEXT,
+               PRIMARY KEY(vm, key)) WITHOUT ROWID;
+             CREATE INDEX IF NOT EXISTS oom_event_by_time ON oom_event(vm, ts);",
         )?;
+        // Compose labels, so a removed container still reads as its project's service.
+        add_column(&db, "entity", "project", "TEXT")?;
+        add_column(&db, "entity", "service", "TEXT")?;
         let mut kinds = HashMap::new();
         {
             let mut st = db.prepare("SELECT id, kind FROM entity")?;
@@ -467,8 +507,8 @@ impl Store {
         Ok(())
     }
 
-    /// Drop raw chunks older than `raw_ms` and rollups older than `rollup_ms`, then entities with
-    /// nothing left. Returns rows deleted.
+    /// Drop raw chunks older than `raw_ms`, rollups and OOM kills older than `rollup_ms`, then
+    /// entities with nothing left. Returns rows deleted.
     pub fn retain(&mut self, now: i64, raw_ms: i64, rollup_ms: i64) -> rusqlite::Result<usize> {
         let mut n = self
             .db
@@ -476,6 +516,10 @@ impl Store {
         n += self
             .db
             .execute("DELETE FROM rollup WHERE t0 < ?1", params![now - rollup_ms])?;
+        n += self.db.execute(
+            "DELETE FROM oom_event WHERE ts < ?1",
+            params![now - rollup_ms],
+        )?;
         n += self.db.execute(
             "DELETE FROM entity WHERE last_seen < ?1
                AND id NOT IN (SELECT entity FROM raw) AND id NOT IN (SELECT entity FROM rollup)",
@@ -562,8 +606,14 @@ impl Store {
         let mut bands: Vec<Band> = (0..ncols).map(|_| Band::default()).collect();
         // Empty buckets stay in as nulls (from the first sample on), so a chart breaks its line
         // over a gap (the app or the VM was down) instead of drawing through it.
-        let first = buckets.iter().position(Option::is_some).unwrap_or(buckets.len());
-        let last = buckets.iter().rposition(Option::is_some).map_or(0, |i| i + 1);
+        let first = buckets
+            .iter()
+            .position(Option::is_some)
+            .unwrap_or(buckets.len());
+        let last = buckets
+            .iter()
+            .rposition(Option::is_some)
+            .map_or(0, |i| i + 1);
         for (i, b) in buckets.iter().enumerate().take(last).skip(first) {
             series.ts.push(from + i as i64 * width);
             let Some((lo, hi, sum, n)) = b else {
@@ -653,6 +703,92 @@ impl Store {
             }
         }
         Ok(out)
+    }
+
+    /// Keep a container entity's compose project and service.
+    pub fn label_entity(
+        &mut self,
+        id: i64,
+        project: Option<&str>,
+        service: Option<&str>,
+    ) -> rusqlite::Result<()> {
+        self.db.execute(
+            "UPDATE entity SET project=?2, service=?3
+             WHERE id=?1 AND (project IS NOT ?2 OR service IS NOT ?3)",
+            params![id, project, service],
+        )?;
+        Ok(())
+    }
+
+    /// Record OOM kills, skipping any already recorded. Returns how many were new.
+    pub fn add_oom_events(&mut self, events: &[OomEvent]) -> rusqlite::Result<usize> {
+        let tx = self.db.transaction()?;
+        let mut added = 0;
+        {
+            let mut st = tx.prepare_cached(
+                "INSERT OR IGNORE INTO oom_event(vm, key, ts, source, oom_constraint, container_id,
+                   cgroup, process, pid, mem_limit, anon_rss, detail)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
+            )?;
+            for e in events {
+                added += st.execute(params![
+                    e.vm,
+                    e.key,
+                    e.ts,
+                    e.source.as_str(),
+                    e.constraint,
+                    e.container_id,
+                    e.cgroup,
+                    e.process,
+                    e.pid,
+                    e.mem_limit,
+                    e.anon_rss,
+                    e.detail
+                ])?;
+            }
+        }
+        tx.commit()?;
+        Ok(added)
+    }
+
+    /// OOM kills in [from, to], newest first, at most `limit`; every VM's when `vm` is `None`.
+    pub fn oom_events(
+        &self,
+        vm: Option<&str>,
+        from: i64,
+        to: i64,
+        limit: usize,
+    ) -> rusqlite::Result<Vec<OomRecord>> {
+        let mut st = self.db.prepare_cached(
+            "SELECT o.vm, o.key, o.ts, o.source, o.oom_constraint, o.container_id, o.cgroup,
+                    o.process, o.pid, o.mem_limit, o.anon_rss, o.detail, e.name, e.project, e.service
+             FROM oom_event o
+             LEFT JOIN entity e ON e.kind='container' AND e.vm=o.vm AND e.key=o.container_id
+             WHERE (?1 IS NULL OR o.vm=?1) AND o.ts BETWEEN ?2 AND ?3
+             ORDER BY o.ts DESC LIMIT ?4",
+        )?;
+        let rows = st.query_map(params![vm, from, to, limit as i64], |r| {
+            Ok(OomRecord {
+                event: OomEvent {
+                    vm: r.get(0)?,
+                    key: r.get(1)?,
+                    ts: r.get(2)?,
+                    source: Source::parse(&r.get::<_, String>(3)?),
+                    constraint: r.get(4)?,
+                    container_id: r.get(5)?,
+                    cgroup: r.get(6)?,
+                    process: r.get(7)?,
+                    pid: r.get(8)?,
+                    mem_limit: r.get(9)?,
+                    anon_rss: r.get(10)?,
+                    detail: r.get(11)?,
+                },
+                container_name: r.get(12)?,
+                compose_project: r.get(13)?,
+                compose_service: r.get(14)?,
+            })
+        })?;
+        rows.collect()
     }
 
     pub fn file_size(&self) -> rusqlite::Result<i64> {
@@ -778,6 +914,120 @@ mod tests {
         s.flush(2000).unwrap();
         s.retain(100 * HOUR, HOUR, 2 * HOUR).unwrap();
         assert!(s.entities(None).unwrap().is_empty());
+    }
+
+    fn kill(vm: &str, ts: i64, pid: i64, container: Option<&str>) -> OomEvent {
+        let mut e = crate::oom::counter_event(vm, ts, 0, container.map(String::from), None, "");
+        e.source = crate::oom::Source::Kernel;
+        e.detail = None;
+        e.key = format!("boot:{pid}:{ts}");
+        e.pid = Some(pid);
+        e.process = Some("python3".into());
+        e.constraint = Some(crate::oom::CONSTRAINT_MEMCG.into());
+        e.mem_limit = Some(1 << 30);
+        e
+    }
+
+    #[test]
+    fn reading_the_same_kernel_record_twice_keeps_one_event() {
+        let mut s = Store::in_memory().unwrap();
+        let events = [
+            kill("cabash", 1_000, 1234, None),
+            kill("cabash", 2_000, 1300, None),
+        ];
+        assert_eq!(s.add_oom_events(&events).unwrap(), 2);
+        assert_eq!(
+            s.add_oom_events(&events).unwrap(),
+            0,
+            "a re-read adds nothing"
+        );
+        assert_eq!(
+            s.add_oom_events(&[kill("other", 1_000, 1234, None)])
+                .unwrap(),
+            1,
+            "another VM's"
+        );
+        assert_eq!(
+            s.oom_events(Some("cabash"), 0, 10_000, 100).unwrap().len(),
+            2
+        );
+        assert_eq!(s.oom_events(None, 0, 10_000, 100).unwrap().len(), 3);
+    }
+
+    #[test]
+    fn a_removed_container_keeps_its_name_and_compose_labels() {
+        let mut s = Store::in_memory().unwrap();
+        let ct = "a".repeat(64);
+        let id = s
+            .entity(
+                Kind::Container,
+                "cabash",
+                &ct,
+                "inspect-replay-7-default-1",
+                0,
+            )
+            .unwrap();
+        s.label_entity(id, Some("inspect-replay-7"), Some("default"))
+            .unwrap();
+        s.add_oom_events(&[
+            kill("cabash", 1_000, 1234, Some(&ct)),
+            kill("cabash", 2_000, 99, None),
+        ])
+        .unwrap();
+        let got = s.oom_events(Some("cabash"), 0, 10_000, 100).unwrap();
+        assert_eq!(
+            got[1].container_name.as_deref(),
+            Some("inspect-replay-7-default-1")
+        );
+        assert_eq!(got[1].compose_project.as_deref(), Some("inspect-replay-7"));
+        assert_eq!(got[1].compose_service.as_deref(), Some("default"));
+        assert_eq!(got[1].event.mem_limit, Some(1 << 30));
+        assert_eq!(got[0].container_name, None, "not in a container");
+    }
+
+    #[test]
+    fn an_older_database_gains_the_compose_columns() {
+        let db = Connection::open_in_memory().unwrap();
+        db.execute_batch(
+            "CREATE TABLE entity(
+               id INTEGER PRIMARY KEY, kind TEXT NOT NULL, vm TEXT NOT NULL, key TEXT NOT NULL,
+               name TEXT NOT NULL, first_seen INTEGER NOT NULL, last_seen INTEGER NOT NULL,
+               UNIQUE(kind, vm, key));
+             INSERT INTO entity VALUES (1, 'container', 'v', 'c1', 'web', 0, 0);",
+        )
+        .unwrap();
+        let mut s = Store::init(db).unwrap();
+        s.label_entity(1, Some("shop"), Some("web")).unwrap();
+        s.add_oom_events(&[kill("v", 1, 1, Some("c1"))]).unwrap();
+        let got = s.oom_events(None, 0, 10, 10).unwrap();
+        assert_eq!(got[0].compose_project.as_deref(), Some("shop"));
+    }
+
+    #[test]
+    fn oom_events_come_newest_first_within_the_range() {
+        let mut s = Store::in_memory().unwrap();
+        let events: Vec<OomEvent> = (1..=5).map(|i| kill("v", i * 1000, i, None)).collect();
+        s.add_oom_events(&events).unwrap();
+        let ts: Vec<i64> = s
+            .oom_events(Some("v"), 2000, 4000, 100)
+            .unwrap()
+            .iter()
+            .map(|r| r.event.ts)
+            .collect();
+        assert_eq!(ts, [4000, 3000, 2000]);
+        let latest = s.oom_events(Some("v"), 0, i64::MAX, 1).unwrap();
+        assert_eq!(latest[0].event.ts, 5000);
+    }
+
+    #[test]
+    fn oom_events_age_out_with_the_rollups() {
+        let mut s = Store::in_memory().unwrap();
+        s.add_oom_events(&[kill("v", 1_000, 1, None), kill("v", 50 * HOUR, 2, None)])
+            .unwrap();
+        s.retain(100 * HOUR, HOUR, 60 * HOUR).unwrap();
+        let left = s.oom_events(None, 0, i64::MAX, 100).unwrap();
+        assert_eq!(left.len(), 1);
+        assert_eq!(left[0].event.pid, Some(2));
     }
 
     #[test]

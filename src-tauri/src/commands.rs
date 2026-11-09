@@ -6,8 +6,8 @@ use tauri::State;
 
 use crate::collector::{Collector, Snapshot, now_ms};
 use crate::lima::{self, Action, Resize};
-use crate::podman::{ContainerAction, Libpod};
-use crate::store::{Entity, Series, Summary};
+use crate::podman::{ContainerAction, Image, Libpod, Pruned, Volume};
+use crate::store::{Entity, OomRecord, Series, Summary};
 
 type C<'a> = State<'a, Arc<Collector>>;
 
@@ -77,6 +77,38 @@ pub async fn container_inspect(
 }
 
 #[tauri::command]
+pub async fn images(c: C<'_>, vm: String) -> Result<Vec<Image>, String> {
+    libpod(&c, &vm)?.images().await.map_err(err)
+}
+
+/// `reference`: a `repository:tag`, or an id for a dangling image.
+#[tauri::command]
+pub async fn image_remove(c: C<'_>, vm: String, reference: String) -> Result<(), String> {
+    libpod(&c, &vm)?.remove_image(&reference).await.map_err(err)
+}
+
+/// `all = false`: dangling images only; `true`: every image no container uses.
+#[tauri::command]
+pub async fn images_prune(c: C<'_>, vm: String, all: bool) -> Result<Pruned, String> {
+    libpod(&c, &vm)?.prune_images(all).await.map_err(err)
+}
+
+#[tauri::command]
+pub async fn volumes(c: C<'_>, vm: String) -> Result<Vec<Volume>, String> {
+    libpod(&c, &vm)?.volumes().await.map_err(err)
+}
+
+#[tauri::command]
+pub async fn volume_remove(c: C<'_>, vm: String, name: String) -> Result<(), String> {
+    libpod(&c, &vm)?.remove_volume(&name).await.map_err(err)
+}
+
+#[tauri::command]
+pub async fn volumes_prune(c: C<'_>, vm: String) -> Result<Pruned, String> {
+    libpod(&c, &vm)?.prune_volumes().await.map_err(err)
+}
+
+#[tauri::command]
 pub async fn system_df(c: C<'_>, vm: String) -> Result<serde_json::Value, String> {
     libpod(&c, &vm)?.system_df().await.map_err(err)
 }
@@ -109,4 +141,19 @@ pub fn summary(
 #[tauri::command]
 pub fn entities(c: C<'_>, vm: Option<String>) -> Result<Vec<Entity>, String> {
     c.store().entities(vm.as_deref()).map_err(err)
+}
+
+/// OOM kills in [from, to], newest first (at most `limit`, default 500); every VM's when `vm` is
+/// absent. Containers are named from the history, so removed ones keep their names.
+#[tauri::command]
+pub fn oom_events(
+    c: C<'_>,
+    vm: Option<String>,
+    from: i64,
+    to: i64,
+    limit: Option<usize>,
+) -> Result<Vec<OomRecord>, String> {
+    c.store()
+        .oom_events(vm.as_deref(), from, to, limit.unwrap_or(500).clamp(1, 5000))
+        .map_err(err)
 }

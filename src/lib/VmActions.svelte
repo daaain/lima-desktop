@@ -1,9 +1,18 @@
 <script lang="ts">
   import { api, locked, type Instance, type VmAction } from './api';
   import { live } from './live.svelte';
-  let { inst }: { inst: Instance } = $props();
+  let {
+    inst,
+    error = $bindable(),
+    inlineError = true,
+  }: {
+    inst: Instance;
+    /** The last action's failure; bind it to show it somewhere of your own. */
+    error?: string | null;
+    /** Render the failure under the buttons (off when the parent shows `error` itself). */
+    inlineError?: boolean;
+  } = $props();
   let busy = $state<VmAction | null>(null);
-  let error = $state<string | null>(null);
 
   const running = $derived(inst.status === 'Running');
   const stopped = $derived(inst.status === 'Stopped');
@@ -45,7 +54,7 @@
     {busy === 'delete' ? 'Deleting…' : 'Delete'}
   </button>
 </div>
-{#if error}<p class="error">{error}</p>{/if}
+{#if error && inlineError}<p class="error">{error}</p>{/if}
 
 <style>
   .actions { display: flex; gap: 0.4rem; flex-wrap: wrap; }

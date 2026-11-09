@@ -130,30 +130,36 @@ pub fn vm_row(prev: Option<&Block>, cur: &Block, ncpus: u32) -> Vec<i64> {
     ]
 }
 
+/// `ssh` into the instance with Lima's own config, running `/bin/sh -s`: the script to run goes on
+/// stdin, so nothing is installed in the guest.
+pub fn ssh(ssh_config: &str, instance: &str) -> Command {
+    let mut cmd = Command::new("ssh");
+    cmd.args([
+        "-F",
+        ssh_config,
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        "ConnectTimeout=10",
+        "-o",
+        "ServerAliveInterval=5",
+        "-o",
+        "ServerAliveCountMax=3",
+        "-T",
+        &format!("lima-{instance}"),
+        "/bin/sh",
+        "-s",
+    ])
+    .stdin(Stdio::piped())
+    .stdout(Stdio::piped())
+    .stderr(Stdio::piped())
+    .kill_on_drop(true);
+    cmd
+}
+
 /// `ssh` into the instance with Lima's own config, running the probe.
 pub async fn spawn(ssh_config: &str, instance: &str) -> std::io::Result<Child> {
-    let mut child = Command::new("ssh")
-        .args([
-            "-F",
-            ssh_config,
-            "-o",
-            "BatchMode=yes",
-            "-o",
-            "ConnectTimeout=10",
-            "-o",
-            "ServerAliveInterval=5",
-            "-o",
-            "ServerAliveCountMax=3",
-            "-T",
-            &format!("lima-{instance}"),
-            "/bin/sh",
-            "-s",
-        ])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true)
-        .spawn()?;
+    let mut child = ssh(ssh_config, instance).spawn()?;
     let mut stdin = child.stdin.take().expect("piped stdin");
     stdin.write_all(SCRIPT.as_bytes()).await?;
     drop(stdin);

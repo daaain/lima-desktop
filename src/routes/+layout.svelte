@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import { live } from '$lib/live.svelte';
   import { bytes } from '$lib/format';
+  import Sidebar from '$lib/Sidebar.svelte';
   let { children } = $props();
   onMount(() => live.start());
 </script>
@@ -22,7 +23,10 @@
   {#if live.error}
     <p class="banner alert">Backend: {live.error}</p>
   {/if}
-  <main>{@render children()}</main>
+  <div class="body">
+    <Sidebar />
+    <main>{@render children()}</main>
+  </div>
 </div>
 
 <style>
@@ -64,5 +68,25 @@
   .meta { color: var(--muted); font-size: 0.8rem; }
   .banner { margin: 0; padding: 0.5rem 1.2rem; }
   .banner.alert { background: color-mix(in srgb, var(--alert) 12%, transparent); color: var(--alert); }
-  main { padding: 1.2rem; flex: 1; }
+  .body { display: flex; flex: 1; min-height: 0; }
+  main { padding: 1.2rem; flex: 1; min-width: 0; }
+  @media (max-width: 640px) {
+    .body { flex-direction: column; }
+  }
+
+  /* The list views (containers, images, volumes) share these. */
+  :global(.toolbar) { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; }
+  :global(.toolbar input[type='search']) { min-width: 14rem; }
+  :global(.toolbar input[type='search']), :global(.toolbar select) {
+    font: inherit; font-size: 0.85rem; padding: 0.3rem 0.5rem; border-radius: 6px;
+    border: 1px solid var(--border); background: var(--panel); color: var(--fg);
+  }
+  :global(table.list) { width: 100%; border-collapse: collapse; font-size: 0.83rem; }
+  :global(table.list th) { text-align: left; color: var(--muted); font-weight: 500; padding: 0.3rem 0.5rem; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  :global(table.list td) { padding: 0.35rem 0.5rem; border-bottom: 1px solid var(--border); }
+  :global(table.list .n) { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  :global(table.list .muted) { color: var(--muted); font-size: 0.78rem; }
+  :global(table.list .acts) { white-space: nowrap; text-align: right; }
+  :global(table.list .acts button) { padding: 0.15rem 0.5rem; font-size: 0.75rem; }
+  :global(table.list code) { font-size: 0.78rem; }
 </style>

@@ -3,7 +3,12 @@
   import { bytes, cpuLabel } from './format';
   import Chart from './Chart.svelte';
 
-  let { vm, c, from, to, vmMemory, onclose }: { vm: string; c: ContainerLive; from: number; to: number; vmMemory: number; onclose: () => void } = $props();
+  let { vm, c, from, to, vmMemory, oomMarkers = [], onclose }: {
+    vm: string; c: ContainerLive; from: number; to: number; vmMemory: number;
+    /** This container's OOM kills, marked on its Memory chart. */
+    oomMarkers?: { ts: number; label: string }[];
+    onclose: () => void;
+  } = $props();
   // An unlimited container reports the VM's memory as its limit: only draw a limit that is one.
   const limit = $derived(c.latest.mem_limit != null && c.latest.mem_limit < vmMemory * 0.95 ? c.latest.mem_limit : undefined);
   let tab = $state<'metrics' | 'logs' | 'inspect'>('metrics');
@@ -39,7 +44,7 @@
       <p class="muted">No history for this container yet.</p>
     {:else}
       <div class="charts">
-        <Chart title="Memory" data={series} format={(v) => bytes(v)} ceiling={limit}
+        <Chart title="Memory" data={series} format={(v) => bytes(v)} ceiling={limit} markers={oomMarkers}
           lines={[{ key: 'mem', label: 'used', color: '--series-1' }, { key: 'mem_peak', label: 'peak (cgroup)', color: '--series-2' }]} />
         <Chart title="CPU" data={series} format={cpuLabel}
           lines={[{ key: 'cpu_mc', label: 'cpu', color: '--series-3' }]} />

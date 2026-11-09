@@ -1,7 +1,9 @@
 pub mod collector;
 pub mod commands;
+pub mod journal;
 pub mod lima;
 pub mod marker;
+pub mod oom;
 pub mod podman;
 pub mod probe;
 pub mod store;
@@ -39,10 +41,17 @@ pub fn run() {
             commands::container_action,
             commands::container_logs,
             commands::container_inspect,
+            commands::images,
+            commands::image_remove,
+            commands::images_prune,
+            commands::volumes,
+            commands::volume_remove,
+            commands::volumes_prune,
             commands::system_df,
             commands::series,
             commands::summary,
             commands::entities,
+            commands::oom_events,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

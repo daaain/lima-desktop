@@ -20,6 +20,7 @@
     format,
     ceiling,
     height = 160,
+    markers = [],
   }: {
     title: string;
     data: Series | null;
@@ -28,6 +29,8 @@
     /** A horizontal reference line (e.g. the VM's allocation). */
     ceiling?: number;
     height?: number;
+    /** Moments to mark with a vertical line in --alert (e.g. OOM kills); `ts` in unix ms. */
+    markers?: { ts: number; label: string }[];
   } = $props();
 
   let host: HTMLDivElement;
@@ -44,6 +47,41 @@
     const n = parseInt(m[1], 16);
     return `rgba(${n >> 16}, ${(n >> 8) & 255}, ${n & 255}, ${a})`;
   }
+
+  /** Draws `markers` as dashed vertical lines, each labelled unless it would overlap the last label. */
+  const markerPlugin: uPlot.Plugin = {
+    hooks: {
+      draw: [
+        (u) => {
+          if (!markers.length) return;
+          const { ctx, bbox } = u;
+          const px = uPlot.pxRatio;
+          const color = cssVar('--alert');
+          ctx.save();
+          ctx.strokeStyle = color;
+          ctx.fillStyle = color;
+          ctx.lineWidth = px;
+          ctx.setLineDash([3 * px, 3 * px]);
+          ctx.font = `${10 * px}px system-ui, sans-serif`;
+          let labelEnd = -Infinity;
+          for (const m of [...markers].sort((a, b) => a.ts - b.ts)) {
+            const t = m.ts / 1000;
+            if (t < (u.scales.x.min ?? -Infinity) || t > (u.scales.x.max ?? Infinity)) continue;
+            const x = Math.round(u.valToPos(t, 'x', true));
+            ctx.beginPath();
+            ctx.moveTo(x, bbox.top);
+            ctx.lineTo(x, bbox.top + bbox.height);
+            ctx.stroke();
+            if (x > labelEnd) {
+              ctx.fillText(m.label, x + 3 * px, bbox.top + 10 * px);
+              labelEnd = x + ctx.measureText(m.label).width + 9 * px;
+            }
+          }
+          ctx.restore();
+        },
+      ],
+    },
+  };
 
   function build(d: Series) {
     const xs = d.ts.map((t) => t / 1000);
@@ -79,17 +117,34 @@
       cursor: { drag: { x: false, y: false } },
       scales: { y: { range: (_u, _min, max) => [0, Math.max(max * 1.1, ceiling ?? 0) || 1] } },
       axes: [axis, { ...axis, size: 84, values: (_u, vals) => vals.map((v) => format(v)) }],
+      plugins: [markerPlugin],
     };
     plot?.destroy();
     plot = new uPlot(opts, cols as uPlot.AlignedData, host);
   }
 
+  // uPlot paints a canvas with colours read once from CSS, so it has to be rebuilt when the OS
+  // switches between light and dark; the CSS around it follows on its own.
+  let scheme = $state(0);
   $effect(() => {
+    const query = matchMedia('(prefers-color-scheme: dark)');
+    const repaint = () => scheme++;
+    query.addEventListener('change', repaint);
+    return () => query.removeEventListener('change', repaint);
+  });
+
+  $effect(() => {
+    void scheme;
     if (data && host) build(data);
   });
 
   $effect(() => {
     plot?.setSize({ width, height });
+  });
+
+  $effect(() => {
+    void markers;
+    plot?.redraw(false);
   });
 
   onDestroy(() => plot?.destroy());

@@ -55,6 +55,19 @@ layout gets most of what a TSDB's compression would. If 1 Hz × a year of raw ev
 the chunk format is close to what a Gorilla-style encoder would add, and could be swapped in
 behind the same table.
 
+## OOM kills are events, not samples
+
+A container OOM-killed in its PID 1 exits, and its cgroup goes with it — often before the probe's
+5-second rescan of cgroups sees its `oom_kill`. So kills are kept as rows of their own,
+`oom_event(vm, key, ts, …)`, read from the guest's kernel journal: once (back to rollup retention)
+when the collector connects, then whenever `/proc/vmstat`'s `oom_kill` rises. Each row has the
+container, the killed process, the kernel's constraint (`CONSTRAINT_MEMCG`: a cgroup's own limit;
+`CONSTRAINT_NONE`: the whole VM) and the limit hit. `key` is `<boot id>:<pid>:<ms>` — a pid dies
+once per boot, and the time tells a recycled pid apart — so re-reading overlapping windows of the
+journal never duplicates a kill. Container names and compose labels come from `entity`, which
+outlives the container. Kept as long as rollups. Without a readable journal, the counters' rises
+are recorded instead (`source = 'counter'`, with the reason).
+
 ## The kernel already remembers some peaks
 
 1 Hz sampling can miss a spike between samples; two kernel counters can't: a container's cgroup

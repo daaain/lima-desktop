@@ -1,7 +1,8 @@
 //! The collector: watches `limactl list`, and for every running instance keeps two loops going —
 //! the guest probe over ssh (VM metrics + per-container cgroup peaks) and libpod over the forwarded
 //! socket (containers, their stats). Every sample goes to the store; the latest values and the
-//! instance/container lists are kept in memory for the UI to poll.
+//! instance/container lists are kept in memory for the UI to poll. A third loop records OOM kills
+//! from the guest's kernel journal: once on connecting, then whenever the probe sees a kill.
 
 use serde::Serialize;
 use std::collections::HashMap;
@@ -10,9 +11,12 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::io::AsyncReadExt;
+use tokio::sync::Notify;
 use tokio::task::JoinHandle;
 
+use crate::journal::{self, JournalError};
 use crate::lima::{self, Instance};
+use crate::oom::{self, OomEvent};
 use crate::podman::{Container, Libpod, RawStat};
 use crate::probe::{self, Block};
 use crate::store::{ABSENT, CT_METRICS, Kind, Store, VM_METRICS};
@@ -22,6 +26,11 @@ const CONTAINERS_EVERY: u32 = 3; // in stats ticks
 const FLUSH_EVERY: Duration = Duration::from_secs(10);
 const RETAIN_EVERY: Duration = Duration::from_secs(3600);
 const PROBE_RETRY: Duration = Duration::from_secs(5);
+/// After the probe sees a kill, give journald a moment to have the kernel's lines.
+const OOM_SETTLE: Duration = Duration::from_secs(3);
+/// Each journal read starts this far before the previous one did; the store drops repeats.
+const OOM_OVERLAP_MS: i64 = 5 * 60_000;
+const DAY_MS: i64 = 86_400_000;
 
 #[derive(Clone, Copy, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -72,6 +81,8 @@ pub struct VmLive {
     pub latest: HashMap<String, i64>,
     pub probe_error: Option<String>,
     pub podman_error: Option<String>,
+    /// Why OOM kills come without the kernel's detail (no journal, or not readable), if they do.
+    pub oom_detail_error: Option<String>,
     pub containers: Vec<ContainerLive>,
 }
 
@@ -85,10 +96,21 @@ pub struct Snapshot {
     pub retention: Option<Retention>,
 }
 
+/// A kill the counters saw, waiting for the journal reader: it becomes an event of its own only
+/// when the journal can't describe it.
+#[derive(Debug, Clone, PartialEq)]
+struct PendingKill {
+    ts: i64,
+    container_id: Option<String>,
+    mem_limit: Option<i64>,
+}
+
 struct VmState {
     live: VmLive,
     /// container id → (memory.peak, oom_kill) from the probe's cgroup lines.
     cgroups: HashMap<String, (Option<u64>, Option<u64>)>,
+    oom_pending: Vec<PendingKill>,
+    oom_wake: Arc<Notify>,
     workers: Vec<JoinHandle<()>>,
 }
 
@@ -201,9 +223,12 @@ impl Collector {
                     latest: HashMap::new(),
                     probe_error: None,
                     podman_error: None,
+                    oom_detail_error: None,
                     containers: Vec::new(),
                 },
                 cgroups: HashMap::new(),
+                oom_pending: Vec::new(),
+                oom_wake: Arc::new(Notify::new()),
                 workers: Vec::new(),
             });
             state.live.instance = inst;
@@ -213,6 +238,7 @@ impl Collector {
                 state.workers = vec![
                     tokio::spawn(self.clone().probe_loop(name.clone())),
                     tokio::spawn(self.clone().podman_loop(name.clone())),
+                    tokio::spawn(self.clone().oom_loop(name.clone(), state.oom_wake.clone())),
                 ];
             } else if !running && alive {
                 for w in state.workers.drain(..) {
@@ -284,10 +310,15 @@ impl Collector {
                     me.store().ingest(id, ts, row.clone());
                 }
                 let cgroups = block.cgroups.clone();
+                let kills = prev
+                    .as_ref()
+                    .map(|p| oom::counter_kills(p, &block))
+                    .unwrap_or_default();
                 me.set_vm(&n, |v| {
                     v.live.latest = named(VM_METRICS, &row);
                     v.live.probe_error = None;
                     v.cgroups = cgroups;
+                    queue_kills(v, ts, kills);
                 });
                 prev = Some(block);
             })
@@ -373,6 +404,61 @@ impl Collector {
         }
     }
 
+    /// OOM kills, from the kernel journal: first everything still within retention (backfill),
+    /// then a read each time the probe's counters rise. Where the journal can't be read, the
+    /// counters' kills are recorded as they are, saying why there's no more detail.
+    async fn oom_loop(self: Arc<Self>, name: String, wake: Arc<Notify>) {
+        let mut since = now_ms() - self.retention.rollup_days * DAY_MS;
+        loop {
+            let Some(inst) = self.instance(&name) else {
+                return;
+            };
+            let started = now_ms();
+            let pending = self.take_pending_kills(&name);
+            match journal::read_oom_lines(&inst.ssh_config_file, &name, since).await {
+                Ok(entries) => {
+                    self.record_oom(oom::kernel_events(&name, &entries));
+                    self.set_vm(&name, |v| v.live.oom_detail_error = None);
+                    since = started - OOM_OVERLAP_MS;
+                }
+                Err(JournalError::Unavailable(reason)) => {
+                    self.record_oom(counter_events(&name, pending, &reason));
+                    self.set_vm(&name, |v| v.live.oom_detail_error = Some(reason));
+                }
+                Err(JournalError::Unreachable(_)) => {
+                    // ssh isn't up yet (or any more): keep the kills and try again.
+                    self.restore_pending_kills(&name, pending);
+                    tokio::time::sleep(PROBE_RETRY).await;
+                    continue;
+                }
+            }
+            wake.notified().await;
+            tokio::time::sleep(OOM_SETTLE).await;
+        }
+    }
+
+    fn take_pending_kills(&self, vm: &str) -> Vec<PendingKill> {
+        let mut pending = Vec::new();
+        self.set_vm(vm, |v| pending = std::mem::take(&mut v.oom_pending));
+        pending
+    }
+
+    /// Put kills back ahead of any queued since.
+    fn restore_pending_kills(&self, vm: &str, mut pending: Vec<PendingKill>) {
+        self.set_vm(vm, |v| {
+            pending.append(&mut v.oom_pending);
+            v.oom_pending = pending;
+        });
+    }
+
+    fn record_oom(&self, events: Vec<OomEvent>) {
+        match self.store().add_oom_events(&events) {
+            Ok(0) => {}
+            Ok(n) => log::info!("recorded {n} OOM kill(s) in {}", events[0].vm),
+            Err(e) => log::error!("recording OOM kills: {e}"),
+        }
+    }
+
     fn update_containers(&self, vm: &str, list: Vec<Container>) {
         let now = now_ms();
         let mut vms = self.vms.lock().expect("vms lock");
@@ -390,7 +476,7 @@ impl Collector {
                 let prev = old.get(&c.id);
                 let entity = prev
                     .and_then(|p| p.entity)
-                    .or_else(|| store.entity(Kind::Container, vm, &c.id, &c.name, now).ok());
+                    .or_else(|| container_entity(&mut store, vm, &c, now));
                 ContainerLive {
                     latest: prev.map(|p| p.latest.clone()).unwrap_or_default(),
                     entity,
@@ -404,6 +490,53 @@ impl Collector {
         });
         state.live.containers = fresh;
     }
+}
+
+/// A container's entity id, created or found, with its compose labels kept for after it's gone.
+fn container_entity(store: &mut Store, vm: &str, c: &Container, now: i64) -> Option<i64> {
+    let id = store
+        .entity(Kind::Container, vm, &c.id, &c.name, now)
+        .ok()?;
+    let (project, service) = (c.compose_project.as_deref(), c.compose_service.as_deref());
+    if let Err(e) = store.label_entity(id, project, service) {
+        log::warn!("labelling container {}: {e}", c.name);
+    }
+    Some(id)
+}
+
+/// Queue the kills the counters saw for the journal reader, and wake it.
+fn queue_kills(v: &mut VmState, ts: i64, kills: Vec<Option<String>>) {
+    if kills.is_empty() {
+        return;
+    }
+    let vm_memory = v.live.instance.memory as i64;
+    for container_id in kills {
+        let mem_limit = container_id
+            .as_ref()
+            .and_then(|id| v.live.containers.iter().find(|c| &c.container.id == id))
+            .and_then(|c| c.latest.get("mem_limit").copied())
+            .filter(|&limit| is_own_limit(limit, vm_memory));
+        v.oom_pending.push(PendingKill {
+            ts,
+            container_id,
+            mem_limit,
+        });
+    }
+    v.oom_wake.notify_one();
+}
+
+/// An unlimited container reports (about) the VM's memory as its limit; that isn't a limit of its own.
+fn is_own_limit(limit: i64, vm_memory: i64) -> bool {
+    limit > 0 && (limit as f64) < vm_memory as f64 * 0.95
+}
+
+/// Events for kills the journal couldn't describe, each saying why.
+fn counter_events(vm: &str, pending: Vec<PendingKill>, reason: &str) -> Vec<OomEvent> {
+    pending
+        .into_iter()
+        .enumerate()
+        .map(|(i, k)| oom::counter_event(vm, k.ts, i, k.container_id, k.mem_limit, reason))
+        .collect()
 }
 
 /// Host-side columns for a VM row: the hypervisor's RSS and CPU (Lima's driver process — on vz
@@ -537,6 +670,48 @@ mod tests {
         assert_eq!(row[3], 4096);
         assert_eq!(row[4], 1);
         assert_eq!(row.len(), CT_METRICS.len());
+    }
+
+    #[test]
+    fn only_a_limit_below_the_vms_memory_is_the_containers_own() {
+        let gib = 1 << 30;
+        assert!(is_own_limit(gib, 80 * gib));
+        assert!(
+            !is_own_limit(80 * gib - 4096, 80 * gib),
+            "unlimited reads as the VM's memory"
+        );
+        assert!(!is_own_limit(ABSENT, 80 * gib));
+    }
+
+    #[test]
+    fn kills_without_kernel_detail_become_distinct_events() {
+        let pending = vec![
+            PendingKill {
+                ts: 5_000,
+                container_id: Some("c1".into()),
+                mem_limit: Some(1 << 30),
+            },
+            PendingKill {
+                ts: 5_000,
+                container_id: None,
+                mem_limit: None,
+            },
+            PendingKill {
+                ts: 9_000,
+                container_id: None,
+                mem_limit: None,
+            },
+        ];
+        let events = counter_events("alp", pending, "there's no systemd journal in this VM");
+        assert_eq!(events.len(), 3);
+        let keys: std::collections::HashSet<_> = events.iter().map(|e| &e.key).collect();
+        assert_eq!(keys.len(), 3, "two kills in one second are still two");
+        assert_eq!(events[0].container_id.as_deref(), Some("c1"));
+        assert_eq!(events[0].mem_limit, Some(1 << 30));
+        assert_eq!(
+            events[2].detail.as_deref(),
+            Some("there's no systemd journal in this VM")
+        );
     }
 
     #[test]
