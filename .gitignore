@@ -1,0 +1,27 @@
+.DS_Store
+node_modules
+/build
+/.svelte-kit
+/package
+.env
+.env.*
+!.env.example
+vite.config.js.timestamp-*
+vite.config.ts.timestamp-*
+/src-tauri/target
+
+# >>> foldyard (managed) — do not edit inside this block >>>
+# Box/host-generated files foldyard writes beside foldyard.toml; never commit.
+.devbox-ca/
+.devbox-claude/
+.devbox-codex/
+.devbox-foldyard/
+.dev-mode.json
+**/foldyard.local.toml
+# <<< foldyard (managed) <<<
+
+# Recorded Lima data (just snapshot) and replay workdirs: real names and ids, never commit.
+.snapshots/
+
+# End-to-end runs against a real Lima (just e2e): their full logs.
+.e2e/

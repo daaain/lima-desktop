@@ -1,0 +1,7 @@
+{
+  "about": "What a snapshot keeps of each `limactl list` row: read by the recorder (src-tauri/examples/snapshot.rs) and, again as defence in depth, the anonymiser (tools/anonymise-snapshot.mjs). `config` keeps only port-forwards to a guest socket (these fields of them) and `meta.managedBy` (the marker): never provisioning, env, mounts or messages.",
+  "rowFields": ["name", "hostname", "status", "dir", "vmType", "arch", "cpus", "memory", "disk",
+    "sshLocalPort", "sshConfigFile", "sshAddress", "hostAgentPID", "driverPID", "protected",
+    "limaVersion", "HostOS", "HostArch", "LimaHome", "config"],
+  "portForwardFields": ["guestSocket", "hostSocket"]
+}
