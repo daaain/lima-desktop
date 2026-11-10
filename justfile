@@ -96,3 +96,58 @@ test:
     pnpm test
     node --test 'tools/*.test.mjs'
     cd src-tauri && cargo test
+
+# Releasing (docs/development.md): `just release patch` (or minor, major, or 0.2.0) bumps the version in
+# tauri.conf.json, Cargo.toml (and Cargo.lock) and package.json, commits and tags v<version>, all
+# local — `git tag -d v<version> && git reset --hard HEAD~1` undoes it. `just release-push` then
+# starts the Release workflow, which builds the .dmg, .deb and AppImage into a draft GitHub Release.
+# Bump the version, commit and tag it - e.g. `just release patch` or `just release 0.2.0`
+release version_or_bump:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # The tag has to name a commit on main: one cut on a branch and then squash-merged would
+    # point at a commit main never has.
+    branch=$(git branch --show-current)
+    [ "$branch" = main ] || { echo "Release from main (this is '$branch')." >&2; exit 1; }
+    [ -z "$(git status --porcelain)" ] || { echo "Commit or stash these first:" >&2; git status --short >&2; exit 1; }
+    current=$(node -p 'require("./src-tauri/tauri.conf.json").version')
+    IFS=. read -r major minor patch <<< "$current"
+    case "{{version_or_bump}}" in
+      major) version="$((major + 1)).0.0" ;;
+      minor) version="$major.$((minor + 1)).0" ;;
+      patch) version="$major.$minor.$((patch + 1))" ;;
+      *) version="{{version_or_bump}}" ;;
+    esac
+    [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "'$version' isn't major, minor, patch or X.Y.Z." >&2; exit 1; }
+    ! git rev-parse -q --verify "refs/tags/v$version" >/dev/null || { echo "v$version is already tagged." >&2; exit 1; }
+    if [ "$version" != "$current" ]; then
+      echo "$current → $version"
+      # JSON through node (the files are as JSON.stringify writes them, so only the version changes).
+      for f in package.json src-tauri/tauri.conf.json; do
+        node -e 'const fs = require("fs"); const [f, v] = process.argv.slice(1); const j = JSON.parse(fs.readFileSync(f, "utf8")); j.version = v; fs.writeFileSync(f, JSON.stringify(j, null, 2) + "\n");' "$f" "$version"
+      done
+      # The package's own version: the first `version =` in Cargo.toml, and its entry in Cargo.lock.
+      sed -i.bak "1,/^version = /s/^version = \".*\"/version = \"$version\"/" src-tauri/Cargo.toml
+      sed -i.bak "/^name = \"lima-desktop\"$/{n;s/^version = \".*\"/version = \"$version\"/;}" src-tauri/Cargo.lock
+      rm src-tauri/Cargo.toml.bak src-tauri/Cargo.lock.bak
+      git diff --stat
+      git commit -qam "Release v$version"
+    else
+      echo "$current is already the version everywhere: tagging it as it is."
+    fi
+    git tag -a "v$version" -m "Release v$version"
+    echo "Tagged v$version. Look it over (git show --stat), then: just release-push"
+
+# Push main and the latest tag together, starting the Release workflow (a draft GitHub Release)
+release-push:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    branch=$(git branch --show-current)
+    [ "$branch" = main ] || { echo "Release from main (this is '$branch')." >&2; exit 1; }
+    tag=$(git tag --list 'v*' --sort=-version:refname | head -n 1)
+    [ -n "$tag" ] || { echo "No v* tag yet: run just release first." >&2; exit 1; }
+    [ "$(git rev-parse HEAD)" = "$(git rev-parse "$tag^{commit}")" ] || { echo "HEAD isn't $tag: run just release first." >&2; exit 1; }
+    # --atomic: both or neither — a tag pushed without its commit would name one main doesn't have.
+    git push --atomic origin main "$tag"
+    echo "Building: https://github.com/daaain/lima-desktop/actions/workflows/release.yml"
+    echo "Then read the draft under https://github.com/daaain/lima-desktop/releases and publish it."

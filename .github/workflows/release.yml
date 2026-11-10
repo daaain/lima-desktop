@@ -151,7 +151,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          ls -l dist
+          # The files, wherever they landed: an artifact with more than one path (Linux's .deb and
+          # .AppImage) keeps their folders under its common parent, so dist/* would hand gh two
+          # directories, which it can't upload.
+          mapfile -t files < <(find dist -type f | sort)
+          printf '%s\n' "${files[@]}"
+          [ "${#files[@]}" -eq 3 ] || { echo "::error::expected a .dmg, a .deb and an .AppImage"; exit 1; }
           cat > notes.md <<'EOF'
           ## Install
 
@@ -170,7 +175,7 @@ jobs:
           executable and run it. Needs WebKitGTK 4.1 (Ubuntu 22.04+, Debian 12+, Fedora 39+).
 
           EOF
-          gh release create "$GITHUB_REF_NAME" dist/* \
+          gh release create "$GITHUB_REF_NAME" "${files[@]}" \
             --repo "$GITHUB_REPOSITORY" --draft --verify-tag \
             --title "Lima Desktop ${GITHUB_REF_NAME#v}" \
             --notes-file notes.md --generate-notes
