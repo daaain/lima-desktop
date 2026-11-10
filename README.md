@@ -25,18 +25,61 @@ for each container — so you can see OOMs coming and right-size VMs.
 Nothing is installed in the guests: the app reads them over Lima's own ssh and talks to podman
 over the socket Lima already forwards.
 
-<details>
-<summary>A VM's page, and the containers of every running VM</summary>
+**A VM's page**: what it needs, and why.
 
-<img src="https://daaain.github.io/lima-desktop/vm.png" alt="A VM's page: a headline verdict, then memory, CPU, pressure and disk each with a sentence, three figures, a bar and its history, the resize form, its out-of-memory kills and its containers" width="760">
-<img src="https://daaain.github.io/lima-desktop/containers.png" alt="The Containers view: how many are running, then each VM's containers with memory and CPU as bars under a day of history" width="760">
-</details>
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="https://daaain.github.io/lima-desktop/vm-dark.png">
+  <img src="https://daaain.github.io/lima-desktop/vm.png" alt="A VM's page: a headline verdict, then memory, CPU, pressure and disk each with a sentence, three figures, a bar and its history, the resize form, its out-of-memory kills and its containers" width="760">
+</picture>
+
+**Containers**, across every running VM.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="https://daaain.github.io/lima-desktop/containers-dark.png">
+  <img src="https://daaain.github.io/lima-desktop/containers.png" alt="The Containers view: how many are running, then each VM's containers with memory and CPU as bars under a day of history" width="760">
+</picture>
+
+**Images**, and what removing the unused ones would free.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="https://daaain.github.io/lima-desktop/images-dark.png">
+  <img src="https://daaain.github.io/lima-desktop/images.png" alt="The Images view: how many images no container uses and what removing them would free, then each VM's images, fullest disk first, with what each holds alone" width="760">
+</picture>
+
+**Volumes**, with their sizes and who uses them.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="https://daaain.github.io/lima-desktop/volumes-dark.png">
+  <img src="https://daaain.github.io/lima-desktop/volumes.png" alt="The Volumes view: how many volumes no container uses and what removing them would free, then each VM's volumes with their size and the containers using them" width="760">
+</picture>
 
 The screenshots are of invented data: CI draws them from the UI's browser tests
 ([e2e-ui/](./e2e-ui/)) after each merge to main and publishes them
 [here](https://daaain.github.io/lima-desktop/). The look is described in
 [docs/design/ui.md](./docs/design/ui.md).
 
-See [docs/development.md](./docs/development.md) to build and test, and
+## Build it
+
+There are no release builds yet, so for now you build it yourself. On macOS you need Xcode's
+command-line tools (`xcode-select --install`), a current stable [Rust](https://rustup.rs), and
+Node 24 with pnpm 10 (`corepack enable pnpm`). Then:
+
+```bash
+git clone https://github.com/daaain/lima-desktop.git && cd lima-desktop
+pnpm install
+pnpm tauri build --bundles app
+cp -R "src-tauri/target/release/bundle/macos/Lima Desktop.app" /Applications/
+```
+
+The first build takes a few minutes. You built it on your own Mac, so Gatekeeper opens it without
+asking about signing. It needs `limactl` (Lima 2) on the Mac, and it finds it even when you launch
+the app from Finder.
+
+On Linux, first install WebKitGTK and the other things Tauri builds against
+(`libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev`, as listed in
+[Tauri's prerequisites](https://v2.tauri.app/start/prerequisites/)). Then build a `.deb` with
+`pnpm tauri build --bundles deb` or an AppImage with `pnpm tauri build --bundles appimage`.
+
+See [docs/development.md](./docs/development.md) to develop and test, and
 [docs/research/podman-desktop/](./docs/research/podman-desktop/) for the Podman Desktop survey
 this started from.
