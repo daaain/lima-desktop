@@ -113,6 +113,11 @@ recommend = [
   { host = "static.rust-lang.org", why = "rustup — clippy/rustfmt for the box image" },
   { host = "index.crates.io", why = "cargo — the crates.io sparse index" },
   { host = "static.crates.io", why = "cargo — crate downloads" },
+  # Playwright's Chromium, baked into the box image (box.Dockerfile) for `just ui-e2e`: only the
+  # build fetches it. To install it in a running box instead, grant just the path there:
+  # `fy allow add storage.googleapis.com/chrome-for-testing-public/` (recommend takes hosts only).
+  { host = "cdn.playwright.dev", when = "build", why = "box image build — Playwright's browser downloads (redirects to the next)" },
+  { host = "storage.googleapis.com", when = "build", why = "box image build — Chrome for Testing, where cdn.playwright.dev redirects" },
 ]
 # passthrough = ["@jvm", "@linux"]   # the default: tunnelled UN-decrypted (Java, apt);
 #                                    # the rest is decrypted. ["@all"] = every bundle
@@ -284,6 +289,8 @@ CARGO_HOME = "~/.cargo"
 # WebKitGTK under Xvfb: no GPU buffers, no accessibility bus to look for
 WEBKIT_DISABLE_DMABUF_RENDERER = "1"
 NO_AT_BRIDGE = "1"
+# The browser tests' Chromium, baked into the image there (box.Dockerfile)
+PLAYWRIGHT_BROWSERS_PATH = "/opt/ms-playwright"
 #
 # System packages, baked once into a cached layer on the box image (any package manager):
 # packages = ["postgresql-client", "just"]
