@@ -13,6 +13,7 @@
   import Sizing from '$lib/Sizing.svelte';
   import ContainerLine from '$lib/ContainerLine.svelte';
   import ContainerDetail from '$lib/ContainerDetail.svelte';
+  import { unfold } from '$lib/motion';
 
   const name = $derived(decodeURIComponent(page.params.name ?? ''));
   const vm = $derived(live.vm(name));
@@ -229,7 +230,7 @@
             <ContainerLine vm={name} {c} history={history.get(c.entity)} {memScale} vmCpus={i.cpus} vmMemory={i.memory} second="activity" now={live.snapshot?.updated}
               selected={open.includes(c.id)} onselect={() => toggle(c.id)} onerror={(e) => (actionError = e)} />
             {#if open.includes(c.id)}
-              <div id={`detail-${c.id}`}>
+              <div id={`detail-${c.id}`} transition:unfold>
                 <ContainerDetail vm={name} {c} {from} {to} vmMemory={i.memory} oomMarkers={oomMarkers(oom, c.id)} onclose={() => toggle(c.id)} />
               </div>
             {/if}

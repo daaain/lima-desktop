@@ -142,6 +142,20 @@ export interface Image {
   containers: number;
 }
 
+/** One step of an image's history, newest first (podman.rs `Layer`). */
+export interface Layer {
+  /** The image this step made, when kept here; null for a pulled image's steps. */
+  id: string | null;
+  /** Unix seconds; 0 when the image doesn't say. */
+  created: number;
+  /** The instruction, as the builder recorded it. */
+  createdBy: string;
+  /** Bytes it added; 0 for a change to the config only. */
+  size: number;
+  comment: string;
+  tags: string[];
+}
+
 export interface Volume {
   name: string;
   driver: string;
@@ -149,6 +163,37 @@ export interface Volume {
   mountpoint: string;
   /** RFC 3339. */
   createdAt: string;
+}
+
+/** A folder of podman's in the guest whose files can be looked at (commands.rs `Source`). */
+export type FileSource =
+  | { kind: 'volume'; name: string }
+  /** `layer`: which of the image's layers, newest first — the n-th history step with a size. */
+  | { kind: 'layer'; image: string; layer: number };
+
+/** A file or directory in a volume or a layer (guest_files.rs `Entry`). */
+export interface FileEntry {
+  name: string;
+  /** 'removed': in a layer, a whiteout — it deletes what a lower layer had under this name. */
+  kind: 'dir' | 'file' | 'link' | 'other' | 'removed';
+  /** Bytes; meaningful for a file. */
+  size: number;
+  /** Unix seconds. */
+  modified: number;
+}
+export interface FileListing {
+  /** Relative to the folder: '' is its top. */
+  path: string;
+  entries: FileEntry[];
+  /** Too many to list them all. */
+  truncated: boolean;
+}
+export interface FilePeek {
+  path: string;
+  size: number;
+  /** Null when it isn't text. */
+  text: string | null;
+  truncated: boolean;
 }
 
 export interface Pruned {
@@ -173,11 +218,16 @@ export const api = {
   containerInspect: (vm: string, id: string) => invoke<unknown>('container_inspect', { vm, id }),
   systemDf: (vm: string) => invoke<Record<string, unknown>>('system_df', { vm }),
   images: (vm: string) => invoke<Image[]>('images', { vm }),
+  imageHistory: (vm: string, id: string) => invoke<Layer[]>('image_history', { vm, id }),
   /** `reference`: a `repository:tag` (untags it), or an id for a dangling image. */
   imageRemove: (vm: string, reference: string) => invoke<void>('image_remove', { vm, reference }),
   /** `all = false`: dangling images only; `true`: every image no container uses. */
   imagesPrune: (vm: string, all: boolean) => invoke<Pruned>('images_prune', { vm, all }),
   volumes: (vm: string) => invoke<Volume[]>('volumes', { vm }),
+  /** A directory in a volume or a layer, `path` relative to its top ('' for the top). Read-only. */
+  files: (vm: string, source: FileSource, path: string) => invoke<FileListing>('guest_files', { vm, source, path }),
+  /** The start of a file in a volume or a layer. Read-only. */
+  file: (vm: string, source: FileSource, path: string) => invoke<FilePeek>('guest_file', { vm, source, path }),
   volumeRemove: (vm: string, name: string) => invoke<void>('volume_remove', { vm, name }),
   /** Every volume no container uses. */
   volumesPrune: (vm: string) => invoke<Pruned>('volumes_prune', { vm }),

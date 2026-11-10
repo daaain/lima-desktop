@@ -110,9 +110,14 @@ under the sentence, figures and bar it explains, with the allocation as a dashed
   buttons; then each image or volume as a line (`ItemLine.svelte`), the unused first, with its size
   drawn and who uses it. An image's size counts layers it shares with other images, so image sizes
   are never added up: what removing images would free comes only from `system df`, which walks
-  every volume and so runs on **Measure sizes**. It gives each image's own share, drawn solid inside
-  its size, and each volume's size and users, which until then are a dash. One measurement serves
-  both pages, and a VM's is taken again after something is removed from it.
+  every volume, so it runs once per VM as the app first sees it running, then on **Measure again**.
+  It gives each image's own share, drawn solid inside its size, and each volume's size and users,
+  which until then are a dash. One measurement serves both pages, and a VM's is taken again after
+  something is removed from it. Both lists are fetched from the start and kept, so neither page
+  opens blank. A line opens a detail under it, as a container's does: an image's layers (the
+  config-only steps folded away; a layer opens what it added, what it deletes struck through), or a volume's files, a folder at a time, with the start of a file
+  (read-only, over Lima's ssh). Details unfold and fold back, without motion when the system asks
+  for less of it.
 
 ## Adding to it
 

@@ -1,12 +1,13 @@
 <script lang="ts">
   // An image or a volume as a line: its name and what it is, its size drawn against the largest
-  // listed, who uses it, and its removal. A size not yet measured is said, not drawn.
+  // listed, who uses it, and its removal. A size not yet measured is said, not drawn. Given
+  // `onselect`, the line opens a detail under it (the page draws it).
   import type { Snippet } from 'svelte';
   import { share } from './almanac';
   import { bytes } from './format';
   import Bar from './Bar.svelte';
 
-  let { name, title, second, secondTitle, size, own, scale, sizeLabel, used, usedText, usedTitle, removable, removeTitle, onremove }: {
+  let { name, title, second, secondTitle, size, own, scale, sizeLabel, used, usedText, usedTitle, removable, removeTitle, onremove, selected = false, onselect }: {
     name: Snippet;
     /** The whole name, for the tooltip of one cut short. */
     title: string;
@@ -22,10 +23,19 @@
     used?: boolean;
     usedText: string; usedTitle?: string;
     removable: boolean; removeTitle?: string; onremove: () => void;
+    /** Whether its detail is open; `onselect` opens and closes it. */
+    selected?: boolean; onselect?: () => void;
   } = $props();
+  const keys = (e: KeyboardEvent) => {
+    // The line's own keys only: Enter on its Remove button is that button's.
+    if (onselect && e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); onselect(); }
+  };
 </script>
 
-<div class="line num">
+<!-- A button when it opens something (`role` is set with `onselect`). -->
+<!-- svelte-ignore a11y_no_static_element_interactions, a11y_no_noninteractive_tabindex -->
+<div class="line num" class:openable={onselect} role={onselect ? 'button' : undefined} tabindex={onselect ? 0 : undefined}
+  aria-expanded={onselect ? selected : undefined} onclick={onselect} onkeydown={keys}>
   <div class="who">
     <span class="name serif" {title}>{@render name()}</span>
     <span class="second" title={secondTitle}>{second}</span>
@@ -47,7 +57,8 @@
     {#if used != null}<span class="dot" class:off={!used}></span>{/if}
     <span class:muted={!used}>{usedText}</span>
   </div>
-  <span class="acts">
+  <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+  <span class="acts" onclick={(e) => e.stopPropagation()}>
     <button class="danger" disabled={!removable} title={removeTitle} onclick={onremove}>Remove</button>
   </span>
 </div>
@@ -57,6 +68,9 @@
     display: grid; grid-template-columns: var(--item-columns); column-gap: 1.4rem; align-items: end;
     padding: 0.6rem 0; border-top: 1px solid var(--border);
   }
+  .openable { cursor: pointer; }
+  .openable:hover { background: var(--wash); }
+  .openable:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
   .who { display: grid; gap: 0.1rem; min-width: 0; }
   .name { font-size: 1.25rem; font-weight: 600; line-height: 1.2; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .name :global(.from) { color: var(--muted); font-weight: 400; }

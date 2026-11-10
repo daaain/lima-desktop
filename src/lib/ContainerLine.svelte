@@ -27,8 +27,8 @@
   const oom = $derived(l.oom_kills ?? 0);
 </script>
 
-<div class="line num" class:selected class:off={!running} role="button" tabindex="0" onclick={onselect}
-  onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onselect(); } }}>
+<div class="line num" class:off={!running} role="button" tabindex="0" aria-expanded={selected} onclick={onselect}
+  onkeydown={(e) => { if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); onselect(); } }}>
   <div class="who">
     <span class="name serif" title={c.name}>{c.composeService ?? c.name}{#if oom > 0}<span class="badge alert" title="Processes killed for running out of memory since it started">{oom} OOM</span>{/if}</span>
     <span class="second" title={second === 'image' ? c.image : c.name}>
@@ -68,7 +68,9 @@
     display: grid; grid-template-columns: var(--container-columns); column-gap: 1.4rem; align-items: end;
     padding: 0.6rem 0; border-top: 1px solid var(--border); cursor: pointer;
   }
-  .line:hover, .line.selected { background: var(--wash); }
+  /* Hover only: an open line's detail below says it's open, and a wash on the line itself would
+     run its content to the edge of the colour, the line having no side padding. */
+  .line:hover { background: var(--wash); }
   .line:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
   .who { display: grid; gap: 0.1rem; min-width: 0; }
   .name { font-size: 1.25rem; font-weight: 600; line-height: 1.2; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

@@ -1,5 +1,6 @@
 pub mod collector;
 pub mod commands;
+pub mod guest_files;
 pub mod journal;
 pub mod lima;
 pub mod marker;
@@ -28,6 +29,8 @@ pub fn run() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        // Remembers the window's size and place between runs (saved as it closes).
+        .plugin(tauri_plugin_window_state::Builder::default().build())
         .setup(|app| {
             let dir = data_dir(app)?;
             std::fs::create_dir_all(&dir)?;
@@ -54,9 +57,12 @@ pub fn run() {
             commands::container_logs,
             commands::container_inspect,
             commands::images,
+            commands::image_history,
             commands::image_remove,
             commands::images_prune,
             commands::volumes,
+            commands::guest_files,
+            commands::guest_file,
             commands::volume_remove,
             commands::volumes_prune,
             commands::system_df,

@@ -60,3 +60,18 @@ export function imageOwnSizes(df: Record<string, unknown>): Map<string, number> 
   const rows = (df.Images ?? []) as { ImageID: string; UniqueSize?: number }[];
   return new Map(rows.map((r) => [r.ImageID, r.UniqueSize ?? 0]));
 }
+
+/**
+ * A history step's instruction as it was written: the shell wrapper the builder recorded taken off
+ * (`/bin/sh -c #(nop) CMD …` → `CMD …`, `/bin/sh -c apt-get …` → `RUN apt-get …`), with a build's
+ * `|2 A=1 B=2` argument prefix and BuildKit's `# buildkit` note.
+ */
+export function instruction(createdBy: string): string {
+  let s = createdBy.trim().replace(/\s+# buildkit$/, '');
+  s = s.replace(/^\|\d+(?:\s+[^\s=]+=\S*)*\s+/, '');
+  const nop = s.match(/^\/bin\/sh -c #\(nop\)\s*([\s\S]*)$/);
+  if (nop) return nop[1].trim();
+  const run = s.match(/^\/bin\/sh -c\s+([\s\S]*)$/);
+  if (run) return `RUN ${run[1].trim()}`;
+  return s;
+}
