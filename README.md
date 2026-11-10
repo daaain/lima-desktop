@@ -6,6 +6,8 @@ for each container — so you can see OOMs coming and right-size VMs.
 
 **Status:** early. macOS first (Linux builds too). Podman 5 or newer only (an older one is named, not half-read); compose projects shown read-only.
 
+<img src="./docs/assets/screenshot.webp" alt="Lima Desktop's VM overview: running instances as cards with CPU, memory and disk use, pressure, hypervisor RAM and container counts, and stopped instances listed below" width="720">
+
 - Every Lima instance, live: status, allocation vs use, memory/CPU pressure (PSI), OOM kills, and
   what each VM costs your computer (hypervisor RAM/CPU, the disk image's real size).
 - Start, stop, restart, delete; resize CPUs/memory/disk of a stopped VM, with right-sizing hints
