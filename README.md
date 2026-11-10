@@ -58,11 +58,25 @@ The screenshots are of invented data: CI draws them from the UI's browser tests
 [here](https://daaain.github.io/lima-desktop/). The look is described in
 [docs/design/ui.md](./docs/design/ui.md).
 
+## Install
+
+Download it from [Releases](https://github.com/daaain/lima-desktop/releases): a universal `.dmg`
+for macOS (Apple silicon and Intel), and a `.deb` or an AppImage for Linux (x86_64). It needs Lima 2
+(`limactl`).
+
+The macOS build isn't signed with an Apple Developer ID yet. macOS quarantines anything downloaded,
+so it refuses to open the app and says it "is damaged" or "can't be checked". After dragging the app
+to Applications, remove the quarantine once:
+
+```bash
+xattr -dr com.apple.quarantine "/Applications/Lima Desktop.app"
+```
+
 ## Build it
 
-There are no release builds yet, so for now you build it yourself. On macOS you need Xcode's
-command-line tools (`xcode-select --install`), a current stable [Rust](https://rustup.rs), and
-Node 24 with pnpm 10 (`corepack enable pnpm`). Then:
+You can also build it yourself. On macOS you need Xcode's command-line tools
+(`xcode-select --install`), a current stable [Rust](https://rustup.rs), and Node 24 with pnpm 10
+(`corepack enable pnpm`). Then:
 
 ```bash
 git clone https://github.com/daaain/lima-desktop.git && cd lima-desktop
