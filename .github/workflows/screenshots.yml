@@ -1,0 +1,62 @@
+# The README's screenshots (docs/assets/screens/), redrawn from the UI's browser tests on fake data
+# (e2e-ui/) and committed when they changed: after every merge to main that touches the UI, and by
+# hand for any branch (Actions → Screenshots → Run workflow → pick the branch).
+# Actions are pinned to commit SHAs, as in ci.yml.
+name: Screenshots
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'e2e-ui/**'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+      - '.github/workflows/screenshots.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write   # to commit the screenshots back to the branch it ran on
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: 24.15.0
+  PNPM_VERSION: 10.33.4
+
+jobs:
+  screenshots:
+    name: redraw the README's screenshots
+    runs-on: ubuntu-26.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec playwright install --with-deps chromium
+
+      - run: pnpm build
+      - name: Browser tests, screenshots into docs/assets/screens
+        run: LD_SCREENSHOT_DIR=docs/assets/screens node --test e2e-ui/ui.test.mjs
+
+      # A push made with the workflow's own token starts no other workflow, so this can't loop.
+      - name: Commit them if they changed
+        run: |
+          git add docs/assets/screens
+          if git diff --cached --quiet; then
+            echo "The screenshots are unchanged."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "Redraw the README's screenshots"
+          git push origin "HEAD:${GITHUB_REF_NAME}"

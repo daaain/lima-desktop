@@ -92,8 +92,19 @@ export interface LimaProblem {
   os: string;
 }
 
+/** What the computer the app runs on has (collector.rs `Host`). */
+export interface Host {
+  cpus: number;
+  /** Bytes of RAM. */
+  memory: number;
+  /** Bytes: the size of the filesystem Lima keeps its instances on. */
+  disk: number;
+}
+
 export interface Snapshot {
   vms: VmLive[];
+  /** Absent when it couldn't be read. */
+  host?: Host | null;
   /** What's wrong with Lima itself; the VMs are then as last seen. */
   limaProblem?: LimaProblem | null;
   updated: number;

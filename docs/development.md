@@ -25,7 +25,7 @@ prerequisites). macOS needs Xcode's command-line tools.
 | `marker.rs` | the [managed-by marker](./design/managed-by.md) |
 | `podman.rs` | libpod REST over the instance's forwarded unix socket (a short symlink when the path is over `sun_path`'s limit): containers, stats, logs, images and volumes (list, remove — never forced — and prune), `system df` |
 | `probe.sh` / `probe.rs` | the guest probe: POSIX sh over Lima's ssh, read-only, one block per second |
-| `collector.rs` | the loops: `limactl list` every 3 s; per running VM the probe, 1 Hz libpod stats and the OOM reader; host-side hypervisor RSS/CPU and disk-image allocation |
+| `collector.rs` | the loops: `limactl list` every 3 s; per running VM the probe, 1 Hz libpod stats and the OOM reader; host-side hypervisor RSS/CPU and disk-image allocation; and what the host has (cores, RAM, the size of the filesystem the instances are on), to scale allocations against |
 | `journal.rs` | a one-shot, read-only `journalctl _TRANSPORT=kernel -o json --grep …` over Lima's ssh: as the user where Lima put it in `systemd-journal` (only when the host UID is under 1000, i.e. macOS), else with `sudo -n` (Lima's default passwordless sudo); where neither works, says why and the `usermod` fix |
 | `oom.rs` | OOM kills: the kernel's `oom-kill:` / `Killed process` / `memory: usage … limit` lines paired into events (container, process, constraint, limit, anon-rss), and the counter-only fallback |
 | `store.rs` | the history ([design](./design/metrics-storage.md)), and the OOM kill log |
@@ -33,13 +33,18 @@ prerequisites). macOS needs Xcode's command-line tools.
 
 ## Frontend map (`src/`)
 
-Two levels, kept apart in the sidebar (`lib/Sidebar.svelte`): **Lima** — the VMs (`routes/+page.svelte`,
-`routes/vm/[name]`) — and **Podman · all running VMs** — Containers, Images, Volumes, each gathered
-from every running VM that forwards a podman socket.
+Two levels, kept apart in the masthead (`lib/Masthead.svelte`): **VMs** (`routes/+page.svelte`,
+`routes/vm/[name]`), and the podman things in every running VM that forwards a podman socket:
+Containers, Images, Volumes. How it looks and reads is in [design/ui.md](./design/ui.md).
 
 | where | what |
 | --- | --- |
 | `lib/api.ts` | the backend's commands, typed |
+| `lib/almanac.ts` | the UI's sentences (how full in quarters, what is past three quarters, each page's headline) and a series turned into a sketch: columns over time, and where the time was spent |
+| `lib/history.svelte.ts` | the last 24 hours of whatever a page sketches, fetched as entities appear and then once a minute |
+| `lib/Sketch.svelte`, `lib/Bar.svelte`, `lib/Capacity.svelte` | the three drawings: a day of history (its distribution on hover), a bar notched at quarters, and the host's bar (in use, allocated, what the computer has) |
+| `lib/Sizing.svelte` | a VM's four figures with their verdicts (`lib/rightsize.ts`), and the resize form |
+| `lib/ContainerLine.svelte` | one container as a line, shared by the Containers view and a VM's page |
 | `lib/live.svelte.ts` | the 1 Hz snapshot every page shares (VMs, their containers and latest metrics) |
 | `lib/perVm.ts` | which VMs a podman-wide view lists (and the sentences about those it leaves out); asking each VM with `Promise.allSettled`, so one broken VM doesn't blank a list |
 | `lib/perVmList.svelte.ts` | images and volumes aren't in the snapshot: fetched on view open, after actions, on Refresh and every 15 s |
@@ -48,6 +53,25 @@ from every running VM that forwards a podman socket.
 
 The pure modules have `.test.ts` files next to them (`pnpm test`); `lib/testing.ts` builds snapshots
 for them.
+
+## The UI in a browser, on fake data: `just ui-e2e`
+
+`e2e-ui/ui.test.mjs` (node:test + Playwright's Chromium) serves the built UI with `vite preview`
+and loads `e2e-ui/fake-backend.js` into the page before the app: it stands in for Tauri's `invoke`
+and answers every command in `lib/api.ts` with an invented fleet, made to exercise the UI — a VM
+whose memory leaks past three quarters, a CPU-bound one with an OOM kill at a container's own
+limit, one with a nearly full disk and a managed-by marker, one whose podman is too old, an idle
+one, and stopped and broken ones. Every value is a function of the entity and the time, and the
+test fixes the time, so two runs draw the same picture. The test checks what each page says, in
+light and dark, and that the overview doesn't scroll sideways on a narrow window.
+
+Its screenshots go to `.snapshots/ui/`. `just screenshots` puts them in `docs/assets/screens/`
+instead, which the README shows; the **Screenshots** workflow does the same and commits them, after
+each merge to main that touches the UI, or by hand for any branch (Actions → Screenshots → Run
+workflow). A workflow can only be run by hand once its file is on the default branch.
+
+Add to the fleet when a page gains a state worth seeing; nothing in it is recorded from a real
+machine, so it needs no anonymising. For real data in the real app, replay a snapshot (below).
 
 ## Tests that touch real things
 
@@ -114,11 +138,12 @@ cgroup v2 `memory.peak`, PSI, the OOM reader. Lifecycle verbs and `limactl edit`
 
 ## End to end against a real Lima: `just e2e`
 
-Three layers, each catching what the one before can't:
+Four layers, each catching what the one before can't:
 
 | | what it runs against | catches |
 | --- | --- | --- |
 | unit and fixture tests (`cargo test`, `pnpm test`) | canned strings, anonymised snapshots | parser and logic regressions, anywhere |
+| the UI in a browser (`just ui-e2e`) | the built UI on a fake backend | what each page says and draws, in light and dark |
 | replay (`just replay*`) | a recorded snapshot behind a fake `limactl`/`ssh`/libpod | the whole app on real data, without access to the VMs |
 | **e2e** (`just e2e`) | live Lima VMs on this host | behaviour: what Lima, ssh, podman and the kernel actually do |
 

@@ -22,7 +22,8 @@
     height = 160,
     markers = [],
   }: {
-    title: string;
+    /** Shown above the plot; leave out where the surrounding text names it. */
+    title?: string;
     data: Series | null;
     lines: Line[];
     format: (v: number) => string;
@@ -62,7 +63,7 @@
           ctx.fillStyle = color;
           ctx.lineWidth = px;
           ctx.setLineDash([3 * px, 3 * px]);
-          ctx.font = `${10 * px}px system-ui, sans-serif`;
+          ctx.font = `${10 * px}px 'Inter Variable', system-ui, sans-serif`;
           let labelEnd = -Infinity;
           for (const m of [...markers].sort((a, b) => a.ts - b.ts)) {
             const t = m.ts / 1000;
@@ -151,7 +152,7 @@
 </script>
 
 <section class="chart">
-  <h3>{title}{#if data}<span class="res">{data.resolution === '1s' ? 'per second' : 'per minute'}</span>{/if}</h3>
+  {#if title}<h3>{title}{#if data}<span class="res">{data.resolution === '1s' ? 'per second' : 'per minute'}</span>{/if}</h3>{/if}
   <div bind:this={host} bind:clientWidth={width}></div>
   {#if data && data.ts.length === 0}<p class="empty">No samples in this range.</p>{/if}
 </section>

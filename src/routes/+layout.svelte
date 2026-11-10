@@ -1,93 +1,103 @@
 <script lang="ts">
+  import '@fontsource-variable/inter';
+  import '@fontsource-variable/newsreader/opsz.css';
   import { onMount } from 'svelte';
   import { live } from '$lib/live.svelte';
-  import { bytes } from '$lib/format';
-  import Sidebar from '$lib/Sidebar.svelte';
+  import Masthead from '$lib/Masthead.svelte';
   import LimaProblem from '$lib/LimaProblem.svelte';
   let { children } = $props();
   onMount(() => live.start());
 </script>
 
 <div class="app">
-  <header>
-    <a href="/" class="brand">Lima Desktop</a>
-    <span class="spacer"></span>
-    {#if live.snapshot}
-      <span class="meta" title="Metrics history on disk; raw samples kept {live.snapshot.retention?.rawDays} days, minute rollups {live.snapshot.retention?.rollupDays}">
-        history {bytes(live.snapshot.storeBytes)}
-      </span>
-    {/if}
-  </header>
+  <Masthead />
   {#if live.snapshot?.limaProblem}
     <LimaProblem problem={live.snapshot.limaProblem} staleVms={live.snapshot.vms.length} />
   {/if}
   {#if live.error}
-    <p class="banner alert">Backend: {live.error}</p>
+    <p class="banner">Backend: {live.error}</p>
   {/if}
-  <div class="body">
-    <Sidebar />
-    <main>{@render children()}</main>
-  </div>
+  <main>{@render children()}</main>
 </div>
 
 <style>
+  /* The look is described in docs/design/ui.md: a serif for sentences and names, a sans for
+     figures, one warning colour, hairline rules instead of boxes. */
   :global(:root) {
-    --bg: #f7f7f5; --panel: #ffffff; --fg: #1d1d1b; --muted: #6b6b66; --border: #e3e3de;
-    --grid: #ececE8; --track: #e9e9e4; --accent: #2f6fde;
-    --ok: #3a9a5b; --warn: #d39a1c; --alert: #d0453a;
-    --series-1: #2f6fde; --series-2: #d0453a; --series-3: #8a57d1; --series-4: #3a9a5b;
+    --bg: #ffffff; --fg: #14171c; --muted: #5a616c; --border: #d9dce1; --wash: #f4f6f9;
+    --accent: #1d4ed8; --warn: #a8430a; --alert: #b3261e; --ok: #14171c;
+    --track: #e4e7ec; --bar: #4b5563; --soft: #aeb6c2; --grid: #eceef1; --panel: var(--bg);
+    --series-1: #1d4ed8; --series-2: #a8430a; --series-3: #7a5fb5; --series-4: #4b5563;
+    --serif: 'Newsreader Variable', Georgia, 'Times New Roman', serif;
+    --sans: 'Inter Variable', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
     color-scheme: light dark;
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+    font-family: var(--sans);
     font-size: 14px;
   }
   @media (prefers-color-scheme: dark) {
     :global(:root) {
-      --bg: #161615; --panel: #1f1f1d; --fg: #ececE8; --muted: #9a9a93; --border: #33332f;
-      --grid: #2b2b28; --track: #2e2e2a; --accent: #6b9cf0;
-      --series-1: #6b9cf0; --series-2: #ef7a6f; --series-3: #b28ef0; --series-4: #6cc58b;
+      --bg: #111418; --fg: #eceef1; --muted: #9da5b0; --border: #2c323a; --wash: #191d23;
+      --accent: #93b4ff; --warn: #ff9a52; --alert: #ff8a80; --ok: #eceef1;
+      --track: #2a3038; --bar: #b4bcc8; --soft: #5b6573; --grid: #20252b;
+      --series-1: #93b4ff; --series-2: #ff9a52; --series-3: #b9a4ee; --series-4: #b4bcc8;
     }
   }
   :global(body) { margin: 0; background: var(--bg); color: var(--fg); }
   :global(a) { color: var(--accent); text-decoration: none; }
+  :global(a:hover) { text-decoration: underline; }
   :global(button) {
-    font: inherit; font-size: 0.85rem; padding: 0.3rem 0.7rem; border-radius: 6px;
-    border: 1px solid var(--border); background: var(--panel); color: var(--fg); cursor: pointer;
+    font: inherit; font-size: 0.9rem; height: 2.3rem; padding: 0 1rem; border-radius: 1.15rem;
+    border: 1px solid var(--border); background: transparent; color: var(--fg); cursor: pointer; white-space: nowrap;
   }
-  :global(button:hover:not(:disabled)) { border-color: var(--accent); }
-  :global(button:disabled) { opacity: 0.45; cursor: not-allowed; }
+  :global(button:hover:not(:disabled)) { border-color: var(--fg); }
+  :global(button:disabled) { color: var(--muted); cursor: not-allowed; }
   :global(button.danger:hover:not(:disabled)) { border-color: var(--alert); color: var(--alert); }
-  :global(.panel) { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 1rem; }
-  :global(.badge) { font-size: 0.72rem; padding: 0.1rem 0.45rem; border-radius: 999px; border: 1px solid var(--border); color: var(--muted); white-space: nowrap; }
-  :global(.badge.running) { color: var(--ok); border-color: var(--ok); }
+  :global(button.active) { background: var(--fg); border-color: var(--fg); color: var(--bg); }
+
+  /* Type: .serif for names and sentences, .num for figures, .label for the rare small label. */
+  :global(.serif) { font-family: var(--serif); }
+  :global(.num) { font-variant-numeric: tabular-nums; }
+  :global(.label) { font-size: 0.8rem; color: var(--muted); }
+  :global(.muted) { color: var(--muted); }
+  :global(.hot) { color: var(--warn); }
+  :global(h1.headline) {
+    font-family: var(--serif); font-weight: 500; font-size: clamp(2.2rem, 4.6vw, 4rem); line-height: 1.05;
+    letter-spacing: -0.02em; margin: 0; text-wrap: balance;
+  }
+  :global(h2.head) { font-family: var(--serif); font-weight: 500; font-size: 1.9rem; line-height: 1.15; letter-spacing: -0.01em; margin: 0; }
+  :global(p.lede) { font-size: 1.15rem; line-height: 1.5; margin: 0; max-width: 46rem; }
+  :global(p.note) { font-size: 0.9rem; line-height: 1.5; color: var(--muted); margin: 0; }
+
+  /* A section starts at a rule; nothing sits in a box except the one thing being acted on. */
+  :global(.panel) { border-top: 1px solid var(--fg); padding-top: 0.9rem; }
+  :global(.wash) { background: var(--wash); padding: 1.6rem 2rem; }
+  :global(.badge) { font-size: 0.78rem; padding: 0.1rem 0.5rem; border-radius: 999px; border: 1px solid var(--border); color: var(--muted); white-space: nowrap; }
+  :global(.badge.running) { color: var(--fg); border-color: var(--muted); }
   :global(.badge.managed) { color: var(--accent); border-color: var(--accent); }
   :global(.badge.alert) { color: var(--alert); border-color: var(--alert); }
-  :global(.error) { color: var(--alert); font-size: 0.8rem; overflow-wrap: anywhere; margin: 0; }
-  .app { display: flex; flex-direction: column; min-height: 100vh; }
-  header { display: flex; align-items: center; gap: 1rem; padding: 0.6rem 1.2rem; border-bottom: 1px solid var(--border); background: var(--panel); }
-  .brand { font-weight: 700; color: var(--fg); }
-  .spacer { flex: 1; }
-  .meta { color: var(--muted); font-size: 0.8rem; }
-  .banner { margin: 0; padding: 0.5rem 1.2rem; }
-  .banner.alert { background: color-mix(in srgb, var(--alert) 12%, transparent); color: var(--alert); }
-  .body { display: flex; flex: 1; min-height: 0; }
-  main { padding: 1.2rem; flex: 1; min-width: 0; }
+  :global(.error) { color: var(--alert); font-size: 0.9rem; overflow-wrap: anywhere; margin: 0; }
+
+  .app { max-width: 1184px; margin: 0 auto; padding: 0 2rem 4rem; }
+  .banner { margin: 1rem 0 0; padding: 0.6rem 1rem; background: color-mix(in srgb, var(--alert) 10%, transparent); color: var(--alert); }
+  main { display: grid; gap: 1.2rem; align-content: start; padding-top: 2.6rem; min-width: 0; }
   @media (max-width: 640px) {
-    .body { flex-direction: column; }
+    .app { padding: 0 1rem 3rem; }
+    main { padding-top: 1.6rem; }
   }
 
   /* The list views (containers, images, volumes) share these. */
   :global(.toolbar) { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; }
   :global(.toolbar input[type='search']) { min-width: 14rem; }
   :global(.toolbar input[type='search']), :global(.toolbar select) {
-    font: inherit; font-size: 0.85rem; padding: 0.3rem 0.5rem; border-radius: 6px;
-    border: 1px solid var(--border); background: var(--panel); color: var(--fg);
+    font: inherit; font-size: 0.9rem; height: 2.3rem; padding: 0 0.9rem; border-radius: 1.15rem;
+    border: 1px solid var(--border); background: transparent; color: var(--fg);
   }
-  :global(table.list) { width: 100%; border-collapse: collapse; font-size: 0.83rem; }
-  :global(table.list th) { text-align: left; color: var(--muted); font-weight: 500; padding: 0.3rem 0.5rem; border-bottom: 1px solid var(--border); white-space: nowrap; }
-  :global(table.list td) { padding: 0.35rem 0.5rem; border-bottom: 1px solid var(--border); }
+  :global(table.list) { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+  :global(table.list th) { text-align: left; color: var(--muted); font-weight: 400; font-size: 0.8rem; padding: 0.4rem 0.6rem 0.4rem 0; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  :global(table.list td) { padding: 0.5rem 0.6rem 0.5rem 0; border-bottom: 1px solid var(--border); }
   :global(table.list .n) { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
-  :global(table.list .muted) { color: var(--muted); font-size: 0.78rem; }
-  :global(table.list .acts) { white-space: nowrap; text-align: right; }
-  :global(table.list .acts button) { padding: 0.15rem 0.5rem; font-size: 0.75rem; }
-  :global(table.list code) { font-size: 0.78rem; }
+  :global(table.list .muted) { color: var(--muted); font-size: 0.85rem; }
+  :global(table.list .acts) { white-space: nowrap; text-align: right; padding-right: 0; }
+  :global(table.list .acts button) { height: 1.9rem; padding: 0 0.8rem; font-size: 0.82rem; }
+  :global(table.list code) { font-size: 0.82rem; }
 </style>

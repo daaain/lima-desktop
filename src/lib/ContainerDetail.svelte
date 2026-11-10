@@ -28,9 +28,9 @@
   });
 </script>
 
-<section class="panel detail">
+<section class="wash detail">
   <div class="head">
-    <h3>{c.name}</h3>
+    <h3 class="serif">{c.name}</h3>
     <span class="muted">{c.image}</span>
     <span class="spacer"></span>
     {#each ['metrics', 'logs', 'inspect'] as const as t}
@@ -64,10 +64,10 @@
 <style>
   .detail { display: grid; gap: 0.75rem; }
   .head { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
-  h3 { margin: 0; }
+  h3 { margin: 0; font-size: 1.5rem; font-weight: 600; }
   .spacer { flex: 1; }
   .muted { color: var(--muted); font-size: 0.8rem; }
-  button.active { border-color: var(--accent); color: var(--accent); }
+  .head button { height: 1.9rem; padding: 0 0.8rem; font-size: 0.82rem; }
   .charts { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 1rem; }
-  pre { margin: 0; max-height: 26rem; overflow: auto; font-size: 0.75rem; background: var(--bg); padding: 0.75rem; border-radius: 6px; white-space: pre-wrap; word-break: break-all; }
+  pre { margin: 0; max-height: 26rem; overflow: auto; font-size: 0.8rem; background: var(--bg); padding: 0.75rem; white-space: pre-wrap; word-break: break-all; }
 </style>

@@ -47,7 +47,7 @@
 
 <div class="page">
   <div class="title">
-    <h1>Images</h1>
+    <h1 class="headline">Images</h1>
     <span class="muted">in every running VM — each VM has its own image store</span>
   </div>
 
@@ -105,8 +105,7 @@
 <style>
   .page { display: grid; gap: 1rem; align-content: start; }
   .title { display: flex; align-items: baseline; gap: 0.75rem; flex-wrap: wrap; }
-  h1 { margin: 0; font-size: 1.4rem; }
-  .muted { color: var(--muted); font-size: 0.8rem; margin: 0; }
+  .muted { color: var(--muted); font-size: 0.9rem; margin: 0; }
   .prune { display: grid; gap: 0.5rem; }
   .untagged { color: var(--muted); }
 </style>

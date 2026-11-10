@@ -3,14 +3,16 @@
   import { page } from '$app/state';
   import { live } from '$lib/live.svelte';
   import { api, type ContainerLive, type OomEvent, type Series } from '$lib/api';
-  import { bytes, cores, cpuLabel, rate } from '$lib/format';
+  import { bytes } from '$lib/format';
+  import { containersSentence, vmHeadline } from '$lib/almanac';
+  import { History } from '$lib/history.svelte';
+  import type { Hint } from '$lib/rightsize';
   import { RANGES, rangeMs, type RangeKey } from '$lib/ranges';
   import { OOM_LEVEL_LABEL, oomCause, oomLevel, oomMarkers, oomWho } from '$lib/oom';
-  import Chart from '$lib/Chart.svelte';
   import VmActions from '$lib/VmActions.svelte';
-  import RightSizing from '$lib/RightSizing.svelte';
+  import Sizing from '$lib/Sizing.svelte';
+  import ContainerLine from '$lib/ContainerLine.svelte';
   import ContainerDetail from '$lib/ContainerDetail.svelte';
-  import ContainerActions from '$lib/ContainerActions.svelte';
 
   const name = $derived(decodeURIComponent(page.params.name ?? ''));
   const vm = $derived(live.vm(name));
@@ -22,6 +24,12 @@
   let selected = $state<string | null>(null);
   let actionError = $state<string | null>(null);
   let df = $state<Record<string, unknown> | null>(null);
+  let hints = $state<Hint[]>([]);
+
+  const history = new History();
+  history.follow(() => (vm?.containers ?? []).filter((c) => c.state === 'running').map((c) => c.entity));
+  // The memory bars' full width: the largest peak among this VM's containers.
+  const memScale = $derived(Math.max(1, ...(vm?.containers ?? []).map((c) => Math.max(c.latest.mem ?? 0, c.latest.mem_peak ?? 0))));
 
   // Short ranges follow live; longer ones are fetched once per choice.
   $effect(() => {
@@ -86,9 +94,10 @@
       const k = c.composeProject ?? null;
       map.set(k, [...(map.get(k) ?? []), c]);
     }
+    const byMemory = (a: ContainerLive, b: ContainerLive) => (b.latest.mem ?? -1) - (a.latest.mem ?? -1);
     return [...map.entries()]
       .sort(([a], [b]) => (a === null ? 1 : b === null ? -1 : a.localeCompare(b)))
-      .map(([project, containers]) => ({ project, containers }));
+      .map(([project, containers]) => ({ project, containers: [...containers].sort(byMemory) }));
   });
   const selectedContainer = $derived(vm?.containers.find((c) => c.id === selected) ?? null);
 
@@ -105,72 +114,57 @@
   }
 </script>
 
-<a href="/" class="back">← all VMs</a>
-
 {#if !vm}
   <p class="muted">{live.snapshot ? `No Lima instance named '${name}'.` : 'Loading…'}</p>
 {:else}
   {@const i = vm.instance}
   {@const l = vm.latest}
+  <div class="crumbs">
+    <span class="muted"><a href="/">All VMs</a> · {i.status.toLowerCase()} · {i.vmType} · {i.arch} · Lima {i.limaVersion}</span>
+    <div class="ranges" role="group" aria-label="Range">
+      {#each RANGES as r}
+        <button class="range" class:active={range === r.key} aria-pressed={range === r.key} onclick={() => (range = r.key)}>{r.label}</button>
+      {/each}
+    </div>
+  </div>
+
   <div class="title">
-    <h1>{i.name}</h1>
-    <span class="badge" class:running={i.status === 'Running'}>{i.status}</span>
-    <span class="muted">{i.vmType} · {i.arch} · Lima {i.limaVersion}</span>
-    <span class="spacer"></span>
+    <h1 class="headline">{vmHeadline(vm, hints)}</h1>
     <VmActions inst={i} />
   </div>
 
   {#if i.marker.state === 'active'}
-    <p class="panel note">
+    <p class="lede">
       Managed by <strong>{i.marker.manager}</strong>{#if i.marker.group} (group <code>{i.marker.group}</code>){/if}.
       {#if i.marker.hint}{i.marker.hint}{/if}
       {#if i.marker.locked.length}<span class="muted"> Left to it here: {i.marker.locked.join(', ')}.</span>{/if}
     </p>
   {:else if i.marker.state === 'inherited'}
-    <p class="panel note muted">This VM carries a {i.marker.manager} marker written for another instance (it was cloned) — nothing is locked.</p>
+    <p class="lede muted">This VM carries a {i.marker.manager} marker written for another instance (it was cloned) — nothing is locked.</p>
   {:else if i.marker.state === 'unreadable'}
-    <p class="panel note error">Its managed-by marker can't be read, so every change is locked here. Use <code>limactl</code> directly, or fix <code>{i.dir}/managed-by.json</code>.</p>
+    <p class="error">Its managed-by marker can't be read, so every change is locked here. Use <code>limactl</code> directly, or fix <code>{i.dir}/managed-by.json</code>.</p>
   {/if}
   {#if vm.probeError}<p class="error">metrics: {vm.probeError}</p>{/if}
   {#if vm.podmanError}<p class="error">podman: {vm.podmanError}</p>{/if}
 
-  <div class="ranges">
-    {#each RANGES as r}
-      <button class:active={range === r.key} onclick={() => (range = r.key)}>{r.label}</button>
-    {/each}
-  </div>
-
-  <RightSizing inst={i} entity={vm.entity} latest={l} {from} {to} oomEvents={oomError ? null : oomLoaded ? oom : undefined} />
-
-  <div class="charts">
-    <div class="panel"><Chart title="Memory" data={series} format={(v) => bytes(v)} ceiling={i.memory} markers={oomMarkers(oom)}
-      lines={[{ key: 'mem_used', label: 'used in the guest', color: '--series-1' }, { key: 'host_rss', label: 'RAM on your computer', color: '--series-3' }]} /></div>
-    <div class="panel"><Chart title="CPU" data={series} format={cpuLabel} ceiling={i.cpus * 1000}
-      lines={[{ key: 'cpu_mc', label: 'guest', color: '--series-1' }, { key: 'host_cpu_mc', label: 'hypervisor on your computer', color: '--series-3' }]} /></div>
-    <div class="panel"><Chart title="Pressure (time stalled)" data={series} format={(v) => `${v.toFixed(1)} %`}
-      lines={[{ key: 'psi_mem_some', label: 'memory, some', color: '--series-2', scale: 0.1 }, { key: 'psi_mem_full', label: 'memory, all', color: '--series-3', scale: 0.1 }, { key: 'psi_cpu_some', label: 'cpu', color: '--series-1', scale: 0.1 }]} /></div>
-    <div class="panel"><Chart title="Disk" data={series} format={(v) => bytes(v)} ceiling={l.store_size ?? i.disk}
-      lines={[{ key: 'store_used', label: 'container store', color: '--series-1' }, { key: 'host_disk_alloc', label: 'image on your computer', color: '--series-3' }]} /></div>
-  </div>
+  <Sizing inst={i} entity={vm.entity} latest={l} {from} {to} {series} markers={oomMarkers(oom)} oomEvents={oomError ? null : oomLoaded ? oom : undefined} bind:hints />
 
   {#if oom.length || latestOom || oomError || arrivedForOom}
     <section class="panel" id="oom">
-      <div class="title small">
-        <h2>Out-of-memory kills</h2>
-        {#if oom.length}
-          <span class="muted">
-            {oom.length} in this range, newest first ·
-            {oomByLevel.own} hit a container's (or cgroup's) own limit ·
-            {oomByLevel.vm} because the whole VM ran out
-          </span>
-        {/if}
-      </div>
+      <h2 class="head">Out-of-memory kills</h2>
+      {#if oom.length}
+        <p class="note">
+          {oom.length} in this range, newest first ·
+          {oomByLevel.own} hit a container's (or cgroup's) own limit ·
+          {oomByLevel.vm} because the whole VM ran out
+        </p>
+      {/if}
       {#if oomError}<p class="error">{oomError}</p>{/if}
       {#if vm.oomDetailError}
-        <p class="muted">No kernel detail: {vm.oomDetailError}. Kills are still counted, but not always which container, or why.</p>
+        <p class="note">No kernel detail: {vm.oomDetailError}. Kills are still counted, but not always which container, or why.</p>
       {/if}
       {#if !oom.length}
-        <p class="muted">
+        <p class="note">
           {#if latestOom}
             None in this range; the latest was {when(latestOom.ts)}.
             <button class="link" onclick={() => latestOom && showRangeFor(latestOom.ts)}>Show it</button>
@@ -179,14 +173,14 @@
           {/if}
         </p>
       {:else}
-        <table>
+        <table class="list">
           <thead><tr><th>time</th><th>container</th><th>process</th><th>level</th><th>cause</th></tr></thead>
           <tbody>
             {#each oom as e}
               {@const who = oomWho(e, vm.containers)}
               {@const level = oomLevel(e)}
               <tr class:clickable={!who.removed && e.containerId} onclick={() => { if (!who.removed && e.containerId) selected = e.containerId; }}>
-                <td class="when">{when(e.ts)}</td>
+                <td class="when num">{when(e.ts)}</td>
                 <td>
                   <span class="cname">{who.name}</span>{#if who.context}<span class="muted cid">{who.context}</span>{/if}
                   {#if who.removed}<span class="badge" title="This container no longer exists; its name comes from the history.">removed</span>{/if}
@@ -205,44 +199,30 @@
     </section>
   {/if}
 
-  <section class="panel">
+  <section class="panel containers">
     <div class="title small">
-      <h2>Containers</h2>
-      <span class="muted">{vm.containers.length} · compose projects are read-only groups</span>
-      <a class="muted" href={`/containers?vm=${encodeURIComponent(name)}`}>in the Containers view</a>
-      <span class="spacer"></span>
+      <h2 class="head">{i.status === 'Running' ? containersSentence(vm.containers) : 'Start the VM to see its containers.'}</h2>
       <button onclick={loadDf} disabled={i.status !== 'Running'}>Disk usage</button>
     </div>
     {#if df}
-      <p class="muted">images {bytes(dfTotal('Images'))} · containers {bytes(dfTotal('Containers', 'RWSize'))} · volumes {bytes(dfTotal('Volumes', 'Size'))}</p>
+      <p class="note num">images {bytes(dfTotal('Images'))} · containers {bytes(dfTotal('Containers', 'RWSize'))} · volumes {bytes(dfTotal('Volumes', 'Size'))}</p>
     {/if}
     {#if actionError}<p class="error">{actionError}</p>{/if}
-    {#if vm.containers.length === 0}
-      <p class="muted">{i.status === 'Running' ? 'No containers.' : 'Start the VM to see its containers.'}</p>
-    {:else}
-      <table>
-        <thead><tr><th>name</th><th>state</th><th class="n">cpu</th><th class="n">memory</th><th class="n">peak</th><th class="n">net in/out</th><th class="n">pids</th><th></th></tr></thead>
+    {#if vm.containers.length}
+      <p class="note">
+        Memory: dark is now, pale the peak since it started, full width the largest peak here ({bytes(memScale)}). CPU: full width is this VM's {i.cpus} cores.
+        Above each, the last 24 hours. Compose projects are read-only groups. <a href={`/containers?vm=${encodeURIComponent(name)}`}>Filter and search them in Containers.</a>
+      </p>
+      <div class="lines">
+        <div class="heads label" aria-hidden="true"><span></span><span>Memory</span><span></span><span>CPU</span><span></span><span class="r">Up</span><span></span></div>
         {#each groups as g (g.project)}
-          <tbody>
-            <tr class="group"><td colspan="8">{g.project ?? 'not in a compose project'}</td></tr>
-            {#each g.containers as c (c.id)}
-              {@const cl = c.latest}
-              <tr class:selected={selected === c.id} onclick={() => (selected = selected === c.id ? null : c.id)}>
-                <td><span class="cname">{c.composeService ?? c.name}</span>{#if c.composeService}<span class="muted cid">{c.name}</span>{/if}</td>
-                <td><span class="badge" class:running={c.state === 'running'}>{c.state}</span>{#if (cl.oom_kills ?? 0) > 0} <span class="badge alert" title="Processes in this container killed for lack of memory since it started — its own limit or the VM's; see Out-of-memory kills">{cl.oom_kills} OOM</span>{/if}</td>
-                <td class="n">{cores(cl.cpu_mc)}</td>
-                <td class="n">{bytes(cl.mem)}</td>
-                <td class="n" title="cgroup memory.peak: the high-water mark since the container started">{bytes(cl.mem_peak)}</td>
-                <td class="n">{rate(cl.net_rx_bps)} / {rate(cl.net_tx_bps)}</td>
-                <td class="n">{cl.pids ?? '–'}</td>
-                <td class="acts" onclick={(e) => e.stopPropagation()}>
-                  <ContainerActions vm={name} {c} onerror={(e) => (actionError = e)} />
-                </td>
-              </tr>
-            {/each}
-          </tbody>
+          {#if groups.length > 1 || g.project}<h3 class="group serif">{g.project ?? 'Not in a compose project'}</h3>{/if}
+          {#each g.containers as c (c.id)}
+            <ContainerLine vm={name} {c} history={history.get(c.entity)} {memScale} vmCpus={i.cpus} vmMemory={i.memory} second="activity" now={live.snapshot?.updated}
+              selected={selected === c.id} onselect={() => (selected = selected === c.id ? null : c.id)} onerror={(e) => (actionError = e)} />
+          {/each}
         {/each}
-      </table>
+      </div>
     {/if}
   </section>
 
@@ -252,32 +232,26 @@
 {/if}
 
 <style>
-  :global(main) { display: grid; gap: 1rem; align-content: start; }
-  .back { font-size: 0.85rem; }
-  .title { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; }
-  .title.small { margin-bottom: 0.5rem; }
-  h1 { margin: 0; font-size: 1.4rem; }
-  h2 { margin: 0; font-size: 1rem; }
-  .spacer { flex: 1; }
-  .muted { color: var(--muted); font-size: 0.8rem; }
-  .note { margin: 0; font-size: 0.85rem; }
+  .crumbs { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0.6rem 1.5rem; font-size: 0.9rem; }
   .ranges { display: flex; gap: 0.3rem; flex-wrap: wrap; }
-  .ranges button.active { border-color: var(--accent); color: var(--accent); }
-  .charts { display: grid; grid-template-columns: repeat(auto-fit, minmax(420px, 1fr)); gap: 1rem; }
-  table { width: 100%; border-collapse: collapse; font-size: 0.83rem; }
-  th { text-align: left; color: var(--muted); font-weight: 500; padding: 0.3rem 0.5rem; border-bottom: 1px solid var(--border); }
-  td { padding: 0.35rem 0.5rem; border-bottom: 1px solid var(--border); }
-  .n { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
-  tr.group td { font-weight: 600; background: var(--bg); color: var(--muted); font-size: 0.78rem; }
-  tbody tr:not(.group) { cursor: pointer; }
-  tbody tr:not(.group):hover, tr.selected { background: color-mix(in srgb, var(--accent) 7%, transparent); }
+  .range { height: 1.9rem; padding: 0 0.8rem; font-size: 0.82rem; }
+  .title { display: flex; align-items: flex-end; justify-content: space-between; gap: 1rem 2rem; flex-wrap: wrap; }
+  .title .headline { flex: 1 1 30rem; }
+  .title.small { align-items: baseline; }
+  .title.small .head { flex: 1 1 20rem; }
+  .panel { display: grid; gap: 0.7rem; margin-top: 1.4rem; }
+  .lines { --container-columns: minmax(13rem, 1.3fr) minmax(9rem, 1fr) 8.5rem minmax(7rem, 0.6fr) 5.5rem 5rem 11.5rem; border-bottom: 1px solid var(--border); }
+  .heads { display: grid; grid-template-columns: var(--container-columns); column-gap: 1.4rem; padding: 0.3rem 0 0.4rem; }
+  .heads .r { text-align: right; }
+  .group { margin: 0; padding: 1rem 0 0.4rem; font-size: 1.05rem; font-weight: 500; color: var(--muted); border-top: 1px solid var(--border); }
+  .group + :global(.line) { border-top: 0; }
   .cname { font-weight: 500; }
   .cid { margin-left: 0.4rem; }
-  .acts { white-space: nowrap; text-align: right; }
-  #oom tbody tr { cursor: default; }
   #oom tbody tr.clickable { cursor: pointer; }
-  #oom .when { white-space: nowrap; font-variant-numeric: tabular-nums; }
-  #oom .cause { color: var(--fg); }
+  #oom .when { white-space: nowrap; }
   #oom .badge { margin-left: 0.3rem; }
-  button.link { border: none; background: none; padding: 0; color: var(--accent); cursor: pointer; font-size: inherit; }
+  button.link { border: none; background: none; padding: 0; height: auto; color: var(--accent); cursor: pointer; font-size: inherit; }
+  @media (max-width: 860px) {
+    .heads { display: none; }
+  }
 </style>

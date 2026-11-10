@@ -2,14 +2,26 @@
   import { live } from '$lib/live.svelte';
   import { bytes, cores, permille } from '$lib/format';
   import type { Instance, VmLive } from '$lib/api';
-  import Meter from '$lib/Meter.svelte';
+  import { band, countWord, fleetHeadline, gauges, share, sketch, vmSentence } from '$lib/almanac';
+  import { History } from '$lib/history.svelte';
+  import Bar from '$lib/Bar.svelte';
+  import Capacity from '$lib/Capacity.svelte';
+  import Sketch from '$lib/Sketch.svelte';
   import VmActions from '$lib/VmActions.svelte';
 
   const vms = $derived(live.snapshot?.vms ?? []);
-  const running = $derived(vms.filter((v) => v.instance.status === 'Running'));
-  const others = $derived(vms.filter((v) => v.instance.status !== 'Running'));
+  // The fullest first: what needs a look leads.
+  const running = $derived(
+    vms.filter((v) => v.instance.status === 'Running').sort((a, b) => gauges(b).memory.pct - gauges(a).memory.pct),
+  );
+  const others = $derived(vms.filter((v) => v.instance.status !== 'Running').sort((a, b) => b.instance.memory - a.instance.memory));
+  const largest = $derived(Math.max(1, ...others.map((v) => v.instance.memory)));
+  const host = $derived(live.snapshot?.host);
 
-  // Action failures per VM, shown in each card's reserved problem slot rather than growing it.
+  const history = new History();
+  history.follow(() => running.map((v) => v.entity));
+
+  // Action failures per VM, shown under its sentence.
   let actionErrors = $state<Record<string, string | null>>({});
 
   function problems(vm: VmLive): string[] {
@@ -20,7 +32,10 @@
     ].filter((p): p is string => !!p);
   }
   const href = (i: Instance) => `/vm/${encodeURIComponent(i.name)}`;
-  const spec = (i: Instance) => `${i.vmType} · ${i.arch} · ${i.cpus} CPU · ${bytes(i.memory, 0)} · ${bytes(i.disk, 0)} disk`;
+  const spec = (i: Instance) => `${i.cpus} CPU · ${bytes(i.memory, 0)} · ${bytes(i.disk, 0)} disk`;
+  const sum = (ns: (number | undefined)[]) => ns.reduce<number>((n, v) => n + (v ?? 0), 0);
+  const uses = (pick: (v: VmLive) => number | undefined) => running.map((v) => ({ name: v.instance.name, value: pick(v) ?? 0 }));
+  const hotVms = (what: 'memory' | 'cpu' | 'disk') => running.filter((v) => gauges(v)[what].hot).map((v) => v.instance.name);
 </script>
 
 {#snippet badges(vm: VmLive)}
@@ -37,101 +52,154 @@
 {:else if live.snapshot.limaProblem && vms.length === 0}
   <!-- The problem panel above says what's wrong; there are no VMs to show yet. -->
 {:else if vms.length === 0}
-  <div class="panel empty">
-    <h2>No Lima instances</h2>
-    <p>Create one with <code>limactl create template://podman</code>, then start it here.</p>
-  </div>
+  <h1 class="headline">No Lima instances yet.</h1>
+  <p class="lede">Create one with <code>limactl create template://podman</code>, then start it here.</p>
 {:else}
-  <h2 class="section">Running <span class="count">{running.length}</span></h2>
-  {#if running.length === 0}
-    <p class="muted">No VM is running.</p>
-  {:else}
-    <div class="grid">
+  <div class="top">
+    <h1 class="headline">{fleetHeadline(running)}</h1>
+    {#if running.length}
+      <div class="capacities">
+        <Capacity name="Memory" items={uses((v) => v.latest.mem_used)} allocated={sum(running.map((v) => v.latest.mem_total ?? v.instance.memory))}
+          host={host?.memory} format={(n) => bytes(n)} hot={hotVms('memory')} />
+        <Capacity name="CPU" items={uses((v) => v.latest.cpu_mc)} allocated={sum(running.map((v) => v.instance.cpus * 1000))}
+          host={host ? host.cpus * 1000 : undefined} format={(n) => `${cores(n)} cores`} hot={hotVms('cpu')} />
+        <Capacity name="Disk" items={uses((v) => v.latest.store_used ?? v.latest.disk_used)} allocated={sum(running.map((v) => v.latest.store_size ?? v.latest.disk_size ?? v.instance.disk))}
+          host={host?.disk} format={(n) => bytes(n)} hot={hotVms('disk')} />
+        <p class="note">Solid: in use by each running VM. Pale: allocated to them. Full width: this computer.</p>
+      </div>
+    {/if}
+  </div>
+
+  {#if running.length}
+    <section class="fleet">
+      <div class="row heads serif" aria-hidden="true">
+        <span>{countWord(running.length)} {running.length === 1 ? 'is' : 'are'} running</span>
+        <span>Memory</span><span>CPU</span><span>Disk</span><span>Containers</span>
+      </div>
       {#each running as vm (vm.instance.name)}
         {@const i = vm.instance}
         {@const l = vm.latest}
+        {@const g = gauges(vm)}
+        {@const h = history.get(vm.entity)}
         {@const ctRunning = vm.containers.filter((c) => c.state === 'running').length}
         {@const issues = problems(vm)}
-        <article class="panel card">
-          <div class="head">
-            <a class="name" href={href(i)} title={i.name}>{i.name}</a>
-            {@render badges(vm)}
+        <article class="row vm">
+          <div class="who">
+            <div class="name-line"><a class="name serif" href={href(i)} title={i.name}>{i.name}</a>{@render badges(vm)}</div>
+            <p class="sentence serif" class:hot={g.memory.hot || g.disk.hot}>{vmSentence(vm)}</p>
+            {#if issues.length}<p class="error" title={issues.join('\n')}>{issues.join(' · ')}</p>{/if}
+            <VmActions inst={i} inlineError={false} bind:error={actionErrors[i.name]} />
           </div>
-          <p class="line muted" title={spec(i)}>{spec(i)}</p>
-          <div class="meters">
-            <Meter label="CPU" value={l.cpu_mc} max={i.cpus * 1000} text={`${cores(l.cpu_mc)} / ${i.cpus} cores`} />
-            <Meter label="Memory" value={l.mem_used} max={l.mem_total ?? i.memory} text={`${bytes(l.mem_used)} / ${bytes(l.mem_total ?? i.memory)}`} />
-            <Meter label="Disk" value={l.store_used ?? l.disk_used} max={l.store_size ?? l.disk_size} text={`${bytes(l.store_used ?? l.disk_used)} / ${bytes(l.store_size ?? l.disk_size)}`} />
+          <div class="meter num">
+            <span class="label narrow">Memory</span>
+            <p class="figure"><strong class:hot={g.memory.hot}>{bytes(g.memory.used)}</strong> <span class="muted">of {bytes(g.memory.size)}</span></p>
+            <Sketch sketch={sketch(band(h, 'mem_used'), g.memory.size)} hot={g.memory.hot} label="Memory" />
+            <Bar pct={g.memory.pct} label={`Memory: ${g.memory.pct.toFixed(0)} % of the allocation`} />
+            <p class="label">{g.memory.pct.toFixed(0)} % · stalled {permille(l.psi_mem_some)}</p>
           </div>
-          <dl class="facts">
-            <dt>Pressure</dt><dd>memory {permille(l.psi_mem_some)} · cpu {permille(l.psi_cpu_some)}</dd>
-            <dt>On your computer</dt><dd>{bytes(l.host_rss)} RAM</dd>
-            <dt>Containers</dt><dd><a href={`/containers?vm=${encodeURIComponent(i.name)}`}>{ctRunning} of {vm.containers.length} running</a></dd>
-          </dl>
-          <p class="problems error" title={issues.join('\n')}>{issues.join(' · ')}</p>
-          <VmActions inst={i} inlineError={false} bind:error={actionErrors[i.name]} />
+          <div class="meter num">
+            <span class="label narrow">CPU</span>
+            <p class="figure"><strong class:hot={g.cpu.hot}>{cores(l.cpu_mc)}</strong> <span class="muted">of {i.cpus} cores</span></p>
+            <Sketch sketch={sketch(band(h, 'cpu_mc'), g.cpu.size)} hot={g.cpu.hot} label="CPU" />
+            <Bar pct={g.cpu.pct} label={`CPU: ${g.cpu.pct.toFixed(0)} % of the cores`} />
+            <p class="label">{g.cpu.pct.toFixed(0)} % · stalled {permille(l.psi_cpu_some)}</p>
+          </div>
+          <div class="meter num">
+            <span class="label narrow">Disk</span>
+            <p class="figure"><strong class:hot={g.disk.hot}>{bytes(g.disk.used)}</strong> <span class="muted">of {bytes(g.disk.size)}</span></p>
+            <Sketch sketch={sketch(band(h, l.store_used != null ? 'store_used' : 'disk_used'), g.disk.size)} hot={g.disk.hot} label="Disk" />
+            <Bar pct={g.disk.pct} label={`Disk: ${g.disk.pct.toFixed(0)} % of the allocation`} />
+            <p class="label">{g.disk.pct.toFixed(0)} %</p>
+          </div>
+          <div class="containers num">
+            <span class="label narrow">Containers</span>
+            <div class="dots" role="img" aria-label={`${ctRunning} of ${vm.containers.length} containers running`}>
+              {#each vm.containers as c (c.id)}<span class="dot" class:off={c.state !== 'running'} title={`${c.composeService ?? c.name}: ${c.state}`}></span>{/each}
+            </div>
+            {#if vm.podmanError || !i.podmanSocket}
+              <span class="muted">{vm.podmanError ? 'podman not readable' : 'no podman socket'}</span>
+            {:else}
+              <a href={`/containers?vm=${encodeURIComponent(i.name)}`}>{ctRunning} of {vm.containers.length} running</a>
+            {/if}
+            <p class="label" title="What the VM costs this computer right now: the hypervisor's resident memory">{bytes(l.host_rss)} RAM on your computer</p>
+          </div>
         </article>
       {/each}
-    </div>
+      <p class="note">
+        Above each bar: the last 24 hours, left to right, on a ground that rises to the highest value reached. Hover one to see how
+        long was spent at each level instead. Bars are notched at quarters of the allocation; past the third they turn.
+      </p>
+    </section>
   {/if}
 
   {#if others.length}
-    <h2 class="section">Not running <span class="count">{others.length}</span></h2>
-    <div class="panel list">
-      {#each others as vm (vm.instance.name)}
-        {@const i = vm.instance}
-        {@const err = actionErrors[i.name]}
-        <div class="row">
-          <div class="who">
-            <a class="name" href={href(i)} title={i.name}>{i.name}</a>
-            <span class="badge" class:alert={i.status === 'Broken'}>{i.status}</span>
-            {@render badges(vm)}
+    <section class="stopped">
+      <h2 class="head muted">{countWord(others.length)} {others.length === 1 ? 'is' : 'are'} not running.</h2>
+      <p class="note">Bars show the memory each is set to, against the largest.</p>
+      <div class="list">
+        {#each others as vm (vm.instance.name)}
+          {@const i = vm.instance}
+          {@const err = actionErrors[i.name]}
+          <div class="item">
+            <div class="name-line">
+              <a class="name serif" href={href(i)} title={i.name}>{i.name}</a>
+              {#if i.status !== 'Stopped'}<span class="badge" class:alert={i.status === 'Broken'}>{i.status}</span>{/if}
+              {@render badges(vm)}
+            </div>
+            <div class="size num">
+              <Bar pct={share(i.memory, largest)} quiet plain />
+              <p class="label">{spec(i)}</p>
+              {#if err}<p class="error">{err}</p>{/if}
+            </div>
+            <VmActions inst={i} inlineError={false} bind:error={actionErrors[i.name]} />
           </div>
-          <span class="line muted" title={spec(i)}>{spec(i)}</span>
-          <span class="line error" title={err ?? ''}>{err ?? ''}</span>
-          <VmActions inst={i} inlineError={false} bind:error={actionErrors[i.name]} />
-        </div>
-      {/each}
-    </div>
+        {/each}
+      </div>
+    </section>
   {/if}
 {/if}
 
 <style>
-  .section { font-size: 0.85rem; font-weight: 600; color: var(--muted); margin: 0 0 0.5rem; }
-  .section:not(:first-child) { margin-top: 1.5rem; }
-  .count { font-weight: 400; }
-  /* Every running card has the same rows, each a fixed number of lines, so cards line up and
-     don't jump when a problem appears; grid-auto-rows keeps a stray overflow from staggering a row. */
-  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); grid-auto-rows: 1fr; gap: 1rem; }
-  .card { display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto auto auto auto 1fr auto; gap: 0.6rem; }
-  .head { display: flex; align-items: center; gap: 0.5rem; min-width: 0; }
-  .head .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 0 1 auto; }
-  .name { font-weight: 700; font-size: 1.05rem; color: var(--fg); }
+  .top { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); gap: 2rem 4rem; align-items: end; }
+  .capacities { display: grid; gap: 0.9rem; }
+  .fleet { margin-top: 1.6rem; }
+  .row { display: grid; grid-template-columns: minmax(15rem, 1.25fr) repeat(3, minmax(0, 1fr)) minmax(10.5rem, 0.85fr); column-gap: 2.2rem; }
+  .heads { font-size: 2.1rem; font-weight: 500; letter-spacing: -0.01em; line-height: 1.1; padding-bottom: 0.9rem; border-bottom: 1px solid var(--fg); align-items: end; }
+  .vm { padding: 1.6rem 0; border-bottom: 1px solid var(--border); align-items: start; }
+  .who { display: grid; gap: 0.5rem; min-width: 0; justify-items: start; }
+  .name-line { display: flex; align-items: center; gap: 0.5rem; min-width: 0; max-width: 100%; }
+  .name { font-size: 1.7rem; font-weight: 600; line-height: 1.15; color: var(--fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   a.badge { color: var(--alert); }
-  .line { margin: 0; font-size: 0.8rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
-  .muted { color: var(--muted); }
-  .meters { display: grid; gap: 0.5rem; }
-  .facts { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 0.15rem 0.75rem; margin: 0; font-size: 0.8rem; }
-  .facts dt { color: var(--muted); }
-  .facts dd { margin: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums; }
-  /* Room for two lines of problems, always reserved; the full text is in the tooltip. */
-  .problems {
-    line-height: 1.35; min-height: calc(2 * 1.35em); align-self: start;
-    display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden;
+  .sentence { margin: 0; font-size: 1.25rem; line-height: 1.3; }
+  .meter, .containers { display: grid; gap: 0.5rem; min-width: 0; align-content: start; }
+  .figure { margin: 0; font-size: 1.05rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .figure strong { font-size: 1.55rem; font-weight: 600; }
+  p.label { margin: 0; }
+  .narrow { display: none; }
+  .dots { display: flex; flex-wrap: wrap; gap: 4px; padding-top: 0.6rem; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--bar); box-sizing: border-box; }
+  .dot.off { background: none; border: 1.5px solid var(--warn); }
+  .fleet > .note { margin-top: 0.9rem; max-width: 60rem; }
+
+  .stopped { margin-top: 2.4rem; display: grid; gap: 0.4rem; }
+  .list { display: grid; grid-template-columns: repeat(auto-fit, minmax(30rem, 1fr)); column-gap: 4rem; border-top: 1px solid var(--border); margin-top: 0.5rem; }
+  .item { display: grid; grid-template-columns: minmax(8rem, 0.8fr) minmax(0, 1fr) auto; gap: 1rem; align-items: center; padding: 0.7rem 0; border-bottom: 1px solid var(--border); }
+  .item .name { font-size: 1.3rem; font-weight: 500; }
+  .size { display: grid; gap: 0.35rem; min-width: 0; }
+
+  @media (max-width: 980px) {
+    .top { grid-template-columns: minmax(0, 1fr); }
+    .heads { display: none; }
+    .fleet { border-top: 1px solid var(--fg); }
+    .row.vm { grid-template-columns: repeat(3, minmax(0, 1fr)); row-gap: 1.2rem; column-gap: 1.2rem; }
+    .who, .containers { grid-column: 1 / -1; }
+    .narrow { display: block; font-family: var(--serif); font-size: 1.2rem; color: var(--fg); }
+    .dots { padding-top: 0; }
+    .list { grid-template-columns: minmax(0, 1fr); }
   }
-  .list { display: grid; padding: 0.25rem 1rem; }
-  .row {
-    display: grid; grid-template-columns: minmax(10rem, 1.2fr) minmax(0, 1.5fr) minmax(0, 1fr) auto;
-    align-items: center; gap: 1rem; padding: 0.5rem 0; min-height: 2rem;
+  @media (max-width: 560px) {
+    .row.vm { grid-template-columns: minmax(0, 1fr); }
+    .item { grid-template-columns: minmax(0, 1fr) auto; }
+    .item .size { grid-column: 1 / -1; grid-row: 2; }
   }
-  .row + .row { border-top: 1px solid var(--border); }
-  .who { display: flex; align-items: center; gap: 0.5rem; min-width: 0; }
-  .who .name { font-size: 0.95rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .row .error { font-size: 0.8rem; }
-  @media (max-width: 760px) {
-    .row { grid-template-columns: minmax(0, 1fr) auto; }
-    .row > .line { display: none; }
-    .row > .line.error:not(:empty) { display: block; grid-column: 1 / -1; }
-  }
-  .empty { max-width: 32rem; }
 </style>
