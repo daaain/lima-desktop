@@ -1,6 +1,9 @@
-# The README's screenshots (docs/assets/screens/), redrawn from the UI's browser tests on fake data
-# (e2e-ui/) and committed when they changed: after every merge to main that touches the UI, and by
-# hand for any branch (Actions → Screenshots → Run workflow → pick the branch).
+# The README's screenshots, redrawn from the UI's browser tests on fake data (e2e-ui/) and published
+# to GitHub Pages (https://daaain.github.io/lima-desktop/), where the README and docs/design/ui.md
+# link to them: nothing is committed. After every merge to main that touches the UI; by hand for
+# any branch (Actions → Screenshots → Run workflow), which only main publishes — another branch's
+# are the run's `screenshots` artifact.
+# Needs, once: Settings → Pages → Source: GitHub Actions.
 # Actions are pinned to commit SHAs, as in ci.yml.
 name: Screenshots
 
@@ -16,7 +19,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write   # to commit the screenshots back to the branch it ran on
+  contents: read
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -27,8 +30,8 @@ env:
   PNPM_VERSION: 10.33.4
 
 jobs:
-  screenshots:
-    name: redraw the README's screenshots
+  draw:
+    name: draw the screenshots
     runs-on: ubuntu-26.04
     timeout-minutes: 15
     steps:
@@ -45,18 +48,32 @@ jobs:
       - run: pnpm exec playwright install --with-deps chromium
 
       - run: pnpm build
-      - name: Browser tests, screenshots into docs/assets/screens
-        run: LD_SCREENSHOT_DIR=docs/assets/screens node --test e2e-ui/ui.test.mjs
+      - name: Browser tests, screenshots into site/
+        run: LD_SCREENSHOT_DIR=site node --test e2e-ui/ui.test.mjs
+      - name: A page to look at them on
+        run: node e2e-ui/gallery.mjs site "$GITHUB_SHA"
 
-      # A push made with the workflow's own token starts no other workflow, so this can't loop.
-      - name: Commit them if they changed
-        run: |
-          git add docs/assets/screens
-          if git diff --cached --quiet; then
-            echo "The screenshots are unchanged."
-            exit 0
-          fi
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git commit -m "Redraw the README's screenshots"
-          git push origin "HEAD:${GITHUB_REF_NAME}"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: screenshots
+          path: site/
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        if: github.ref == 'refs/heads/main'
+        with:
+          path: site/
+
+  publish:
+    name: publish them to GitHub Pages
+    if: github.ref == 'refs/heads/main'
+    needs: draw
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    permissions:
+      pages: write      # to deploy
+      id-token: write   # to prove the deployment comes from this workflow
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - id: deploy
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1

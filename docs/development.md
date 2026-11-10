@@ -65,10 +65,15 @@ one, and stopped and broken ones. Every value is a function of the entity and th
 test fixes the time, so two runs draw the same picture. The test checks what each page says, in
 light and dark, and that the overview doesn't scroll sideways on a narrow window.
 
-Its screenshots go to `.snapshots/ui/`. `just screenshots` puts them in `docs/assets/screens/`
-instead, which the README shows; the **Screenshots** workflow does the same and commits them, after
-each merge to main that touches the UI, or by hand for any branch (Actions → Screenshots → Run
-workflow). A workflow can only be run by hand once its file is on the default branch.
+Its screenshots go to `.snapshots/ui/` (`LD_SCREENSHOT_DIR` puts them elsewhere). The
+**Screenshots** workflow runs the same test after each merge to main that touches the UI and
+publishes the pictures, with a page to look at them on (`e2e-ui/gallery.mjs`), to GitHub Pages:
+<https://daaain.github.io/lima-desktop/>. The README and [design/ui.md](./design/ui.md) link to
+them there, so nothing is committed. Run by hand for another branch (Actions → Screenshots → Run
+workflow), it publishes nothing: that branch's pictures are the run's `screenshots` artifact, as a
+pull request's are CI's `ui-screenshots`. It needs Pages switched on once (Settings → Pages →
+Source: GitHub Actions), and a workflow can only be run by hand once its file is on the default
+branch.
 
 Add to the fleet when a page gains a state worth seeing; nothing in it is recorded from a real
 machine, so it needs no anonymising. For real data in the real app, replay a snapshot (below).

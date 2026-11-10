@@ -77,6 +77,10 @@ for (const dark of [false, true]) {
     await atlas.locator('.sketch:not(.empty)').first().waitFor();
     // Capacity is drawn against the host.
     assert.match(await page.locator('.capacities').innerText(), /128\.0 GiB on this computer/);
+    // A stopped VM's disk image counts, and hovering its block says whose it is.
+    await page.locator('.capacity', { hasText: 'Disk' }).locator('.block[title^="foundry, not running"]').hover();
+    assert.match(await page.locator('.capacity', { hasText: 'Disk' }).innerText(), /foundry not running · 61\.0 GiB/);
+    await page.mouse.move(0, 0);
     await shoot(page, `overview${suffix}`);
     assert.deepEqual(errors, []);
     await close();

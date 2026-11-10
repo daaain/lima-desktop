@@ -78,15 +78,10 @@ e2e-clean:
       if out=$(limactl delete --force --tty=false "$vm" 2>&1); then echo "deleted $vm"; else echo "$out" | tail -3 >&2; exit 1; fi
     done
 
-# The built UI in a real browser against the fake backend (e2e-ui/): what each page says, in light and dark; screenshots into .snapshots/ui/
+# The built UI in a real browser against the fake backend (e2e-ui/): what each page says, in light and dark; screenshots into .snapshots/ui/ (CI publishes them for the README)
 ui-e2e:
     pnpm build
     node --test e2e-ui/ui.test.mjs
-
-# The same run, its screenshots into docs/assets/screens/: the ones the README shows (CI refreshes them on main)
-screenshots:
-    pnpm build
-    LD_SCREENSHOT_DIR=docs/assets/screens node --test e2e-ui/ui.test.mjs
 
 # Everything CI would run: type checks, all tests, clippy (the browser run is `just ui-e2e`)
 check:

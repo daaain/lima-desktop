@@ -7,9 +7,10 @@ so that the one that isn't fine is the first thing read, and the rest is still t
 sentence of its own; and every number sits next to a small drawing of itself on a stated scale.
 One typeface for what is said, one for what is counted, one colour for "look at this".
 
-<img src="../assets/screens/overview.png" alt="The VM overview" width="720">
+<img src="https://daaain.github.io/lima-desktop/overview.png" alt="The VM overview" width="720">
 
-The pictures in this guide and the README are drawn by `just ui-e2e` from invented data
+The pictures in this guide and the README are drawn from invented data by the UI's browser tests
+(`just ui-e2e`) and published by CI
 ([development.md](../development.md#the-ui-in-a-browser-on-fake-data-just-ui-e2e)).
 
 ## Words
@@ -77,11 +78,13 @@ Three, each a component, each with its scale said in words nearby.
   distribution instead: one hairline per percent of the scale, as tall as the time spent there,
   with a tick at the maximum. The data is the same hundred points either way (`almanac.sketch`),
   fetched per entity and refreshed once a minute (`history.svelte.ts`).
-- **Capacity** (`Capacity.svelte`): one bar per resource for the whole computer. Full width is
-  what the host has (its cores, RAM, and the filesystem Lima's instances are on, from the
-  backend's `host`); the pale stretch is what the running VMs are allocated; the solid segments
-  are what each is using, largest first, the ones past three quarters in `--warn`. When VMs are
-  allocated more than the host has (CPUs usually are), the allocation is the scale.
+- **Capacity** (`Capacity.svelte`): one bar per resource for the whole computer, a block per VM.
+  Full width is what the host has (its cores, RAM, and the filesystem Lima's instances are on,
+  from the backend's `host`); a block is as wide as its VM's allocation and solid as far as the VM
+  uses it, the ones past three quarters in `--warn`. Disk counts what each image really takes on
+  the host, so a VM that isn't running still has a block: only as wide as its image, and quieter.
+  Hovering a block names its VM and its numbers in the line above. When VMs are allocated more
+  than the host has (CPUs usually are), the allocations are the scale.
 
 The long charts on a VM's page (`Chart.svelte`, uPlot) are the only drawings with axes; each sits
 under the sentence, figures and bar it explains, with the allocation as a dashed line.

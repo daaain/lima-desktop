@@ -311,6 +311,17 @@ impl Collector {
                     c.latest.clear();
                 }
             }
+            // Stopped, a VM still takes its disk image's real size on this computer: the one
+            // reading it has. (A running VM's comes with each probe row.)
+            if !running {
+                match disk_image_alloc(&state.live.instance) {
+                    0 => state.live.latest.remove("host_disk_alloc"),
+                    alloc => state
+                        .live
+                        .latest
+                        .insert("host_disk_alloc".into(), alloc as i64),
+                };
+            }
         }
     }
 
@@ -650,14 +661,20 @@ fn host_columns(row: &mut [i64], inst: &Instance, sys: Option<&mut sysinfo::Syst
             }
         }
     }
-    let alloc: u64 = ["diffdisk", "basedisk"]
-        .iter()
-        .filter_map(|f| std::fs::metadata(Path::new(&inst.dir).join(f)).ok())
-        .map(|m| m.blocks() * 512)
-        .sum();
+    let alloc = disk_image_alloc(inst);
     if alloc > 0 {
         row[col("host_disk_alloc")] = alloc as i64;
     }
+}
+
+/// The bytes an instance's disk image really takes on the host: a sparse file's blocks, not its
+/// virtual length. 0 when there is no image to measure.
+fn disk_image_alloc(inst: &Instance) -> u64 {
+    ["diffdisk", "basedisk"]
+        .iter()
+        .filter_map(|f| std::fs::metadata(Path::new(&inst.dir).join(f)).ok())
+        .map(|m| m.blocks() * 512)
+        .sum()
 }
 
 /// A container's row from its stats (rates against the previous reading) and cgroup counters.

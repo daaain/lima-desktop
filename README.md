@@ -7,8 +7,8 @@ for each container — so you can see OOMs coming and right-size VMs.
 **Status:** early. macOS first (Linux builds too). Podman 5 or newer only (an older one is named, not half-read); compose projects shown read-only.
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="./docs/assets/screens/overview-dark.png">
-  <img src="./docs/assets/screens/overview.png" alt="Lima Desktop's VM overview: a headline saying how many VMs are past three quarters of their memory or disk, the host's memory, CPU and disk with what the VMs are allocated and using, then each running VM in a sentence with its memory, CPU and disk as figures, a day of history and a bar, and the stopped VMs below" width="760">
+  <source media="(prefers-color-scheme: dark)" srcset="https://daaain.github.io/lima-desktop/overview-dark.png">
+  <img src="https://daaain.github.io/lima-desktop/overview.png" alt="Lima Desktop's VM overview: a headline saying how many VMs are past three quarters of their memory or disk, the host's memory, CPU and disk with what the VMs are allocated and using, then each running VM in a sentence with its memory, CPU and disk as figures, a day of history and a bar, and the stopped VMs below" width="760">
 </picture>
 
 - Every Lima instance, live: status, allocation vs use, memory/CPU pressure (PSI), OOM kills, and
@@ -28,12 +28,13 @@ over the socket Lima already forwards.
 <details>
 <summary>A VM's page, and the containers of every running VM</summary>
 
-<img src="./docs/assets/screens/vm.png" alt="A VM's page: a headline verdict, then memory, CPU, pressure and disk each with a sentence, three figures, a bar and its history, the resize form, its out-of-memory kills and its containers" width="760">
-<img src="./docs/assets/screens/containers.png" alt="The Containers view: how many are running, then each VM's containers with memory and CPU as bars under a day of history" width="760">
+<img src="https://daaain.github.io/lima-desktop/vm.png" alt="A VM's page: a headline verdict, then memory, CPU, pressure and disk each with a sentence, three figures, a bar and its history, the resize form, its out-of-memory kills and its containers" width="760">
+<img src="https://daaain.github.io/lima-desktop/containers.png" alt="The Containers view: how many are running, then each VM's containers with memory and CPU as bars under a day of history" width="760">
 </details>
 
 The screenshots are of invented data: CI draws them from the UI's browser tests
-([e2e-ui/](./e2e-ui/)) after each merge to main. The look is described in
+([e2e-ui/](./e2e-ui/)) after each merge to main and publishes them
+[here](https://daaain.github.io/lima-desktop/). The look is described in
 [docs/design/ui.md](./docs/design/ui.md).
 
 See [docs/development.md](./docs/development.md) to build and test, and

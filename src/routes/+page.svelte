@@ -33,8 +33,12 @@
   }
   const href = (i: Instance) => `/vm/${encodeURIComponent(i.name)}`;
   const spec = (i: Instance) => `${i.cpus} CPU · ${bytes(i.memory, 0)} · ${bytes(i.disk, 0)} disk`;
-  const sum = (ns: (number | undefined)[]) => ns.reduce<number>((n, v) => n + (v ?? 0), 0);
-  const uses = (pick: (v: VmLive) => number | undefined) => running.map((v) => ({ name: v.instance.name, value: pick(v) ?? 0 }));
+  // On the host a disk is what its image really takes (a sparse file's blocks), whether or not
+  // the VM runs; a running VM is also promised the rest of its size.
+  const diskHoldings = $derived([
+    ...running.map((v) => ({ name: v.instance.name, used: v.latest.host_disk_alloc ?? v.latest.store_used ?? v.latest.disk_used ?? 0, allocated: v.instance.disk })),
+    ...others.map((v) => ({ name: v.instance.name, used: v.latest.host_disk_alloc ?? 0 })),
+  ]);
   const hotVms = (what: 'memory' | 'cpu' | 'disk') => running.filter((v) => gauges(v)[what].hot).map((v) => v.instance.name);
 </script>
 
@@ -59,13 +63,12 @@
     <h1 class="headline">{fleetHeadline(running)}</h1>
     {#if running.length}
       <div class="capacities">
-        <Capacity name="Memory" items={uses((v) => v.latest.mem_used)} allocated={sum(running.map((v) => v.latest.mem_total ?? v.instance.memory))}
+        <Capacity name="Memory" items={running.map((v) => ({ name: v.instance.name, used: v.latest.mem_used ?? 0, allocated: v.latest.mem_total ?? v.instance.memory }))}
           host={host?.memory} format={(n) => bytes(n)} hot={hotVms('memory')} />
-        <Capacity name="CPU" items={uses((v) => v.latest.cpu_mc)} allocated={sum(running.map((v) => v.instance.cpus * 1000))}
+        <Capacity name="CPU" items={running.map((v) => ({ name: v.instance.name, used: v.latest.cpu_mc ?? 0, allocated: v.instance.cpus * 1000 }))}
           host={host ? host.cpus * 1000 : undefined} format={(n) => `${cores(n)} cores`} hot={hotVms('cpu')} />
-        <Capacity name="Disk" items={uses((v) => v.latest.store_used ?? v.latest.disk_used)} allocated={sum(running.map((v) => v.latest.store_size ?? v.latest.disk_size ?? v.instance.disk))}
-          host={host?.disk} format={(n) => bytes(n)} hot={hotVms('disk')} />
-        <p class="note">Solid: in use by each running VM. Pale: allocated to them. Full width: this computer.</p>
+        <Capacity name="Disk" items={diskHoldings} host={host?.disk} format={(n) => bytes(n)} hot={hotVms('disk')} />
+        <p class="note">A block per VM: solid is in use, pale the rest of its allocation. Disk counts what each image really takes on this computer, stopped VMs' included. Full width: this computer.</p>
       </div>
     {/if}
   </div>

@@ -90,7 +90,8 @@
   const service = (project, name, image, o = {}) => container(`${project}-${name}-1`, image, { project, service: name, ...o });
 
   function vm(inst, shape, containers = [], o = {}) {
-    if (inst.status !== 'Running') return { instance: inst, latest: {}, containers: [], ...o };
+    // Stopped, a VM still has its disk image: the one reading the backend gives for it.
+    if (inst.status !== 'Running') return { instance: inst, latest: o.imageGiB ? { host_disk_alloc: o.imageGiB * GiB } : {}, containers: [] };
     const mem = inst.memory - 0.25 * GiB;
     const id = entity({
       cpu_mc: scaled(shape.cpu, inst.cpus * 1000),
@@ -157,10 +158,10 @@
     vm(instance('ember', 'Running', 2, 4, 20), { cpu: shapes.flat(0.02, 0.01), mem: shapes.flat(0.21, 0.01), disk: shapes.flat(0.36, 0) }, [], {
       podmanError: 'podman 4.3.1 in this VM is too old: Lima Desktop needs podman 5 or newer',
     }),
-    vm(instance('foundry', 'Stopped', 12, 80, 100)),
-    vm(instance('kiln', 'Stopped', 8, 16, 60)),
-    vm(instance('mirror', 'Stopped', 4, 8, 60, { marker: marker({ state: 'active', manager: 'foldyard', hint: 'Use `fy` to start it.', locked: ['start', 'delete', 'resize'], source: 'file' }) })),
-    vm(instance('sprout', 'Stopped', 2, 4, 10)),
+    vm(instance('foundry', 'Stopped', 12, 80, 100), null, [], { imageGiB: 61 }),
+    vm(instance('kiln', 'Stopped', 8, 16, 60), null, [], { imageGiB: 22 }),
+    vm(instance('mirror', 'Stopped', 4, 8, 60, { marker: marker({ state: 'active', manager: 'foldyard', hint: 'Use `fy` to start it.', locked: ['start', 'delete', 'resize'], source: 'file' }) }), null, [], { imageGiB: 9 }),
+    vm(instance('sprout', 'Stopped', 2, 4, 10), null, [], { imageGiB: 3 }),
     vm(instance('relic', 'Broken', 2, 2, 20)),
   ];
 
@@ -169,7 +170,7 @@
     return {
       vms: fleet.map((v) => ({
         ...v,
-        latest: v.entity ? latest(v.entity, t) : {},
+        latest: v.entity ? latest(v.entity, t) : v.latest,
         containers: v.containers.map((c) => ({ ...c, latest: c.state === 'running' ? latest(c.entity, t) : {} })),
       })),
       host: { cpus: 16, memory: 128 * GiB, disk: 994 * GiB },

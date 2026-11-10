@@ -72,24 +72,52 @@ export function fleetHeadline(running: VmLive[]): string {
     : `${countWord(hot.length)} VMs are past three quarters of their ${what}.`;
 }
 
-export interface Segment {
+/** What one VM holds of a host resource: what it uses, and what it's allocated while it runs. */
+export interface Holding {
   name: string;
-  value: number;
-  /** Left edge and width in percent of the whole. */
+  used: number;
+  /** Absent for a VM that isn't running: it holds only what it uses (its disk image). */
+  allocated?: number;
+}
+export interface Block extends Holding {
+  /** Left edge and width in percent of the scale. */
   x: number;
   w: number;
+  /** How much of the block is in use, in percent of the block. */
+  fill: number;
 }
-/** A stacked bar: who has how much of the total, largest first. */
-export function segments(items: { name: string; value: number }[]): Segment[] {
-  const sorted = items.filter((i) => i.value > 0).sort((a, b) => b.value - a.value);
-  const total = sorted.reduce((n, i) => n + i.value, 0);
+export interface HostBar {
+  blocks: Block[];
+  used: number;
+  allocated: number;
+  /** What the full width stands for: the host, or the holdings when they add up to more. */
+  scale: number;
+}
+
+/**
+ * A host resource as one bar of blocks, a block per VM: as wide as its allocation (or, not
+ * running, as what it uses), running VMs first and the largest first within each.
+ */
+export function hostBar(items: Holding[], host?: number | null): HostBar {
+  const width = (i: Holding) => Math.max(i.allocated ?? 0, i.used, 0);
+  const held = items.filter((i) => width(i) > 0);
+  const order = (i: Holding) => (i.allocated == null ? 1 : 0);
+  const sorted = [...held].sort((a, b) => order(a) - order(b) || width(b) - width(a));
+  const total = sorted.reduce((n, i) => n + width(i), 0);
+  const scale = Math.max(host ?? 0, total) || 1;
   let x = 0;
-  return sorted.map((i) => {
-    const w = (i.value / total) * 100;
-    const seg = { ...i, x, w };
+  const blocks = sorted.map((i) => {
+    const w = (width(i) / scale) * 100;
+    const block = { ...i, x, w, fill: Math.min(100, (Math.max(0, i.used) / width(i)) * 100) };
     x += w;
-    return seg;
+    return block;
   });
+  return {
+    blocks,
+    used: held.reduce((n, i) => n + Math.max(0, i.used), 0),
+    allocated: held.reduce((n, i) => n + (i.allocated ?? 0), 0),
+    scale,
+  };
 }
 
 export interface Sketch {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { containersHeadline, containersSentence, countWord, exitedSentence, runsSentence, fleetHeadline, quarters, segments, share, sketch, vmHeadline, vmSentence } from './almanac';
+import { containersHeadline, containersSentence, countWord, exitedSentence, runsSentence, fleetHeadline, hostBar, quarters, share, sketch, vmHeadline, vmSentence } from './almanac';
 import type { Hint } from './rightsize';
 import { container, vm } from './testing';
 
@@ -67,12 +67,22 @@ describe('countWord', () => {
   });
 });
 
-describe('segments', () => {
-  it('lays shares end to end, largest first, skipping empty ones', () => {
-    const s = segments([{ name: 'a', value: 1 }, { name: 'b', value: 3 }, { name: 'c', value: 0 }]);
-    expect(s.map((x) => x.name)).toEqual(['b', 'a']);
-    expect(s[0]).toMatchObject({ x: 0, w: 75 });
-    expect(s[1]).toMatchObject({ x: 75, w: 25 });
+describe('hostBar', () => {
+  it('gives each VM a block as wide as its allocation, running and largest first', () => {
+    const bar = hostBar([{ name: 'small', used: 1, allocated: 10 }, { name: 'off', used: 5 }, { name: 'big', used: 15, allocated: 20 }], 100);
+    expect(bar.blocks.map((b) => b.name)).toEqual(['big', 'small', 'off']);
+    expect(bar.blocks[0]).toMatchObject({ x: 0, w: 20, fill: 75 });
+    expect(bar.blocks[1]).toMatchObject({ x: 20, w: 10, fill: 10 });
+    // Not running: only what it uses, all of it solid.
+    expect(bar.blocks[2]).toMatchObject({ x: 30, w: 5, fill: 100 });
+    expect(bar).toMatchObject({ used: 21, allocated: 30, scale: 100 });
+  });
+  it('scales to the holdings when they are more than the host has, or the host is unknown', () => {
+    expect(hostBar([{ name: 'a', used: 1, allocated: 12 }, { name: 'b', used: 1, allocated: 12 }], 16).scale).toBe(24);
+    expect(hostBar([{ name: 'a', used: 1, allocated: 8 }]).blocks[0].w).toBe(100);
+  });
+  it('leaves out a VM that holds nothing', () => {
+    expect(hostBar([{ name: 'a', used: 0 }], 10).blocks).toEqual([]);
   });
 });
 
