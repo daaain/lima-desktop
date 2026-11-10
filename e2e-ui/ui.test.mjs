@@ -152,6 +152,38 @@ for (const dark of [false, true]) {
   });
 }
 
+test('Container details open inline, several at once, and hold a value being read', async () => {
+  const { page, errors, close } = await open('/containers', { height: 1400 });
+  const line = (name) => page.locator('.line', { has: page.locator('.name', { hasText: new RegExp(`^${name}`) }) }).first();
+  await line('frontend').click();
+  await line('graph-api').click();
+  // Each opens right under its own line, and both stay open.
+  const details = page.locator('section.detail');
+  assert.equal(await details.count(), 2);
+  for (const name of ['frontend', 'graph-api']) {
+    const next = await line(name).evaluate((el) => el.nextElementSibling?.classList.contains('detail') && el.nextElementSibling.querySelector('h3')?.textContent);
+    assert.ok(String(next).includes(name), `${name}'s detail follows its line`);
+  }
+  // Hovering a chart fills its legend without changing its height.
+  const chart = details.first().locator('.chart').first();
+  await chart.locator('.u-over').waitFor();
+  const legend = chart.locator('.u-legend');
+  const before = await legend.boundingBox();
+  const over = await chart.locator('.u-over').boundingBox();
+  await page.mouse.move(over.x + over.width * 0.6, over.y + over.height / 2);
+  const value = legend.locator('.u-series').nth(3).locator('.u-value');
+  await page.waitForFunction((el) => el.textContent !== '–', await value.elementHandle());
+  assert.equal((await legend.boundingBox()).height, before.height, 'the legend keeps its height');
+  // The snapshot updates every second: the value under the pointer stays shown.
+  await page.waitForTimeout(2500);
+  assert.notEqual(await value.textContent(), '–');
+  // Closing one leaves the other.
+  await details.first().getByRole('button', { name: 'Close' }).click();
+  assert.equal(await details.count(), 1);
+  assert.deepEqual(errors, []);
+  await close();
+});
+
 for (const [path, ready] of [['/', 'article'], ['/containers', '.line'], ['/images', '.line'], ['/volumes', '.line']]) {
   test(`${path} stacks on a narrow window`, async () => {
     const { page, errors, close } = await open(path, { width: 420, height: 900 });

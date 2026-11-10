@@ -21,7 +21,8 @@
   let to = $state(Date.now());
   const from = $derived(to - rangeMs(range));
   let series = $state<Series | null>(null);
-  let selected = $state<string | null>(null);
+  // Open container details, any number, each under its own line.
+  let open = $state<string[]>([]);
   let actionError = $state<string | null>(null);
   let df = $state<Record<string, unknown> | null>(null);
   let hints = $state<Hint[]>([]);
@@ -99,7 +100,14 @@
       .sort(([a], [b]) => (a === null ? 1 : b === null ? -1 : a.localeCompare(b)))
       .map(([project, containers]) => ({ project, containers: [...containers].sort(byMemory) }));
   });
-  const selectedContainer = $derived(vm?.containers.find((c) => c.id === selected) ?? null);
+  function toggle(id: string) {
+    open = open.includes(id) ? open.filter((o) => o !== id) : [...open, id];
+  }
+  /** From an OOM kill: open its container's detail (if it isn't) and bring it into view. */
+  function show(id: string) {
+    if (!open.includes(id)) open = [...open, id];
+    tick().then(() => document.getElementById(`detail-${id}`)?.scrollIntoView({ block: 'center', behavior: 'smooth' }));
+  }
 
   async function loadDf() {
     try {
@@ -179,7 +187,7 @@
             {#each oom as e}
               {@const who = oomWho(e, vm.containers)}
               {@const level = oomLevel(e)}
-              <tr class:clickable={!who.removed && e.containerId} onclick={() => { if (!who.removed && e.containerId) selected = e.containerId; }}>
+              <tr class:clickable={!who.removed && e.containerId} onclick={() => { if (!who.removed && e.containerId) show(e.containerId); }}>
                 <td class="when num">{when(e.ts)}</td>
                 <td>
                   <span class="cname">{who.name}</span>{#if who.context}<span class="muted cid">{who.context}</span>{/if}
@@ -219,16 +227,18 @@
           {#if groups.length > 1 || g.project}<h3 class="group serif">{g.project ?? 'Not in a compose project'}</h3>{/if}
           {#each g.containers as c (c.id)}
             <ContainerLine vm={name} {c} history={history.get(c.entity)} {memScale} vmCpus={i.cpus} vmMemory={i.memory} second="activity" now={live.snapshot?.updated}
-              selected={selected === c.id} onselect={() => (selected = selected === c.id ? null : c.id)} onerror={(e) => (actionError = e)} />
+              selected={open.includes(c.id)} onselect={() => toggle(c.id)} onerror={(e) => (actionError = e)} />
+            {#if open.includes(c.id)}
+              <div id={`detail-${c.id}`}>
+                <ContainerDetail vm={name} {c} {from} {to} vmMemory={i.memory} oomMarkers={oomMarkers(oom, c.id)} onclose={() => toggle(c.id)} />
+              </div>
+            {/if}
           {/each}
         {/each}
       </div>
     {/if}
   </section>
 
-  {#if selectedContainer}
-    <ContainerDetail vm={name} c={selectedContainer} {from} {to} vmMemory={i.memory} oomMarkers={oomMarkers(oom, selectedContainer.id)} onclose={() => (selected = null)} />
-  {/if}
 {/if}
 
 <style>

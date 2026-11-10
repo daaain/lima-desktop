@@ -17,14 +17,13 @@
 
   let query = $state('');
   let actionError = $state<string | null>(null);
-  let selected = $state<{ vm: string; id: string; to: number } | null>(null);
+  // Open details, any number, each under its own line: `vm/id` → when it was opened (its hour ends there).
+  let open = $state<Record<string, number>>({});
 
   const urlFilter = $derived(readContainerFilter(page.url.searchParams));
   const scope = $derived(podmanScope(live.snapshot));
   const all = $derived(containerRows(live.snapshot));
   const rows = $derived(filterContainers(all, { ...urlFilter, query }));
-  const selectedRow = $derived(selected && all.find((r) => r.vm === selected?.vm && r.c.id === selected?.id));
-  const selectedVmMemory = $derived(live.vm(selected?.vm ?? '')?.instance.memory ?? 0);
 
   const history = new History();
   history.follow(() => rows.filter((r) => r.c.state === 'running').map((r) => r.c.entity));
@@ -45,8 +44,14 @@
   function setParam(key: string, value: string | null) {
     goto(withParam(page.url, key, value), { replaceState: true, keepFocus: true, noScroll: true });
   }
-  function toggle(vm: string, id: string) {
-    selected = selected?.vm === vm && selected.id === id ? null : { vm, id, to: Date.now() };
+  const keyOf = (vm: string, id: string) => `${vm}/${id}`;
+  function toggle(key: string) {
+    if (key in open) close(key);
+    else open = { ...open, [key]: Date.now() };
+  }
+  function close(key: string) {
+    const { [key]: _, ...rest } = open;
+    open = rest;
   }
 </script>
 
@@ -89,8 +94,12 @@
       <section>
         <h2 class="head"><a href={`/vm/${encodeURIComponent(g.vm)}`}>{g.vm}</a> {runsSentence(g.rows.map((r) => r.c))}</h2>
         {#each g.rows as { vm, c } (c.id)}
+          {@const key = keyOf(vm, c.id)}
           <ContainerLine {vm} {c} history={history.get(c.entity)} {memScale} vmCpus={g.live?.instance.cpus ?? 1} vmMemory={g.live?.instance.memory ?? 0} second="image"
-            now={live.snapshot?.updated} selected={selected?.vm === vm && selected.id === c.id} onselect={() => toggle(vm, c.id)} onerror={(e) => (actionError = e)} />
+            now={live.snapshot?.updated} selected={key in open} onselect={() => toggle(key)} onerror={(e) => (actionError = e)} />
+          {#if open[key] != null}
+            <ContainerDetail {vm} {c} from={open[key] - DETAIL_WINDOW_MS} to={open[key]} vmMemory={g.live?.instance.memory ?? 0} onclose={() => close(key)} />
+          {/if}
         {/each}
       </section>
     {/each}
@@ -101,10 +110,6 @@
   </p>
 {/if}
 
-{#if selected && selectedRow}
-  <ContainerDetail vm={selected.vm} c={selectedRow.c} from={selected.to - DETAIL_WINDOW_MS} to={selected.to}
-    vmMemory={selectedVmMemory} onclose={() => (selected = null)} />
-{/if}
 
 <style>
   .summary { display: flex; flex-wrap: wrap; align-items: center; gap: 0.8rem 2.5rem; }

@@ -17,8 +17,9 @@
   let inspect = $state('');
   let error = $state<string | null>(null);
 
+  // `c` is a new object every second; fetch again only when the entity or the range changes.
+  const entity = $derived(c.entity);
   $effect(() => {
-    const entity = c.entity;
     if (tab !== 'metrics' || entity == null) return;
     api.series(entity, from, to).then((s) => (series = s), (e) => (error = String(e)));
   });
