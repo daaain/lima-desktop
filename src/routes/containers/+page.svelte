@@ -12,6 +12,7 @@
   import ContainerDetail from '$lib/ContainerDetail.svelte';
   import UnlistedVms from '$lib/UnlistedVms.svelte';
   import VmSelect from '$lib/VmSelect.svelte';
+  import { unfold } from '$lib/motion';
 
   const DETAIL_WINDOW_MS = 3_600_000;
 
@@ -98,7 +99,9 @@
           <ContainerLine {vm} {c} history={history.get(c.entity)} {memScale} vmCpus={g.live?.instance.cpus ?? 1} vmMemory={g.live?.instance.memory ?? 0} second="image"
             now={live.snapshot?.updated} selected={key in open} onselect={() => toggle(key)} onerror={(e) => (actionError = e)} />
           {#if open[key] != null}
-            <ContainerDetail {vm} {c} from={open[key] - DETAIL_WINDOW_MS} to={open[key]} vmMemory={g.live?.instance.memory ?? 0} onclose={() => close(key)} />
+            <div transition:unfold>
+              <ContainerDetail {vm} {c} from={open[key] - DETAIL_WINDOW_MS} to={open[key]} vmMemory={g.live?.instance.memory ?? 0} onclose={() => close(key)} />
+            </div>
           {/if}
         {/each}
       </section>

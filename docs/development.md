@@ -23,7 +23,8 @@ prerequisites). macOS needs Xcode's command-line tools.
 | --- | --- |
 | `lima.rs` | `limactl list --format '{{json .}}'` (never `--json`), start/stop/restart/delete, resize via `limactl edit --set` on a stopped VM; finds `limactl` outside a Finder-launched app's bare PATH |
 | `marker.rs` | the [managed-by marker](./design/managed-by.md) |
-| `podman.rs` | libpod REST over the instance's forwarded unix socket (a short symlink when the path is over `sun_path`'s limit): containers, stats, logs, images and volumes (list, remove — never forced — and prune), `system df` |
+| `podman.rs` | libpod REST over the instance's forwarded unix socket (a short symlink when the path is over `sun_path`'s limit): containers, stats, logs, images (with their history) and volumes (list, remove — never forced — and prune), `system df` |
+| `guest_files.rs` | what's in a volume, or what one image layer added, read-only over Lima's ssh (libpod has no API for either): a directory's entries or a file's first 64 KiB, inside `podman unshare` (rootless: files owned by subuids) or `sudo -n` (rootful). The folder comes from podman (a volume's mountpoint; a layer's overlay `diff`, from the image's inspect, matched to its history's sized steps), the path is relative to it, and one leading outside it, a symlink's included, is refused in the guest. In a layer, whiteouts are said as removed |
 | `probe.sh` / `probe.rs` | the guest probe: POSIX sh over Lima's ssh, read-only, one block per second |
 | `collector.rs` | the loops: `limactl list` every 3 s; per running VM the probe, 1 Hz libpod stats and the OOM reader; host-side hypervisor RSS/CPU and disk-image allocation; and what the host has (cores, RAM, the size of the filesystem the instances are on), to scale allocations against |
 | `journal.rs` | a one-shot, read-only `journalctl _TRANSPORT=kernel -o json --grep …` over Lima's ssh: as the user where Lima put it in `systemd-journal` (only when the host UID is under 1000, i.e. macOS), else with `sudo -n` (Lima's default passwordless sudo); where neither works, says why and the `usermod` fix |
@@ -46,10 +47,12 @@ Containers, Images, Volumes. How it looks and reads is in [design/ui.md](./desig
 | `lib/Sizing.svelte` | a VM's four figures with their verdicts (`lib/rightsize.ts`), and the resize form |
 | `lib/ContainerLine.svelte` | one container as a line, shared by the Containers view and a VM's page |
 | `lib/GroupHead.svelte`, `lib/ItemLine.svelte` | the Images and Volumes views' VM group (its sentence, disk and clean-up) and an image or volume as a line |
-| `lib/measured.svelte.ts` | `system df` per VM, on request: what each image holds alone, each volume's size and users; shared by Images and Volumes, re-taken for a VM after a removal in it |
+| `lib/measured.svelte.ts` | `system df` per VM, once when the app first sees it running and then on request: what each image holds alone, each volume's size and users; shared by Images and Volumes, re-taken for a VM after a removal in it |
 | `lib/live.svelte.ts` | the 1 Hz snapshot every page shares (VMs, their containers and latest metrics) |
 | `lib/perVm.ts` | which VMs a podman-wide view lists (and the sentences about those it leaves out); asking each VM with `Promise.allSettled`, so one broken VM doesn't blank a list |
-| `lib/perVmList.svelte.ts` | images and volumes aren't in the snapshot: fetched on view open, after actions, on Refresh and every 15 s |
+| `lib/perVmList.svelte.ts`, `lib/podmanLists.svelte.ts` | images and volumes aren't in the snapshot: fetched from the start (the layout follows them, and measures each VM once), kept for the app's life so their views open on what's known, again after actions, on Refresh and every 15 s |
+| `lib/ImageLayers.svelte`, `lib/Files.svelte` | the details an image's or a volume's line opens: its layers (each opening what it added); its files |
+| `lib/motion.ts` | details unfolding under their line (none under reduced motion) |
 | `lib/containers.ts`, `lib/images.ts`, `lib/volumes.ts` | each view's rows, filters and derived facts (an image is in use when its VM's engine counts a container on it, or the snapshot shows one; a volume's size and users come from `system df`, on demand — it walks every volume) |
 | `routes/containers`, `routes/images`, `routes/volumes` | the views; `?vm=` (and `&running=1` for containers) in the URL is the filter, so other pages can link to it |
 

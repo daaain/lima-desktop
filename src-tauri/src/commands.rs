@@ -6,7 +6,9 @@ use tauri::State;
 
 use crate::collector::{Collector, Snapshot, now_ms};
 use crate::lima::{self, Action, Resize};
-use crate::podman::{ContainerAction, Image, Libpod, Pruned, Volume};
+use crate::podman::{ContainerAction, Image, Layer, Libpod, Pruned, Volume};
+use crate::guest_files::{self, Folder, Listing, Peek};
+use serde::Deserialize;
 use crate::store::{Entity, OomRecord, Series, Summary};
 
 type C<'a> = State<'a, Arc<Collector>>;
@@ -85,6 +87,11 @@ pub async fn images(c: C<'_>, vm: String) -> Result<Vec<Image>, String> {
     libpod(&c, &vm).await?.images().await.map_err(err)
 }
 
+#[tauri::command]
+pub async fn image_history(c: C<'_>, vm: String, id: String) -> Result<Vec<Layer>, String> {
+    libpod(&c, &vm).await?.history(&id).await.map_err(err)
+}
+
 /// `reference`: a `repository:tag`, or an id for a dangling image.
 #[tauri::command]
 pub async fn image_remove(c: C<'_>, vm: String, reference: String) -> Result<(), String> {
@@ -100,6 +107,71 @@ pub async fn images_prune(c: C<'_>, vm: String, all: bool) -> Result<Pruned, Str
 #[tauri::command]
 pub async fn volumes(c: C<'_>, vm: String) -> Result<Vec<Volume>, String> {
     libpod(&c, &vm).await?.volumes().await.map_err(err)
+}
+
+/// A folder of podman's in the guest whose files the UI can look at, read-only.
+#[derive(Debug, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum Source {
+    Volume { name: String },
+    /// `layer`: which of the image's layers, newest first — the n-th history step with a size.
+    Layer { image: String, layer: usize },
+}
+
+/// Where `source` is kept in the guest (from podman, never from the UI), what kind of folder it
+/// is, and the ssh config to get there.
+async fn place(c: &Collector, vm: &str, source: &Source) -> Result<(String, String, Folder), String> {
+    let ssh_config = c
+        .snapshot()
+        .vms
+        .into_iter()
+        .find(|v| v.instance.name == vm)
+        .map(|v| v.instance.ssh_config_file)
+        .filter(|f| !f.is_empty())
+        .ok_or_else(|| format!("'{vm}' has no ssh config"))?;
+    let pod = libpod(c, vm).await?;
+    match source {
+        Source::Volume { name } => {
+            let volume = pod
+                .volumes()
+                .await
+                .map_err(err)?
+                .into_iter()
+                .find(|v| &v.name == name)
+                .ok_or_else(|| format!("there's no volume '{name}' in {vm} any more"))?;
+            if volume.mountpoint.is_empty() {
+                return Err(format!("podman doesn't say where '{name}' is kept (its driver is {})", volume.driver));
+            }
+            Ok((ssh_config, volume.mountpoint, Folder::Volume))
+        }
+        Source::Layer { image, layer } => {
+            let (dirs, history) = tokio::try_join!(pod.layer_dirs(image), pod.history(image)).map_err(err)?;
+            // The steps with a size are the layers: they must count the same to be matched.
+            let sized = history.iter().filter(|l| l.size > 0).count();
+            if sized != dirs.len() {
+                return Err(format!(
+                    "the image's history has {sized} layers with a size but podman keeps {}: can't tell which is which",
+                    dirs.len()
+                ));
+            }
+            let dir = dirs.into_iter().nth(*layer).ok_or_else(|| format!("the image has no layer {layer}"))?;
+            Ok((ssh_config, dir, Folder::Layer))
+        }
+    }
+}
+
+/// A directory in a volume or an image layer, `path` relative to its top. Read-only, over Lima's ssh.
+#[tauri::command]
+pub async fn guest_files(c: C<'_>, vm: String, source: Source, path: String) -> Result<Listing, String> {
+    let (ssh, root, folder) = place(&c, &vm, &source).await?;
+    guest_files::list(&ssh, &vm, &root, folder, &path).await.map_err(err)
+}
+
+/// The start of a file in a volume or an image layer. Read-only, over Lima's ssh.
+#[tauri::command]
+pub async fn guest_file(c: C<'_>, vm: String, source: Source, path: String) -> Result<Peek, String> {
+    let (ssh, root, _) = place(&c, &vm, &source).await?;
+    guest_files::peek(&ssh, &vm, &root, &path).await.map_err(err)
 }
 
 #[tauri::command]

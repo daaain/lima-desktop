@@ -144,6 +144,26 @@ export function sketch(band: Band | undefined, scale: number | undefined): Sketc
   return { columns, max: Math.max(...peaks, ...seen), distribution: counts.map((n) => n / most) };
 }
 
+/**
+ * `series` over the whole of [from, to] in `points` buckets: the backend leaves out the empty ones
+ * before the first sample and after the last, so a container with an hour of history would come
+ * back as a few columns stretched across the day. Padded with nulls, its columns keep their width
+ * and sit at their time.
+ */
+export function fullWindow(series: Series, from: number, to: number, points: number): Series {
+  const n = series.ts.length;
+  if (n === 0 || n >= points) return series;
+  const width = Math.max(1, Math.floor((to - from) / points));
+  const lead = Math.max(0, Math.min(points - n, Math.round((series.ts[0] - from) / width)));
+  const trail = points - n - lead;
+  const nulls = (k: number) => new Array<null>(k).fill(null);
+  const pad = <T,>(xs: T[]) => [...nulls(lead), ...xs, ...nulls(trail)];
+  const metrics: Series['metrics'] = {};
+  for (const [k, b] of Object.entries(series.metrics)) metrics[k] = { min: pad(b.min), max: pad(b.max), avg: pad(b.avg) };
+  const ts = [...Array.from({ length: lead }, (_, i) => from + i * width), ...series.ts, ...Array.from({ length: trail }, (_, i) => from + (lead + n + i) * width)];
+  return { ...series, ts, metrics };
+}
+
 export const band = (series: Series | undefined | null, key: string): Band | undefined => series?.metrics[key];
 
 const WHAT = { memory: 'memory', cpu: 'CPU', disk: 'disk' } as const;

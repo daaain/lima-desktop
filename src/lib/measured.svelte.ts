@@ -1,6 +1,7 @@
 // `system df` per VM: what each image holds alone, and each volume's size and how many containers
-// use it. It walks every volume, so it runs only when asked; the Images and Volumes views share
-// one measurement, and a VM that was measured is measured again after something is removed from it.
+// use it. It walks every volume, so it runs once per VM when the app first sees it running
+// (podmanLists.svelte.ts), then only when asked; the Images and Volumes views share one
+// measurement, and a VM that was measured is measured again after something is removed from it.
 import { api } from './api';
 import { imageOwnSizes } from './images';
 import { fromEachVm, type VmError } from './perVm';
@@ -17,11 +18,25 @@ export interface Measurement {
 class Measured {
   byVm = $state<Record<string, Measurement>>({});
   failed = $state<VmError[]>([]);
-  measuring = $state(false);
+  #pending = $state(0);
+  /** VM → when it was last asked to be measured, ms. */
+  #tried = new Map<string, number>();
+
+  get measuring() {
+    return this.#pending > 0;
+  }
+
+  /** Measure those of `vms` never measured, unless tried within `retryMs`. */
+  once(vms: string[], retryMs: number) {
+    const now = Date.now();
+    const due = vms.filter((vm) => !this.byVm[vm] && now - (this.#tried.get(vm) ?? -Infinity) >= retryMs);
+    return this.measure(due);
+  }
 
   async measure(vms: string[]) {
     if (vms.length === 0) return;
-    this.measuring = true;
+    for (const vm of vms) this.#tried.set(vm, Date.now());
+    this.#pending++;
     const { ok, failed } = await fromEachVm(vms, api.systemDf);
     const at = Date.now();
     const next = { ...this.byVm };
@@ -29,7 +44,7 @@ class Measured {
     for (const { vm } of failed) delete next[vm];
     this.byVm = next;
     this.failed = [...this.failed.filter((f) => !vms.includes(f.vm)), ...failed];
-    this.measuring = false;
+    this.#pending--;
   }
 
   /** After a removal or prune in `vm`: its sizes are stale, so measure it again if it was measured. */

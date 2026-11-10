@@ -8,22 +8,29 @@
   import { danglingCount, filterImages, imageRows, imageUsers, inUse, splitReference, type ImageRow } from '$lib/images';
   import { measured } from '$lib/measured.svelte';
   import { podmanScope } from '$lib/perVm';
-  import { PerVmList } from '$lib/perVmList.svelte';
+  import { images } from '$lib/podmanLists.svelte';
   import { withParam } from '$lib/url';
   import GroupHead, { type Said } from '$lib/GroupHead.svelte';
   import ImagePrune from '$lib/ImagePrune.svelte';
   import ItemLine from '$lib/ItemLine.svelte';
   import UnlistedVms from '$lib/UnlistedVms.svelte';
   import VmSelect from '$lib/VmSelect.svelte';
+  import ImageLayers from '$lib/ImageLayers.svelte';
+  import { unfold } from '$lib/motion';
 
-  const images = new PerVmList(api.images);
   const scope = $derived(podmanScope(live.snapshot));
-  images.follow(() => (live.snapshot ? scope.running : null));
+  // Kept and followed app-wide from the start (podmanLists): the view opens on what's known.
 
   let query = $state('');
   let error = $state<string | null>(null);
   let removing = $state<string | null>(null);
   let said = $state<Record<string, Said | null>>({});
+  // Lines whose layers are open, `vm/reference`: any number, each under its own line.
+  let open = $state<Record<string, true>>({});
+  function toggle(key: string) {
+    const { [key]: was, ...rest } = open;
+    open = was ? rest : { ...open, [key]: true };
+  }
 
   const vmFilter = $derived(page.url.searchParams.get('vm') || null);
   // Each image once per VM, with who uses it: sentences and dots count images, lines are tags.
@@ -160,7 +167,8 @@
           {@const h = heldOf(row.vm, row.id)}
           {@const mine = own(row.vm, row.id)}
           {@const [from, short] = splitReference(row.name)}
-          <ItemLine title={row.tagged ? row.name : `untagged image ${row.id}`}
+          {@const key = `${row.vm}/${row.reference}`}
+          <ItemLine selected={!!open[key]} onselect={() => toggle(key)} title={row.tagged ? row.name : `untagged image ${row.id}`}
             second={`${shortId(row.id)} · ${row.created ? `built ${age(row.created)}` : 'no build date'}`}
             secondTitle={row.created ? `Built ${new Date(row.created * 1000).toLocaleString('en-GB')}` : "The image doesn't record when it was built"}
             size={row.size} own={mine} {scale} sizeLabel={mine != null ? `${bytes(mine)} its own` : 'with shared layers'}
@@ -170,6 +178,11 @@
             onremove={() => remove(row)}>
             {#snippet name()}{#if row.tagged}<span class="from">{from}</span>{short}{:else}<span class="from">untagged</span>{/if}{/snippet}
           </ItemLine>
+          {#if open[key]}
+            <div transition:unfold>
+              <ImageLayers vm={row.vm} id={row.id} title={row.tagged ? row.name : `untagged ${shortId(row.id)}`} onclose={() => toggle(key)} />
+            </div>
+          {/if}
         {/each}
       </section>
     {/each}

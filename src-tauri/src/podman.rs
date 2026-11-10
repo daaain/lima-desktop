@@ -44,6 +44,8 @@ pub enum PodmanError {
     TooOld(String),
     #[error("can't tell which podman this VM runs ({0:?}): Lima Desktop needs podman 5 or newer")]
     UnknownVersion(String),
+    #[error("{0}")]
+    Unsupported(String),
 }
 
 /// Lima Desktop speaks podman 5's libpod API only: older engines are refused, by name, rather
@@ -145,6 +147,92 @@ impl From<RawContainer> for Container {
             labels,
         }
     }
+}
+
+/// One step of an image's history, newest first: a layer when it added to the filesystem (`size`
+/// over 0), else a change to its config only (`ENV`, `CMD`, …).
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Layer {
+    /// The image id this step made, when it's an image of its own here; None for `<missing>` (a
+    /// step of a pulled image, whose intermediate images aren't kept).
+    pub id: Option<String>,
+    /// Unix seconds; 0 when the image doesn't say.
+    pub created: i64,
+    /// The instruction, as the builder recorded it.
+    pub created_by: String,
+    /// Bytes it added.
+    pub size: u64,
+    pub comment: String,
+    /// Tags on this step's image.
+    pub tags: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct RawLayer {
+    #[serde(default)]
+    id: String,
+    #[serde(default)]
+    created: Option<i64>,
+    #[serde(default)]
+    created_by: String,
+    #[serde(default)]
+    size: Option<i64>,
+    #[serde(default)]
+    comment: String,
+    #[serde(default)]
+    tags: Option<Vec<String>>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct RawInspect {
+    #[serde(default)]
+    graph_driver: Option<RawGraphDriver>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct RawGraphDriver {
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    data: BTreeMap<String, String>,
+}
+
+/// From an image's `inspect`: the guest folder of each of its layers, newest first — what each
+/// one added, as overlay keeps it (`UpperDir` is the newest; `LowerDir` lists the rest, newest
+/// first). These line up with the history's steps that have a size.
+pub fn parse_layer_dirs(body: &[u8]) -> Result<Vec<String>, PodmanError> {
+    let raw: RawInspect = serde_json::from_slice(body)?;
+    let driver = raw.graph_driver.ok_or_else(|| PodmanError::Unsupported("podman doesn't say where this image's layers are kept".into()))?;
+    if driver.name != "overlay" {
+        return Err(PodmanError::Unsupported(format!(
+            "this VM's podman keeps images with the {} driver: only overlay's layers can be looked into",
+            if driver.name.is_empty() { "unnamed" } else { &driver.name }
+        )));
+    }
+    let upper = driver.data.get("UpperDir").into_iter().map(String::as_str);
+    let lower = driver.data.get("LowerDir").into_iter().flat_map(|l| l.split(':'));
+    Ok(upper.chain(lower).filter(|d| !d.is_empty()).map(str::to_string).collect())
+}
+
+/// The body of an image's `history`, decoded.
+pub fn parse_history(body: &[u8]) -> Result<Vec<Layer>, PodmanError> {
+    let raw: Option<Vec<RawLayer>> = serde_json::from_slice(body)?;
+    Ok(raw
+        .unwrap_or_default()
+        .into_iter()
+        .map(|r| Layer {
+            id: Some(r.id).filter(|id| !id.is_empty() && id != "<missing>"),
+            created: r.created.unwrap_or(0).max(0),
+            created_by: r.created_by,
+            size: r.size.unwrap_or(0).max(0) as u64,
+            comment: r.comment,
+            tags: r.tags.unwrap_or_default(),
+        })
+        .collect())
 }
 
 /// An image as libpod lists it: one row per image id, with all its tags.
@@ -543,6 +631,20 @@ impl Libpod {
         parse_images(&self.get(IMAGES).await?)
     }
 
+    /// Where each of an image's layers is kept in the guest, newest first (`parse_layer_dirs`).
+    pub async fn layer_dirs(&self, id: &str) -> Result<Vec<String>, PodmanError> {
+        parse_layer_dirs(&self.get(&format!("/images/{}/json", encode_component(id))).await?)
+    }
+
+    /// The steps that built an image, newest first.
+    pub async fn history(&self, id: &str) -> Result<Vec<Layer>, PodmanError> {
+        parse_history(
+            &self
+                .get(&format!("/images/{}/history", encode_component(id)))
+                .await?,
+        )
+    }
+
     /// Remove by `repository:tag` (untags; the image goes with its last tag) or by id (a dangling
     /// image). Never forced: an image a container uses stays.
     pub async fn remove_image(&self, reference: &str) -> Result<(), PodmanError> {
@@ -613,6 +715,33 @@ pub fn parse_volumes(body: &[u8]) -> Result<Vec<Volume>, PodmanError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn layer_dirs_are_newest_first() {
+        let body = br#"{"GraphDriver":{"Name":"overlay","Data":{"UpperDir":"/s/overlay/c/diff","LowerDir":"/s/overlay/b/diff:/s/overlay/a/diff","WorkDir":"/s/overlay/c/work"}}}"#;
+        assert_eq!(parse_layer_dirs(body).unwrap(), ["/s/overlay/c/diff", "/s/overlay/b/diff", "/s/overlay/a/diff"]);
+        // A one-layer image has no LowerDir.
+        let body = br#"{"GraphDriver":{"Name":"overlay","Data":{"UpperDir":"/s/overlay/a/diff"}}}"#;
+        assert_eq!(parse_layer_dirs(body).unwrap(), ["/s/overlay/a/diff"]);
+        let body = br#"{"GraphDriver":{"Name":"vfs","Data":{}}}"#;
+        assert!(parse_layer_dirs(body).unwrap_err().to_string().contains("vfs driver"));
+    }
+
+    #[test]
+    fn history_rows_as_libpod_gives_them() {
+        let body = br##"[
+          {"Id":"eeeb22da","Created":1792531975,"CreatedBy":"/bin/sh -c #(nop) CMD [\"bash\"]","Tags":["docker.io/library/debian:trixie-slim"],"Size":0,"Comment":""},
+          {"Id":"<missing>","Created":1792531900,"CreatedBy":"# debian.sh","Tags":null,"Size":103137280,"Comment":"debuerreotype 0.17"}
+        ]"##;
+        let h = parse_history(body).unwrap();
+        assert_eq!(h.len(), 2);
+        assert_eq!(h[0].id.as_deref(), Some("eeeb22da"));
+        assert_eq!(h[0].created_by, r#"/bin/sh -c #(nop) CMD ["bash"]"#);
+        assert_eq!(h[1].id, None);
+        assert_eq!(h[1].size, 103_137_280);
+        assert!(h[1].tags.is_empty());
+        assert!(parse_history(b"null").unwrap().is_empty());
+    }
 
     #[test]
     fn container_from_list_row_reads_compose_labels() {

@@ -3,10 +3,12 @@
   import '@fontsource-variable/newsreader/opsz.css';
   import { onMount } from 'svelte';
   import { live } from '$lib/live.svelte';
+  import { followPodman } from '$lib/podmanLists.svelte';
   import Masthead from '$lib/Masthead.svelte';
   import LimaProblem from '$lib/LimaProblem.svelte';
   let { children } = $props();
   onMount(() => live.start());
+  followPodman();
 </script>
 
 <div class="app">

@@ -123,8 +123,7 @@ for (const dark of [false, true]) {
     assert.match(await quill.locator('.line').first().innerText(), /untagged[\s\S]*no container/);
     // An old podman's VM: no containers in the snapshot, but its engine counts the one on alpine.
     assert.match(await page.locator('section', { hasText: 'ember' }).innerText(), /ember holds one image, in use\./);
-    // Measured, it says what removing the unused would free.
-    await page.getByRole('button', { name: 'Measure sizes' }).click();
+    // Measured as the app starts, it says what removing the unused would free.
     await page.getByText('would free at least').waitFor();
     assert.match(await page.locator('p.lede').innerText(), /Removing the unused ones would free at least 5\.7 GiB\./);
     assert.match(await quill.locator('.line').first().innerText(), /2\.2 GiB its own/);
@@ -136,15 +135,11 @@ for (const dark of [false, true]) {
   test(`Volumes${suffix}`, async () => {
     const { page, errors, close } = await open('/volumes', { dark });
     await page.getByText('atlas_pgdata').first().waitFor();
-    // Sizes and users wait for a measurement: until then it says how many, and where.
-    assert.equal(await page.getByRole('heading', { level: 1 }).innerText(), 'Five VMs hold eleven volumes.');
-    assert.match(await page.locator('section', { hasText: 'atlas' }).first().innerText(), /not measured/);
-    // Under the Size head, before and after measuring, is the size: said, then drawn.
+    // Sizes and users come from a measurement taken as the app starts.
+    await page.getByRole('heading', { level: 1, name: /aren't used/ }).waitFor();
+    // Under the Size head is the size, drawn.
     const sizeHead = page.locator('.column-heads > span', { hasText: 'Size' });
     const sizeCell = () => page.locator('.line').first().locator(':scope > *').nth(1);
-    assert.equal((await sizeCell().boundingBox()).x, (await sizeHead.boundingBox()).x);
-    await page.getByRole('button', { name: 'Measure sizes' }).click();
-    await page.getByRole('heading', { level: 1, name: /aren't used/ }).waitFor();
     assert.equal(await page.getByRole('heading', { level: 1 }).innerText(), "Four of 11 volumes aren't used by any container.");
     assert.equal(await page.locator('p.lede').innerText(), "quill's disk is past three quarters. Removing the unused ones would free 8.1 GiB.");
     const quill = page.locator('section').first();
@@ -160,18 +155,23 @@ for (const dark of [false, true]) {
 test('Container details open inline, several at once, and hold a value being read', async () => {
   const { page, errors, close } = await open('/containers', { height: 1400 });
   const line = (name) => page.locator('.line', { has: page.locator('.name', { hasText: new RegExp(`^${name}`) }) }).first();
+  // Each unfolds (Svelte's transitions are Web Animations): click and measure once it's still.
+  const still = () => page.waitForFunction(() => document.getAnimations().length === 0);
   await line('frontend').click();
+  await still();
   await line('graph-api').click();
+  await still();
   // Each opens right under its own line, and both stay open.
   const details = page.locator('section.detail');
   assert.equal(await details.count(), 2);
   for (const name of ['frontend', 'graph-api']) {
-    const next = await line(name).evaluate((el) => el.nextElementSibling?.classList.contains('detail') && el.nextElementSibling.querySelector('h3')?.textContent);
+    const next = await line(name).evaluate((el) => el.nextElementSibling?.querySelector(':scope > .detail h3')?.textContent);
     assert.ok(String(next).includes(name), `${name}'s detail follows its line`);
   }
   // Hovering a chart fills its legend without changing its height.
   const chart = details.first().locator('.chart').first();
   await chart.locator('.u-over').waitFor();
+  await chart.scrollIntoViewIfNeeded();
   const legend = chart.locator('.u-legend');
   const before = await legend.boundingBox();
   const over = await chart.locator('.u-over').boundingBox();
@@ -182,9 +182,9 @@ test('Container details open inline, several at once, and hold a value being rea
   // The snapshot updates every second: the value under the pointer stays shown.
   await page.waitForTimeout(2500);
   assert.notEqual(await value.textContent(), '–');
-  // Closing one leaves the other.
+  // Closing one leaves the other (once it has folded away).
   await details.first().getByRole('button', { name: 'Close' }).click();
-  assert.equal(await details.count(), 1);
+  await page.waitForFunction(() => document.querySelectorAll('section.detail').length === 1);
   assert.deepEqual(errors, []);
   await close();
 });
@@ -205,6 +205,84 @@ test("A container's log opens at its newest line, each with podman's time", asyn
   await log.evaluate((el) => (el.scrollTop = 0));
   await page.waitForTimeout(2500);
   assert.equal(await log.evaluate((el) => el.scrollTop), 0);
+  assert.deepEqual(errors, []);
+  await close();
+});
+
+test("An image's layers open under its line, config steps folded away, each layer's files under it", async () => {
+  const { page, errors, close } = await open('/images');
+  const line = page.locator('.line', { has: page.locator('.name', { hasText: 'atlas_frontend' }) }).first();
+  await line.click();
+  // The image's detail (a layer's files are a detail inside it).
+  const detail = page.locator('section.detail').first();
+  await detail.locator('ol.steps li').first().waitFor();
+  assert.equal(await line.getAttribute('aria-expanded'), 'true');
+  // Four layers; the three config steps only when asked for, their wrapper taken off.
+  assert.equal(await detail.locator('ol.steps li').count(), 4);
+  assert.match(await detail.locator('ol.steps li').first().innerText(), /COPY \. \/app/);
+  await detail.getByRole('button', { name: 'Show 3 config steps' }).click();
+  assert.equal(await detail.locator('ol.steps li').count(), 7);
+  assert.match(await detail.locator('ol.steps li').first().innerText(), /^config\s+CMD \["node", "server\.js"\]/);
+  // A layer opens what it added, under its step; a deletion is said as one.
+  await detail.locator('.step', { hasText: 'npm ci' }).click();
+  const files = detail.locator('.files section.detail');
+  await files.getByRole('button', { name: 'var/' }).click();
+  await files.getByRole('button', { name: 'lib/' }).click();
+  await files.getByRole('button', { name: 'apt/' }).click();
+  await files.locator('.entries li', { hasText: 'lists' }).waitFor();
+  assert.match(await files.locator('.entries').innerText(), /lists\s+removed/);
+  assert.match(await files.locator('nav.path').innerText(), /layer 3\s*\/\s*var\s*\/\s*lib\s*\/\s*apt/);
+  await detail.getByRole('button', { name: 'Close' }).click();
+  await page.waitForFunction(() => document.querySelectorAll('section.detail').length === 0);
+  assert.deepEqual(errors, []);
+  await close();
+});
+
+test("A volume's files open under its line, a folder and a file at a time", async () => {
+  const { page, errors, close } = await open('/volumes');
+  await page.locator('.line', { has: page.locator('.name', { hasText: /^atlas_pgdata$/ }) }).first().click();
+  const detail = page.locator('section.detail');
+  await detail.getByRole('button', { name: 'pg_wal/' }).waitFor();
+  // Folders first, then files; a file's size, a folder's none.
+  const names = await detail.locator('.entries .name').allInnerTexts();
+  assert.deepEqual(names, ['base/', 'pg_wal/', 'current', 'PG_VERSION', 'postgresql.conf', 'postmaster.pid']);
+  assert.match(await detail.innerText(), /2 folders, 3 files, 1 link/);
+  await detail.getByRole('button', { name: 'base/' }).click();
+  await detail.getByRole('button', { name: 'pg_filenode.map' }).waitFor();
+  assert.match(await detail.locator('nav.path').innerText(), /atlas_pgdata\s*\/\s*base/);
+  // A file that isn't text says it's a file, and how big.
+  await detail.getByRole('button', { name: 'pg_filenode.map' }).click();
+  await detail.getByText('A binary file of 524 B.').waitFor();
+  // Back up by the path, then into a file: its text.
+  await detail.locator('nav.path').getByRole('button', { name: 'atlas_pgdata' }).click();
+  await detail.getByRole('button', { name: 'postgresql.conf' }).click();
+  await detail.locator('pre').waitFor();
+  assert.match(await detail.locator('pre').innerText(), /^# PostgreSQL configuration file/);
+  assert.match(await detail.innerText(), /A text file of 29\.1 KiB\./);
+  // A link to a folder lists it.
+  await detail.getByRole('button', { name: 'Back to the folder' }).click();
+  await detail.getByRole('button', { name: /^current/ }).click();
+  await detail.getByRole('button', { name: 'pg_filenode.map' }).waitFor();
+  // The list refreshing under it (a new row for the same volume) leaves it where it is.
+  await page.getByRole('button', { name: 'Refresh', exact: true }).click();
+  await page.waitForTimeout(500);
+  assert.match(await detail.locator('nav.path').innerText(), /atlas_pgdata\s*\/\s*current/);
+  assert.deepEqual(errors, []);
+  await close();
+});
+
+test('Images and Volumes open on what was already fetched', async () => {
+  const { page, errors, close } = await open('/');
+  await page.locator('article').first().waitFor();
+  // Fetched from the start: the first visit already has its lines, and nothing says Loading.
+  await page.waitForTimeout(600);
+  for (const [tab, name, search] of [['Images', 'atlas_frontend', 'Search name or id'], ['Volumes', 'atlas_pgdata', 'Search name'], ['Images', 'atlas_frontend', 'Search name or id']]) {
+    await page.locator('header nav').getByRole('link', { name: tab }).click();
+    // The view is there (its search box shows in every state); what it shows is then checked at once.
+    await page.getByPlaceholder(search, { exact: true }).waitFor();
+    assert.equal(await page.getByText('Loading…').count(), 0, `${tab} opens without loading`);
+    assert.ok(await page.locator('.line', { hasText: name }).count() > 0, `${tab} has its lines at once`);
+  }
   assert.deepEqual(errors, []);
   await close();
 });

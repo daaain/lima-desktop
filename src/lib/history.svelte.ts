@@ -1,6 +1,7 @@
 // The last 24 hours of whichever entities a page draws sketches for (almanac.ts), 100 points each:
 // fetched when an entity first appears, then once a minute. A failed fetch leaves the last answer.
 import { api, type Series } from './api';
+import { fullWindow } from './almanac';
 
 const WINDOW_MS = 24 * 3_600_000;
 const POINTS = 100;
@@ -28,7 +29,7 @@ export class History {
         if (e == null || now - (this.#asked.get(e) ?? 0) < REFRESH_MS / 2) continue;
         this.#asked.set(e, now);
         api.series(e, now - WINDOW_MS, now, POINTS).then(
-          (s) => (this.#series[e] = s),
+          (s) => (this.#series[e] = fullWindow(s, now - WINDOW_MS, now, POINTS)),
           () => {},
         );
       }

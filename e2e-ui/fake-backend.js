@@ -284,6 +284,68 @@
     Volumes: volumeRows(vm).map((v) => ({ VolumeName: v.name, Size: v.mib * MiB, Links: v.links, ReclaimableSize: v.links ? 0 : v.mib * MiB })),
   });
 
+  // An image's history, newest first: a few config steps over a base layer and some RUNs, sized
+  // so the layers add up to roughly the image.
+  const imageHistory = (vm, id) => {
+    const image = imageStore(vm).find((i) => i.id === id);
+    if (!image) throw new Error(`no such image: ${id}`);
+    const at = (days) => image.created - days * 86_400;
+    const step = (createdBy, size, days, o = {}) => ({ id: null, created: at(days), createdBy, size: Math.round(size), comment: '', tags: [], ...o });
+    return [
+      step('/bin/sh -c #(nop)  CMD ["node", "server.js"]', 0, 0, { id: image.id, tags: image.tags }),
+      step('/bin/sh -c #(nop)  EXPOSE 8080', 0, 0),
+      step('COPY . /app # buildkit', image.size * 0.08, 0),
+      step('RUN /bin/sh -c npm ci --omit=dev && npm cache clean --force # buildkit', image.size * 0.42, 0),
+      step('/bin/sh -c #(nop)  ENV NODE_ENV=production', 0, 9),
+      step('/bin/sh -c apt-get update && apt-get install -y --no-install-recommends ca-certificates curl tini && rm -rf /var/lib/apt/lists/*', image.size * 0.21, 9),
+      step('# debian.sh --arch arm64 out/ trixie @1792531975', image.size * 0.29, 30, { comment: 'debuerreotype 0.17' }),
+    ];
+  };
+
+  // What's in a volume: the same small tree in each, a database's.
+  const volumeTree = {
+    '': [['dir', 'base'], ['dir', 'pg_wal'], ['file', 'PG_VERSION', 3], ['file', 'postgresql.conf', 29_812], ['file', 'postmaster.pid', 94], ['link', 'current']],
+    base: [['dir', '1'], ['dir', '16384'], ['file', 'pg_filenode.map', 524]],
+    'base/1': [['file', '112', 8192], ['file', '113', 8192]],
+    'base/16384': [],
+    pg_wal: [['file', '000000010000000000000001', 16 * MiB], ['dir', 'archive_status']],
+    'pg_wal/archive_status': [],
+  };
+  // What each image layer added: the same few files, and a whiteout where apt's lists were removed.
+  const layerTree = {
+    '': [['dir', 'app'], ['dir', 'var']],
+    app: [['file', 'server.js', 2_140], ['file', 'package.json', 612]],
+    var: [['dir', 'lib']],
+    'var/lib': [['dir', 'apt']],
+    'var/lib/apt': [['char', 'lists']],
+  };
+  const layerText = { 'app/package.json': '{\n  "name": "frontend",\n  "version": "1.0.0"\n}\n' };
+  const guestFiles = ({ vm, source, path }) => {
+    const tree = source.kind === 'layer' ? layerTree : volumeTree;
+    if (source.kind === 'volume' && !volumes(vm).some((v) => v.name === source.name)) throw new Error(`there's no volume '${source.name}' in ${vm} any more`);
+    const at = path === 'current' ? 'base' : path;
+    const rows = tree[at];
+    if (!rows) throw new Error("it isn't a directory");
+    // A layer's whiteout (a character device) is what it removes, as the backend says.
+    const entries = rows.map(([kind, n, size = 4096], i) => ({ name: n, kind: kind === 'char' ? 'removed' : kind, size: kind === 'char' ? 0 : size, modified: Math.floor(NOW / 1000) - (i + 1) * 5400 }))
+      // As the backend sorts them: folders first, then by name.
+      .sort((a, b) => Number(b.kind === 'dir') - Number(a.kind === 'dir') || a.name.toLowerCase().localeCompare(b.name.toLowerCase()));
+    return { path, entries, truncated: false };
+  };
+  const volumeText = {
+    PG_VERSION: '16\n',
+    'postgresql.conf': '# PostgreSQL configuration file\nlisten_addresses = \'*\'\nmax_connections = 100\nshared_buffers = 128MB\n',
+    'postmaster.pid': '1\n/var/lib/postgresql/data\n1794320000\n5432\n',
+  };
+  const guestFile = ({ source, path }) => {
+    const tree = source.kind === 'layer' ? layerTree : volumeTree;
+    const text = (source.kind === 'layer' ? layerText : volumeText)[path];
+    const row = Object.entries(tree).flatMap(([dir, rows]) => rows.map((r) => [dir ? `${dir}/${r[1]}` : r[1], r])).find(([p]) => p === path);
+    if (!row || row[1][0] !== 'file') throw new Error("it isn't a file");
+    const size = row[1][2];
+    return { path, size, text: text ?? null, truncated: false };
+  };
+
   // A container's last 120 log lines, every ten minutes back across midnight, as podman sends them
   // with timestamps on: an RFC 3339 time and a space before each line.
   const containerLogs = (id) => {
@@ -308,6 +370,9 @@
     images: ({ vm }) => images(vm),
     volumes: ({ vm }) => volumes(vm),
     system_df: ({ vm }) => later(systemDf(vm)),
+    image_history: ({ vm, id }) => later(imageHistory(vm, id)),
+    guest_files: (args) => later(guestFiles(args)),
+    guest_file: (args) => later(guestFile(args)),
     container_logs: ({ id }) => containerLogs(id),
     container_inspect: ({ id }) => ({ Id: id, State: { Status: 'running' } }),
     vm_action: () => later(),

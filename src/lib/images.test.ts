@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Image } from './api';
-import { danglingCount, filterImages, imageOwnSizes, imageRows, imageUsers, inUse, splitReference } from './images';
+import { danglingCount, filterImages, imageOwnSizes, imageRows, imageUsers, inUse, instruction, splitReference } from './images';
 import { container, snapshot, vm } from './testing';
 
 const img = (o: Partial<Image>): Image => ({ id: 'i', tags: [], created: 1_700_000_000, size: 100, containers: 0, ...o });
@@ -82,5 +82,18 @@ describe('imageOwnSizes', () => {
     const df = { Images: [{ ImageID: 'abc', Size: 900, SharedSize: 600, UniqueSize: 300, Containers: 1 }] };
     expect(imageOwnSizes(df).get('abc')).toBe(300);
     expect(imageOwnSizes({ Images: null }).size).toBe(0);
+  });
+});
+
+describe('instruction', () => {
+  it('takes off the shell wrapper the builder recorded', () => {
+    expect(instruction('/bin/sh -c #(nop)  CMD ["bash"]')).toBe('CMD ["bash"]');
+    expect(instruction('/bin/sh -c apt-get update && apt-get install -y curl')).toBe('RUN apt-get update && apt-get install -y curl');
+    expect(instruction('|2 VERSION=1.2 TARGET=x /bin/sh -c make install')).toBe('RUN make install');
+    expect(instruction('RUN /bin/sh -c npm ci # buildkit')).toBe('RUN /bin/sh -c npm ci');
+  });
+  it('leaves anything else as it is', () => {
+    expect(instruction('# debian.sh --arch arm64 out/ trixie')).toBe('# debian.sh --arch arm64 out/ trixie');
+    expect(instruction('')).toBe('');
   });
 });

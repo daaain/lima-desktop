@@ -7,7 +7,7 @@
   import { countWord, gauges, holdsSentence, unusedHeadline, unusedLede } from '$lib/almanac';
   import { measured } from '$lib/measured.svelte';
   import { podmanScope } from '$lib/perVm';
-  import { PerVmList } from '$lib/perVmList.svelte';
+  import { volumes } from '$lib/podmanLists.svelte';
   import { filterVolumes, volumeRows, type VolumeRow } from '$lib/volumes';
   import { withParam } from '$lib/url';
   import GroupHead, { type Said } from '$lib/GroupHead.svelte';
@@ -15,15 +15,22 @@
   import UnlistedVms from '$lib/UnlistedVms.svelte';
   import VmSelect from '$lib/VmSelect.svelte';
   import VolumePrune from '$lib/VolumePrune.svelte';
+  import Files from '$lib/Files.svelte';
+  import { unfold } from '$lib/motion';
 
-  const volumes = new PerVmList(api.volumes);
   const scope = $derived(podmanScope(live.snapshot));
-  volumes.follow(() => (live.snapshot ? scope.running : null));
+  // Kept and followed app-wide from the start (podmanLists): the view opens on what's known.
 
   let query = $state('');
   let error = $state<string | null>(null);
   let removing = $state<string | null>(null);
   let said = $state<Record<string, Said | null>>({});
+  // Volumes whose files are open, `vm/name`: any number, each under its own line.
+  let open = $state<Record<string, true>>({});
+  function toggle(key: string) {
+    const { [key]: was, ...rest } = open;
+    open = was ? rest : { ...open, [key]: true };
+  }
 
   const vmFilter = $derived(page.url.searchParams.get('vm') || null);
   // Sizes and users come from `system df`, which walks every volume: known only once measured.
@@ -158,7 +165,8 @@
         {#each g.lines as row (row.v.name)}
           {@const u = usageOf(row)}
           {@const disk = g.live ? gauges(g.live).disk.size : undefined}
-          <ItemLine title={row.v.name}
+          {@const key = `${row.vm}/${row.v.name}`}
+          <ItemLine selected={!!open[key]} onselect={() => toggle(key)} title={row.v.name}
             second={`created ${age(row.created)}${row.v.driver !== 'local' ? ` · ${row.v.driver} driver` : ''}`}
             secondTitle={`In the VM at ${row.v.mountpoint}; created ${new Date(row.v.createdAt).toLocaleString('en-GB')}`}
             size={u?.size} {scale} sizeLabel={u ? diskShare(u.size, disk) : 'not measured'}
@@ -168,6 +176,11 @@
             onremove={() => remove(row)}>
             {#snippet name()}{row.v.name}{/snippet}
           </ItemLine>
+          {#if open[key]}
+            <div transition:unfold>
+              <Files vm={row.vm} source={{ kind: 'volume', name: row.v.name }} label={row.v.name} onclose={() => toggle(key)} />
+            </div>
+          {/if}
         {/each}
       </section>
     {/each}
