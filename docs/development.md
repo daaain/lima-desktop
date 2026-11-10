@@ -80,6 +80,28 @@ branch.
 Add to the fleet when a page gains a state worth seeing; nothing in it is recorded from a real
 machine, so it needs no anonymising. For real data in the real app, replay a snapshot (below).
 
+## Releasing
+
+The **Release** workflow (`.github/workflows/release.yml`) runs on a `v*` tag. It builds the macOS
+app as a universal `.dmg` on `macos-15`, and the Linux `.deb` and AppImage on `ubuntu-24.04`. Linux
+builds on 24.04, not CI's 26.04, because a binary needs the glibc it was built against or newer.
+The workflow then drafts a GitHub Release with the files attached and install notes above the
+generated changelog.
+
+1. Bump the version in `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml` and `package.json`.
+   The workflow refuses a tag that doesn't match all three.
+2. Merge, then tag main and push the tag: `git tag v0.2.0 && git push origin v0.2.0`.
+3. Read the draft under Releases, then publish it.
+
+Run by hand (Actions → Release → Run workflow), it builds any branch and keeps the bundles as the
+run's artifacts, releasing nothing.
+
+The macOS app is only ad-hoc signed (`bundle.macOS.signingIdentity: "-"` in `tauri.conf.json`), so a
+downloaded copy needs its quarantine removed (`xattr -dr com.apple.quarantine`, as the README
+says). Signing and notarising need an Apple Developer ID. Once there is one, set Tauri's `APPLE_*`
+variables from secrets on the macOS build step
+([Tauri's guide](https://v2.tauri.app/distribute/sign/macos/)); they override the ad-hoc identity.
+
 ## Tests that touch real things
 
 - `cargo test` runs the probe script under this machine's `sh` against its real `/proc`
