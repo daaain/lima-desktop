@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { containersHeadline, containersSentence, countWord, exitedSentence, runsSentence, fleetHeadline, hostBar, quarters, share, sketch, vmHeadline, vmSentence } from './almanac';
+import { containersHeadline, containersSentence, countWord, exitedSentence, holdsSentence, runsSentence, fleetHeadline, hostBar, quarters, share, sketch, unusedHeadline, unusedLede, vmHeadline, vmSentence } from './almanac';
 import type { Hint } from './rightsize';
 import { container, vm } from './testing';
 
@@ -152,5 +152,45 @@ describe('the Containers view in sentences', () => {
     expect(exitedSentence([{ vm: 'x', c: c('a', 'exited') }, { vm: 'y', c: c('b', 'created') }])).toBe('Two are not running: a in x and b in y.');
     const many = ['a', 'b', 'd', 'e'].map((n) => ({ vm: 'x', c: c(n, 'exited') }));
     expect(exitedSentence(many)).toBe('Four are not running.');
+  });
+});
+
+describe('images and volumes', () => {
+  const used = (n: number) => Array.from({ length: n }, () => ({ used: true }));
+  const unused = (n: number) => Array.from({ length: n }, () => ({ used: false }));
+  it('counts what no container uses in the headline', () => {
+    expect(unusedHeadline('image', [], ['a'])).toBe('No images in any running VM.');
+    expect(unusedHeadline('image', [...unused(7), ...used(16)], ['a', 'b'])).toBe("Seven of 23 images aren't used by any container.");
+    expect(unusedHeadline('image', [...unused(1), ...used(22)], ['a'])).toBe("One of 23 images isn't used by any container.");
+    expect(unusedHeadline('volume', used(12), ['a'])).toBe('All 12 volumes are in use.');
+    expect(unusedHeadline('volume', used(1), ['a'])).toBe('The one volume is in use.');
+    expect(unusedHeadline('volume', unused(3), ['a'])).toBe('None of the 3 volumes is used by a container.');
+  });
+  it('says how many and where while use is unknown (volumes, until measured)', () => {
+    const unknown = [{}, {}, { used: true }];
+    expect(unusedHeadline('volume', unknown, ['a', 'b', 'c', 'd'])).toBe('Four VMs hold three volumes.');
+    expect(unusedHeadline('volume', unknown, ['atlas'])).toBe('atlas holds three volumes.');
+    expect(unusedHeadline('volume', Array.from({ length: 13 }, () => ({})), ['a', 'b'])).toBe('Two VMs hold 13 volumes.');
+  });
+  it("says what one VM holds, after its name", () => {
+    expect(holdsSentence('image', 0, 0)).toBe('holds no images.');
+    expect(holdsSentence('image', 14, 3)).toBe("holds 14 images; three aren't used.");
+    expect(holdsSentence('image', 4, 1)).toBe("holds four images; one isn't used.");
+    expect(holdsSentence('image', 12, 0)).toBe('holds twelve images, all in use.');
+    expect(holdsSentence('image', 1, 0)).toBe('holds one image, in use.');
+    expect(holdsSentence('volume', 1, 1)).toBe('holds one volume, unused.');
+    expect(holdsSentence('volume', 3, 3)).toBe('holds three volumes, none of them in use.');
+    expect(holdsSentence('volume', 3)).toBe('holds three volumes.');
+  });
+  it('leads with full disks, then dangling images, then what removing would free', () => {
+    expect(unusedLede({ hot: [] })).toBe('');
+    expect(unusedLede({ hot: ['quill'], dangling: 3, freeable: 5.7 * GiB, atLeast: true })).toBe(
+      "quill's disk is past three quarters. Three unused images are dangling: untagged, left behind when a newer build or pull took the tag. Removing the unused ones would free at least 5.7 GiB.",
+    );
+    expect(unusedLede({ hot: ['harbor', 'quill'], dangling: 1 })).toBe(
+      "harbor's and quill's disks are past three quarters. One unused image is dangling: untagged, left behind when a newer build or pull took the tag.",
+    );
+    expect(unusedLede({ hot: [], freeable: 1024 ** 2 })).toBe('Removing the unused ones would free 1.0 MiB.');
+    expect(unusedLede({ hot: [], freeable: 0 })).toBe('');
   });
 });

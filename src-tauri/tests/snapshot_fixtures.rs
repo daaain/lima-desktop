@@ -167,6 +167,15 @@ fn libpods_lists_deserialise() {
                 "{}: a tagged image",
                 inst.name
             );
+            // The engine's own count of who uses an image: the UI's "in use" and its removals.
+            for c in containers(&dir) {
+                assert!(
+                    imgs.iter().any(|i| i.id == c.image_id && i.containers > 0),
+                    "{}: {}'s image is listed as in use",
+                    inst.name,
+                    c.name
+                );
+            }
             images += imgs.len();
             let vols =
                 podman::parse_volumes(read(&dir.join("libpod/volumes.json")).as_bytes()).unwrap();

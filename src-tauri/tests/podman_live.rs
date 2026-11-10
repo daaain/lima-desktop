@@ -67,8 +67,10 @@ async fn lists_images_and_volumes_from_a_real_engine() {
     let containers = pod.containers().await.expect("list");
     for c in containers.iter().filter(|c| c.state == "running") {
         assert!(
-            images.iter().any(|i| i.id == c.image_id),
-            "{}'s image {} is listed",
+            images
+                .iter()
+                .any(|i| i.id == c.image_id && i.containers > 0),
+            "{}'s image {} is listed, as in use",
             c.name,
             c.image_id
         );

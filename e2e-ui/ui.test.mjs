@@ -111,22 +111,54 @@ for (const dark of [false, true]) {
     assert.deepEqual(errors, []);
     await close();
   });
+
+  test(`Images${suffix}`, async () => {
+    const { page, errors, close } = await open('/images', { dark });
+    await page.getByText('atlas_frontend').first().waitFor();
+    assert.equal(await page.getByRole('heading', { level: 1 }).innerText(), "Seven of 27 images aren't used by any container.");
+    assert.match(await page.locator('p.lede').innerText(), /^quill's disk is past three quarters\. Three unused images are dangling/);
+    // The fullest disk leads, and within it what no container uses.
+    const quill = page.locator('section').first();
+    assert.match(await quill.locator('h2').innerText(), /^quill holds four images; two aren't used\.$/);
+    assert.match(await quill.locator('.line').first().innerText(), /untagged[\s\S]*no container/);
+    // An old podman's VM: no containers in the snapshot, but its engine counts the one on alpine.
+    assert.match(await page.locator('section', { hasText: 'ember' }).innerText(), /ember holds one image, in use\./);
+    // Measured, it says what removing the unused would free.
+    await page.getByRole('button', { name: 'Measure sizes' }).click();
+    await page.getByText('would free at least').waitFor();
+    assert.match(await page.locator('p.lede').innerText(), /Removing the unused ones would free at least 5\.7 GiB\./);
+    assert.match(await quill.locator('.line').first().innerText(), /2\.2 GiB its own/);
+    await shoot(page, `images${suffix}`);
+    assert.deepEqual(errors, []);
+    await close();
+  });
+
+  test(`Volumes${suffix}`, async () => {
+    const { page, errors, close } = await open('/volumes', { dark });
+    await page.getByText('atlas_pgdata').first().waitFor();
+    // Sizes and users wait for a measurement: until then it says how many, and where.
+    assert.equal(await page.getByRole('heading', { level: 1 }).innerText(), 'Five VMs hold eleven volumes.');
+    assert.match(await page.locator('section', { hasText: 'atlas' }).first().innerText(), /not measured/);
+    await page.getByRole('button', { name: 'Measure sizes' }).click();
+    await page.getByRole('heading', { level: 1, name: /aren't used/ }).waitFor();
+    assert.equal(await page.getByRole('heading', { level: 1 }).innerText(), "Four of 11 volumes aren't used by any container.");
+    assert.equal(await page.locator('p.lede').innerText(), "quill's disk is past three quarters. Removing the unused ones would free 8.1 GiB.");
+    const quill = page.locator('section').first();
+    assert.match(await quill.locator('h2').innerText(), /^quill holds three volumes; two aren't used\.$/);
+    assert.match(await quill.locator('.line').first().innerText(), /quill_target[\s\S]*6\.2 GiB[\s\S]*no container/);
+    await shoot(page, `volumes${suffix}`);
+    assert.deepEqual(errors, []);
+    await close();
+  });
 }
 
-test('Images and volumes list every running VM’s', async () => {
-  const { page, errors, close } = await open('/images');
-  await page.getByText('atlas_frontend').first().waitFor();
-  await page.goto(`${base}/volumes`);
-  await page.getByText('atlas_pgdata').first().waitFor();
-  assert.deepEqual(errors, []);
-  await close();
-});
-
-test('The overview stacks on a narrow window', async () => {
-  const { page, errors, close } = await open('/', { width: 420, height: 900 });
-  await page.locator('article').first().waitFor();
-  const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
-  assert.ok(overflow <= 0, `the page scrolls sideways by ${overflow}px`);
-  assert.deepEqual(errors, []);
-  await close();
-});
+for (const [path, ready] of [['/', 'article'], ['/containers', '.line'], ['/images', '.line'], ['/volumes', '.line']]) {
+  test(`${path} stacks on a narrow window`, async () => {
+    const { page, errors, close } = await open(path, { width: 420, height: 900 });
+    await page.locator(ready).first().waitFor();
+    const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+    assert.ok(overflow <= 0, `the page scrolls sideways by ${overflow}px`);
+    assert.deepEqual(errors, []);
+    await close();
+  });
+}

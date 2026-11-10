@@ -71,7 +71,8 @@ Three, each a component, each with its scale said in words nearby.
   read without the number. It can carry a paler bar behind it (a container's peak) and a tick (a
   VM's peak, or the 95th percentile of its CPU). The scale is the thing's own allocation, except
   where a note says otherwise: a container's memory is drawn against the largest container listed
-  with it, its CPU against its VM's cores, a stopped VM's memory against the largest stopped VM.
+  with it, its CPU against its VM's cores, a stopped VM's memory against the largest stopped VM, an image or volume against the
+  largest one listed (never warning: being large isn't past anything).
 - **Sketch** (`Sketch.svelte`): the last 24 hours above a bar, as about a hundred hairline columns
   on a ground that rises to the highest value reached, on the bar's scale. Hairlines that stop
   short of the ground show how far below its peak something usually sits. On hover it becomes the
@@ -100,7 +101,17 @@ under the sentence, figures and bar it explains, with the allocation as a dashed
   there are any; its containers as lines.
 - **Containers**: the headline and a dot per container; filters; then a group per VM ("atlas runs
   twelve, all in atlas, and one has exited."), each container a line with memory and CPU drawn.
-- **Images, Volumes**: tables; the type and rules above, nothing drawn yet.
+- **Images, Volumes**: the headline counts what no container uses ("Seven of 27 images aren't used
+  by any container."), with a dot per image or volume (a hollow ring for unused) and a sentence on
+  whose disk is past three quarters, how many unused images are dangling, and what removing the
+  unused would free. Then a group per VM, the fullest disk first: its sentence ("quill holds four
+  images; two aren't used."), its disk drawn against the three-quarters rule, and its clean-up
+  buttons; then each image or volume as a line (`ItemLine.svelte`), the unused first, with its size
+  drawn and who uses it. An image's size counts layers it shares with other images, so image sizes
+  are never added up: what removing images would free comes only from `system df`, which walks
+  every volume and so runs on **Measure sizes**. It gives each image's own share, drawn solid inside
+  its size, and each volume's size and users, which until then are a dash. One measurement serves
+  both pages, and a VM's is taken again after something is removed from it.
 
 ## Adding to it
 

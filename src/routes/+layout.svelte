@@ -92,6 +92,8 @@
     font: inherit; font-size: 0.9rem; height: 2.3rem; padding: 0 0.9rem; border-radius: 1.15rem;
     border: 1px solid var(--border); background: transparent; color: var(--fg);
   }
+  /* An image's or a volume's line (ItemLine) and its group's column heads (GroupHead). */
+  :global(.items) { --item-columns: minmax(14rem, 1.7fr) minmax(8rem, 1fr) 8.5rem minmax(9rem, 0.9fr) 6rem; }
   :global(table.list) { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
   :global(table.list th) { text-align: left; color: var(--muted); font-weight: 400; font-size: 0.8rem; padding: 0.4rem 0.6rem 0.4rem 0; border-bottom: 1px solid var(--border); white-space: nowrap; }
   :global(table.list td) { padding: 0.5rem 0.6rem 0.5rem 0; border-bottom: 1px solid var(--border); }

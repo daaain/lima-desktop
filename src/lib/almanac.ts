@@ -2,6 +2,7 @@
 // quarters; who is past three quarters; and a series turned into columns and a distribution.
 import type { Band, Series, VmLive } from './api';
 import type { Hint } from './rightsize';
+import { bytes } from './format';
 
 /** Past this share of an allocation a figure, its bar and its sentence turn to the warning colour. */
 export const WARN_PCT = 75;
@@ -208,4 +209,57 @@ export function exitedSentence(rows: { vm: string; c: Listed }[]): string {
   if (down.length > 3) return `${countWord(down.length)} are not running.`;
   const named = down.map((r) => `${r.c.composeService ?? r.c.name} in ${r.vm}`);
   return `${down.length === 1 ? 'One is' : `${countWord(down.length)} are`} not running: ${list(named)}.`;
+}
+
+// The Images and Volumes views: what no container uses, said as counts. An image's size counts
+// layers it shares with others, so image sizes are never added up here; only what `system df`
+// says each holds alone is (and that only once measured).
+
+type Store = 'image' | 'volume';
+const lower = (n: number) => countWord(n).toLowerCase();
+const plural = (n: number, noun: string) => `${noun}${n === 1 ? '' : 's'}`;
+
+/**
+ * The headline: how many of the listed images or volumes no container uses. `used` is unknown
+ * (undefined) until measured, for volumes; then it says how many there are, and where.
+ */
+export function unusedHeadline(noun: Store, items: { used?: boolean }[], vms: string[]): string {
+  const n = items.length;
+  if (n === 0) return `No ${noun}s in any running VM.`;
+  if (items.some((i) => i.used == null)) {
+    const where = vms.length === 1 ? `${vms[0]} holds` : `${countWord(vms.length)} VMs hold`;
+    return `${where} ${n > 12 ? n : lower(n)} ${plural(n, noun)}.`;
+  }
+  const unused = items.filter((i) => !i.used).length;
+  if (unused === 0) return n === 1 ? `The one ${noun} is in use.` : `All ${n} ${noun}s are in use.`;
+  if (unused === n) return n === 1 ? `The one ${noun} isn't used by any container.` : `None of the ${n} ${noun}s is used by a container.`;
+  return `${countWord(unused)} of ${n} ${noun}s ${unused === 1 ? "isn't" : "aren't"} used by any container.`;
+}
+
+/** What one VM holds, to follow its name: "holds 14 images; three aren't used." */
+export function holdsSentence(noun: Store, n: number, unused?: number): string {
+  const count = `${n > 12 ? n : lower(n)} ${plural(n, noun)}`;
+  if (n === 0) return `holds no ${noun}s.`;
+  if (unused == null) return `holds ${count}.`;
+  if (unused === 0) return n === 1 ? `holds one ${noun}, in use.` : `holds ${count}, all in use.`;
+  if (unused === n) return n === 1 ? `holds one ${noun}, unused.` : `holds ${count}, none of them in use.`;
+  return `holds ${count}; ${lower(unused)} ${unused === 1 ? "isn't" : "aren't"} used.`;
+}
+
+/**
+ * The sentences under the headline: whose disk is past three quarters (of the VMs with something
+ * unused), how many unused images are dangling, and what removing the unused would free.
+ */
+export function unusedLede(o: { hot: string[]; dangling?: number; freeable?: number; atLeast?: boolean }): string {
+  const parts: string[] = [];
+  if (o.hot.length) {
+    const whose = list(o.hot.map((vm) => `${vm}'s`));
+    parts.push(`${whose} ${o.hot.length === 1 ? 'disk is' : 'disks are'} past three quarters.`);
+  }
+  const d = o.dangling ?? 0;
+  if (d > 0) parts.push(`${d === 1 ? 'One unused image is' : `${countWord(d)} unused images are`} dangling: untagged, left behind when a newer build or pull took the tag.`);
+  if (o.freeable != null && o.freeable > 0) {
+    parts.push(`Removing the unused ones would free ${o.atLeast ? 'at least ' : ''}${bytes(o.freeable)}.`);
+  }
+  return parts.join(' ');
 }

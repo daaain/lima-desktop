@@ -4,10 +4,14 @@
   import { live } from '$lib/live.svelte';
   import { api } from '$lib/api';
   import { age, bytes } from '$lib/format';
-  import { fromEachVm, podmanScope, type VmError } from '$lib/perVm';
+  import { gauges, holdsSentence, unusedHeadline, unusedLede } from '$lib/almanac';
+  import { measured } from '$lib/measured.svelte';
+  import { podmanScope } from '$lib/perVm';
   import { PerVmList } from '$lib/perVmList.svelte';
-  import { filterVolumes, volumeRows, volumeUsage, type VolumeRow, type VolumeUsage } from '$lib/volumes';
+  import { filterVolumes, volumeRows, type VolumeRow } from '$lib/volumes';
   import { withParam } from '$lib/url';
+  import GroupHead, { type Said } from '$lib/GroupHead.svelte';
+  import ItemLine from '$lib/ItemLine.svelte';
   import UnlistedVms from '$lib/UnlistedVms.svelte';
   import VmSelect from '$lib/VmSelect.svelte';
   import VolumePrune from '$lib/VolumePrune.svelte';
@@ -19,26 +23,65 @@
   let query = $state('');
   let error = $state<string | null>(null);
   let removing = $state<string | null>(null);
-  // Sizes and users come from `system df`, which walks every volume: only when asked.
-  let usage = $state<Map<string, Map<string, VolumeUsage>> | null>(null);
-  let usageFailed = $state<VmError[]>([]);
-  let measuring = $state(false);
+  let said = $state<Record<string, Said | null>>({});
 
   const vmFilter = $derived(page.url.searchParams.get('vm') || null);
+  // Sizes and users come from `system df`, which walks every volume: known only once measured.
+  const usageOf = (r: VolumeRow) => measured.byVm[r.vm]?.volumes.get(r.v.name);
+  const usedOf = (r: VolumeRow) => {
+    const u = usageOf(r);
+    return u ? u.users > 0 : undefined;
+  };
   const all = $derived(volumes.ok.flatMap(({ vm, value }) => volumeRows(vm, value)));
   const rows = $derived(filterVolumes(all, { vm: vmFilter, query }));
-  const perVm = $derived(volumes.ok.filter(({ vm }) => vmFilter == null || vm === vmFilter));
+  const vms = $derived(volumes.ok.map((p) => p.vm));
+  const shown = $derived(vms.filter((vm) => vmFilter == null || vm === vmFilter));
+  const held = $derived(all.map((r) => ({ row: r, used: usedOf(r) })));
 
-  async function measure() {
-    measuring = true;
-    const { ok, failed } = await fromEachVm(perVm.map((p) => p.vm), api.systemDf);
-    usage = new Map(ok.map(({ vm, value }) => [vm, volumeUsage(value)]));
-    usageFailed = failed;
-    measuring = false;
-  }
+  const facts = $derived(
+    volumes.ok.map(({ vm, value }) => {
+      const mine = held.filter((h) => h.row.vm === vm);
+      const known = measured.byVm[vm] != null;
+      const unused = mine.filter((h) => h.used === false);
+      const vmLive = live.vm(vm);
+      const disk = vmLive ? gauges(vmLive).disk : null;
+      return {
+        vm, live: vmLive, count: value.length, known,
+        unused: known ? unused.length : undefined,
+        unusedBytes: unused.reduce((n, h) => n + (usageOf(h.row)?.size ?? 0), 0),
+        pct: disk?.pct ?? 0, hot: disk?.hot ?? false,
+        sentence: holdsSentence('volume', mine.length, known ? unused.length : undefined),
+      };
+    }),
+  );
+  // Measured: unused first, then the largest. Not yet: by name.
+  const lineOrder = (a: VolumeRow, b: VolumeRow) =>
+    Number(usedOf(a) ?? 0) - Number(usedOf(b) ?? 0) || (usageOf(b)?.size ?? 0) - (usageOf(a)?.size ?? 0) || a.v.name.localeCompare(b.v.name);
+  // The fullest disk first: where removing something matters most.
+  const groups = $derived(
+    facts
+      .filter((f) => shown.includes(f.vm))
+      .map((f) => ({ ...f, lines: rows.filter((r) => r.vm === f.vm).sort(lineOrder) }))
+      .filter((g) => !query || g.lines.length)
+      .sort((a, b) => b.pct - a.pct || a.vm.localeCompare(b.vm)),
+  );
 
-  function usageOf(row: VolumeRow): VolumeUsage | undefined {
-    return usage?.get(row.vm)?.get(row.v.name);
+  const headline = $derived(unusedHeadline('volume', held, vms));
+  const everyMeasured = $derived(measured.every(vms) != null);
+  const lede = $derived(
+    everyMeasured
+      ? unusedLede({ hot: facts.filter((f) => f.hot && f.unused).map((f) => f.vm), freeable: facts.reduce((n, f) => n + f.unusedBytes, 0) })
+      : all.length
+        ? 'How big each one is, and whether a container uses it, takes a walk through every volume: measure sizes to know.'
+        : '',
+  );
+  const largest = $derived(rows.reduce<VolumeRow | null>((top, r) => ((usageOf(r)?.size ?? 0) > (top ? (usageOf(top)?.size ?? 0) : 0) ? r : top), null));
+  const scale = $derived(Math.max(1, largest ? (usageOf(largest)?.size ?? 0) : 0));
+  const measuredAt = $derived(measured.oldest(shown));
+
+  function changed(vm: string) {
+    volumes.load();
+    measured.changed(vm);
   }
 
   async function remove(row: VolumeRow) {
@@ -51,80 +94,92 @@
       error = `Couldn't remove ${row.v.name} from ${row.vm}: ${e}`;
     } finally {
       removing = null;
-      volumes.load();
+      changed(row.vm);
     }
+  }
+
+  // How much of its VM's disk a volume takes: whether removing it would make room.
+  function diskShare(size: number, disk: number | undefined): string {
+    if (!disk) return '';
+    const pct = (size / disk) * 100;
+    return pct < 1 ? 'under 1 % of the disk' : `${pct.toFixed(0)} % of the disk`;
+  }
+
+  function usedText(r: VolumeRow): string {
+    const u = usageOf(r);
+    if (!u) return '–';
+    if (u.users === 0) return 'no container';
+    return `${u.users} ${u.users === 1 ? 'container' : 'containers'}`;
   }
 </script>
 
-<div class="page">
-  <div class="title">
-    <h1 class="headline">Volumes</h1>
-    <span class="muted">in every running VM</span>
-  </div>
-
-  <div class="toolbar">
-    <VmSelect vms={scope.running} value={vmFilter} onchange={(vm) => goto(withParam(page.url, 'vm', vm), { replaceState: true, keepFocus: true, noScroll: true })} />
-    <input type="search" placeholder="Search name" bind:value={query} />
-    <button onclick={() => volumes.load()} disabled={volumes.loading}>{volumes.loading ? 'Refreshing…' : 'Refresh'}</button>
-    <button onclick={measure} disabled={measuring || perVm.length === 0} title="Walks every volume, so it can take a few seconds">
-      {measuring ? 'Measuring…' : 'Measure sizes'}
-    </button>
-    <span class="muted">{rows.length} of {all.length}</span>
-  </div>
-
-  <UnlistedVms {scope} what="volumes" failed={[...volumes.failed, ...usageFailed]} />
-  {#if error}<p class="error">{error}</p>{/if}
-
-  {#if perVm.length}
-    <section class="panel prune">
-      {#each perVm as { vm, value } (vm)}
-        <VolumePrune {vm} count={value.length} onpruned={() => volumes.load()} />
+<h1 class="headline">{volumes.loaded ? headline : 'Volumes'}</h1>
+{#if held.length}
+  <div class="summary">
+    <div class="dots" role="img" aria-label={headline}>
+      {#each held as h (`${h.row.vm}/${h.row.v.name}`)}
+        <span class="dot" class:off={h.used === false} class:unknown={h.used == null}
+          title={`${h.row.v.name} in ${h.row.vm}: ${h.used == null ? 'not measured' : h.used ? 'in use' : 'unused'}`}></span>
       {/each}
-    </section>
-  {/if}
+    </div>
+    {#if lede}<p class="lede">{lede}</p>{/if}
+  </div>
+{/if}
 
-  <section class="panel">
-    {#if !volumes.loaded}
-      <p class="muted">Loading…</p>
-    {:else if rows.length === 0}
-      <p class="muted">{all.length === 0 ? 'No volumes in any running VM.' : 'No volumes match.'}</p>
-    {:else}
-      <table class="list">
-        <thead>
-          <tr><th>name</th><th>VM</th><th>driver</th><th>mountpoint (in the VM)</th><th>created</th><th class="n">size</th><th>in use</th><th></th></tr>
-        </thead>
-        <tbody>
-          {#each rows as row (`${row.vm}/${row.v.name}`)}
-            {@const u = usageOf(row)}
-            <tr>
-              <td class="name">{row.v.name}</td>
-              <td><a href={`/vm/${encodeURIComponent(row.vm)}`}>{row.vm}</a></td>
-              <td>{row.v.driver}</td>
-              <td class="muted path">{row.v.mountpoint}</td>
-              <td class="muted" title={new Date(row.v.createdAt).toLocaleString('en-GB')}>{age(row.created)}</td>
-              <td class="n" title={u ? undefined : 'Measure sizes to see'}>{u ? bytes(u.size) : '–'}</td>
-              <td>
-                {#if u && u.users > 0}<span class="badge running">{u.users} container{u.users === 1 ? '' : 's'}</span>
-                {:else if !u}<span class="muted">–</span>{/if}
-              </td>
-              <td class="acts">
-                <button class="danger" disabled={(u?.users ?? 0) > 0 || removing === `${row.vm}/${row.v.name}`}
-                  title={(u?.users ?? 0) > 0 ? 'In use — remove its containers first' : undefined}
-                  onclick={() => remove(row)}>remove</button>
-              </td>
-            </tr>
-          {/each}
-        </tbody>
-      </table>
-    {/if}
-  </section>
+<div class="toolbar">
+  <VmSelect vms={scope.running} value={vmFilter} onchange={(vm) => goto(withParam(page.url, 'vm', vm), { replaceState: true, keepFocus: true, noScroll: true })} />
+  <input type="search" placeholder="Search name" bind:value={query} />
+  <button onclick={() => volumes.load()} disabled={volumes.loading}>{volumes.loading ? 'Refreshing…' : 'Refresh'}</button>
+  <button onclick={() => measured.measure(shown)} disabled={measured.measuring || shown.length === 0} title="Sizes and users from podman's system df: it walks every volume, so it can take a few seconds">
+    {measured.measuring ? 'Measuring…' : measuredAt ? 'Measure again' : 'Measure sizes'}
+  </button>
+  <span class="muted num">{rows.length} of {all.length}{#if measuredAt}{` · measured ${age(measuredAt / 1000)}`}{/if}</span>
 </div>
 
+<UnlistedVms {scope} what="volumes" failed={[...volumes.failed, ...measured.failed.filter((f) => vms.includes(f.vm))]} />
+{#if error}<p class="error">{error}</p>{/if}
+
+{#if !volumes.loaded}
+  <p class="muted">Loading…</p>
+{:else if groups.length === 0}
+  <p class="note">{all.length === 0 ? 'Nothing to list.' : 'No volumes match.'}</p>
+{:else}
+  {#if largest}
+    <p class="note">Size bars share one scale: full width is the largest volume listed, {largest.v.name} at {bytes(scale)}. Removing a volume deletes its data for good.</p>
+  {/if}
+  <div class="lines items">
+    {#each groups as g (g.vm)}
+      <section>
+        <GroupHead vm={g.vm} live={g.live} sentence={g.sentence} said={said[g.vm]} heads={g.lines.length > 0}>
+          {#snippet actions()}
+            <VolumePrune vm={g.vm} count={g.count} unused={g.unused} onpruned={() => changed(g.vm)} bind:said={said[g.vm]} />
+          {/snippet}
+        </GroupHead>
+        {#each g.lines as row (row.v.name)}
+          {@const u = usageOf(row)}
+          {@const disk = g.live ? gauges(g.live).disk.size : undefined}
+          <ItemLine title={row.v.name}
+            second={`created ${age(row.created)}${row.v.driver !== 'local' ? ` · ${row.v.driver} driver` : ''}`}
+            secondTitle={`In the VM at ${row.v.mountpoint}; created ${new Date(row.v.createdAt).toLocaleString('en-GB')}`}
+            size={u?.size} {scale} sizeLabel={u ? diskShare(u.size, disk) : 'not measured'}
+            used={usedOf(row)} usedText={usedText(row)}
+            removable={(u?.users ?? 0) === 0 && removing !== `${row.vm}/${row.v.name}`}
+            removeTitle={(u?.users ?? 0) > 0 ? 'In use — remove its containers first' : 'Deletes its data for good'}
+            onremove={() => remove(row)}>
+            {#snippet name()}{row.v.name}{/snippet}
+          </ItemLine>
+        {/each}
+      </section>
+    {/each}
+  </div>
+{/if}
+
 <style>
-  .page { display: grid; gap: 1rem; align-content: start; }
-  .title { display: flex; align-items: baseline; gap: 0.75rem; flex-wrap: wrap; }
-  .muted { color: var(--muted); font-size: 0.9rem; margin: 0; }
-  .prune { display: grid; gap: 0.5rem; }
-  .name { overflow-wrap: anywhere; }
-  .path { overflow-wrap: anywhere; }
+  .summary { display: flex; flex-wrap: wrap; align-items: center; gap: 0.8rem 2.5rem; }
+  .dots { display: flex; flex-wrap: wrap; gap: 6px; max-width: 100%; }
+  .dot { width: 12px; height: 12px; border-radius: 50%; background: var(--bar); box-sizing: border-box; }
+  .dot.off { background: none; border: 2px solid var(--warn); }
+  .dot.unknown { background: var(--soft); }
+  .lines { display: grid; gap: 2.2rem; margin-top: 0.6rem; }
+  section { border-top: 1px solid var(--fg); padding-top: 0.8rem; border-bottom: 1px solid var(--border); }
 </style>

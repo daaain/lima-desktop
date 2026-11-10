@@ -116,6 +116,6 @@
   .heads { display: grid; grid-template-columns: var(--container-columns); column-gap: 1.4rem; padding: 0.7rem 0 0.4rem; }
   .heads .r { text-align: right; }
   @media (max-width: 860px) {
-    .heads { visibility: hidden; height: 0; padding: 0.3rem 0; }
+    .heads { display: none; }
   }
 </style>

@@ -156,7 +156,10 @@ pub struct Image {
     pub tags: Vec<String>,
     /// Unix seconds.
     pub created: i64,
+    /// Bytes, counting every layer, including those it shares with other images.
     pub size: u64,
+    /// How many containers use it, in any state: the engine's own count.
+    pub containers: u64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -208,6 +211,7 @@ impl From<RawImage> for Image {
                 .collect(),
             created: r.created.unwrap_or(0),
             size: r.size.unwrap_or(0),
+            containers: r.containers.unwrap_or(0),
         }
     }
 }
@@ -720,6 +724,7 @@ mod tests {
         );
         assert_eq!(i.created, 1787529600);
         assert_eq!(i.size, 286402757);
+        assert_eq!(i.containers, 2);
     }
 
     #[test]

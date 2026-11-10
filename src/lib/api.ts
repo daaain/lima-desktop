@@ -136,7 +136,10 @@ export interface Image {
   tags: string[];
   /** Unix seconds; 0 when the image doesn't say (reproducible builds). */
   created: number;
+  /** Bytes, counting the layers it shares with other images: sizes don't add up. */
   size: number;
+  /** How many containers use it, in any state: the VM's engine's own count. */
+  containers: number;
 }
 
 export interface Volume {

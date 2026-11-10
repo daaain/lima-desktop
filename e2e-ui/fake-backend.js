@@ -2,7 +2,8 @@
 // in src/lib/api.ts with an invented fleet. Nothing here is recorded from a real machine. The fleet is
 // made to exercise the UI: a VM past three quarters of its memory (a leak), a CPU-bound one with
 // an OOM kill, one with a nearly full disk and a managed-by marker, one whose podman is too old,
-// an idle one, and stopped and broken ones. Every value is a function of the entity and the time,
+// an idle one, and stopped and broken ones; image stores with superseded tags, dangling images and
+// an image with two tags, and volumes some no container uses (anonymous ones among them). Every value is a function of the entity and the time,
 // so two runs at the same (fixed) time draw the same picture.
 (() => {
   const GiB = 1024 ** 3;
@@ -61,6 +62,12 @@
   const latest = (id, t) => Object.fromEntries(Object.entries(metricsOf.get(id)).map(([k, f]) => [k, Math.round(f(t))]));
   const scaled = (shape, scale) => (t, id) => Math.max(0, shape(t, id)) * scale;
 
+  // A 64-digit hex id that follows from a name: containers on the same image share its id.
+  const hexOf = (name) => {
+    const codes = [...name].map((ch) => ch.charCodeAt(0));
+    return Array.from({ length: 8 }, (_, i) => Math.floor(noise(i, ...codes) * 2 ** 32).toString(16).padStart(8, '0')).join('');
+  };
+
   let ctSeq = 0;
   function container(name, image, o = {}) {
     const n = ++ctSeq;
@@ -81,7 +88,7 @@
         : {},
     );
     return {
-      id: (n.toString(16).padStart(4, '0') + 'c0ffee').repeat(7).slice(0, 64), name, image, imageId: `img${n}`,
+      id: (n.toString(16).padStart(4, '0') + 'c0ffee').repeat(7).slice(0, 64), name, image, imageId: hexOf(image),
       state: running ? 'running' : 'exited', status: running ? 'Up' : 'Exited (1)', created: Math.floor(START / 1000),
       startedAt: running ? Math.floor((NOW - (o.upHours ?? 26) * HOUR) / 1000) : Math.floor((NOW - 50 * HOUR) / 1000),
       composeProject: o.project, composeService: o.service, labels: {}, entity: id, latest: {},
@@ -223,14 +230,59 @@
     detail: null, containerName: harborApp.name, composeProject: 'harbor', composeService: 'app',
   }];
 
-  const images = (vm) => {
-    const v = fleet.find((f) => f.instance.name === vm);
-    const used = (v?.containers ?? []).map((c, i) => ({ id: `sha256:${c.imageId.padEnd(64, 'a')}`, tags: [c.image], created: Math.floor((NOW - (i + 2) * 9 * 24 * HOUR) / 1000), size: (80 + noise(i, vm.length) * 2400) * MiB }));
-    return [...used, { id: `sha256:${'d'.repeat(64)}`, tags: [], created: Math.floor((NOW - 15 * HOUR) / 1000), size: 2.5 * GiB }];
+  // Each VM's image store: the images its containers run (any state), and what they left behind —
+  // a superseded tag, dangling images from rebuilds, a base no container runs. `own` is what
+  // `system df` says an image holds alone; the rest of its size is layers shared with others.
+  const DAY = 24 * HOUR;
+  const extraImages = {
+    atlas: [
+      { tags: ['docker.io/library/postgres:16'], size: 438 * MiB, own: 12 * MiB, days: 140 },
+      { tags: ['localhost/atlas_ledger:2026-10-28'], size: 1.1 * GiB, own: 96 * MiB, days: 13 },
+      { tags: [], size: 1.4 * GiB, own: 310 * MiB, days: 2 },
+      { tags: [], size: 1.3 * GiB, own: 280 * MiB, days: 6 },
+    ],
+    harbor: [{ tags: ['docker.io/library/node:22-trixie-slim'], size: 1.9 * GiB, own: 1.1 * GiB, days: 70 }],
+    quill: [
+      { tags: ['docker.io/library/rust:1.91-trixie', 'docker.io/library/rust:latest'], size: 2.6 * GiB, own: 1.7 * GiB, days: 40 },
+      { tags: [], size: 2.9 * GiB, own: 2.2 * GiB, days: 1 },
+    ],
+    ember: [{ tags: ['docker.io/library/alpine:3.20'], size: 8 * MiB, own: 8 * MiB, days: 160, containers: 1 }],
   };
-  const volumes = (vm) => ['pgdata', 'cache', 'node_modules'].map((n, i) => ({
-    name: `${vm}_${n}`, driver: 'local', mountpoint: `/var/lib/containers/storage/volumes/${vm}_${n}/_data`, createdAt: new Date(NOW - (i + 3) * 11 * 24 * HOUR).toISOString(),
+  function imageStore(vm) {
+    const v = fleet.find((f) => f.instance.name === vm);
+    const byImage = new Map();
+    for (const c of v?.containers ?? []) byImage.set(c.image, (byImage.get(c.image) ?? 0) + 1);
+    const used = [...byImage].map(([tag, containers], i) => {
+      const size = (90 + noise(i, vm.length, 3) * 2300) * MiB;
+      return { id: hexOf(tag), tags: [tag], created: Math.floor((NOW - (i + 2) * 9 * DAY) / 1000), size, containers, own: size * (0.05 + 0.3 * noise(i, 7)) };
+    });
+    const extra = (extraImages[vm] ?? []).map((x, i) => ({
+      id: hexOf(`${vm}/${x.tags[0] ?? `dangling-${i}`}`), tags: x.tags, created: Math.floor((NOW - x.days * DAY) / 1000),
+      size: x.size, containers: x.containers ?? 0, own: x.own,
+    }));
+    return [...used, ...extra];
+  }
+  const images = (vm) => imageStore(vm).map(({ own, ...image }) => image);
+
+  // Each VM's volumes: [name, MiB, containers using it], and when it was created.
+  const anon = (vm, i) => hexOf(`${vm}/anonymous-${i}`);
+  const volumeStore = {
+    atlas: [['atlas_pgdata', 3480, 1], ['atlas_research-data', 760, 1], ['atlas_cache', 420, 2], ['atlas_node_modules', 1940, 0], [anon('atlas', 1), 3, 0]],
+    harbor: [['harbor_valkey', 12, 1], ['harbor_node_modules', 640, 1]],
+    quill: [['quill_cargo', 1150, 1], ['quill_target', 6300, 0], [anon('quill', 1), 48, 0]],
+    lantern: [],
+    ember: [['ember_data', 220, 1]],
+  };
+  const volumeRows = (vm) => (volumeStore[vm] ?? []).map(([name, mib, links], i) => ({ name, mib, links, days: 4 + i * 11 + vm.length }));
+  const volumes = (vm) => volumeRows(vm).map((v) => ({
+    name: v.name, driver: 'local', mountpoint: `/var/lib/containers/storage/volumes/${v.name}/_data`, createdAt: new Date(NOW - v.days * DAY).toISOString(),
   }));
+  // libpod's `system/df`, as much of it as the app reads.
+  const systemDf = (vm) => ({
+    Images: imageStore(vm).map((i) => ({ ImageID: i.id, Size: i.size, UniqueSize: i.own, SharedSize: i.size - i.own, Containers: i.containers })),
+    Containers: [{ RWSize: 310 * MiB }],
+    Volumes: volumeRows(vm).map((v) => ({ VolumeName: v.name, Size: v.mib * MiB, Links: v.links, ReclaimableSize: v.links ? 0 : v.mib * MiB })),
+  });
 
   const later = (value) => new Promise((resolve) => setTimeout(() => resolve(value), 150));
   const commands = {
@@ -240,7 +292,7 @@
     oom_events: ({ vm, from, to, limit = 500 }) => oom.filter((e) => (vm == null || e.vm === vm) && e.ts >= from && e.ts <= to).slice(0, limit),
     images: ({ vm }) => images(vm),
     volumes: ({ vm }) => volumes(vm),
-    system_df: ({ vm }) => ({ Images: images(vm).map((i) => ({ Size: i.size })), Containers: [{ RWSize: 310 * MiB }], Volumes: volumes(vm).map((v, i) => ({ VolumeName: v.name, Size: (i + 1) * 420 * MiB, Links: i === 2 ? 0 : 1 })) }),
+    system_df: ({ vm }) => later(systemDf(vm)),
     container_logs: () => '2026-01-01T00:00:00Z listening on :8080\n2026-01-01T00:00:01Z ready\n',
     container_inspect: ({ id }) => ({ Id: id, State: { Status: 'running' } }),
     vm_action: () => later(),

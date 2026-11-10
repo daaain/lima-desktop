@@ -7,7 +7,7 @@ import { join } from 'node:path';
 const [dir, commit = ''] = process.argv.slice(2);
 if (!dir) throw new Error('usage: node e2e-ui/gallery.mjs <dir> [commit]');
 
-const TITLES = { overview: 'VMs', vm: 'A VM', containers: 'Containers' };
+const TITLES = { overview: 'VMs', vm: 'A VM', containers: 'Containers', images: 'Images', volumes: 'Volumes' };
 const shots = (await readdir(dir)).filter((f) => f.endsWith('.png') && !f.endsWith('-dark.png')).map((f) => f.slice(0, -4));
 const order = (name) => (Object.keys(TITLES).indexOf(name) + 1 || 99);
 shots.sort((a, b) => order(a) - order(b) || a.localeCompare(b));

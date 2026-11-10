@@ -45,10 +45,12 @@ Containers, Images, Volumes. How it looks and reads is in [design/ui.md](./desig
 | `lib/Sketch.svelte`, `lib/Bar.svelte`, `lib/Capacity.svelte` | the three drawings: a day of history (its distribution on hover), a bar notched at quarters, and the host's bar (in use, allocated, what the computer has) |
 | `lib/Sizing.svelte` | a VM's four figures with their verdicts (`lib/rightsize.ts`), and the resize form |
 | `lib/ContainerLine.svelte` | one container as a line, shared by the Containers view and a VM's page |
+| `lib/GroupHead.svelte`, `lib/ItemLine.svelte` | the Images and Volumes views' VM group (its sentence, disk and clean-up) and an image or volume as a line |
+| `lib/measured.svelte.ts` | `system df` per VM, on request: what each image holds alone, each volume's size and users; shared by Images and Volumes, re-taken for a VM after a removal in it |
 | `lib/live.svelte.ts` | the 1 Hz snapshot every page shares (VMs, their containers and latest metrics) |
 | `lib/perVm.ts` | which VMs a podman-wide view lists (and the sentences about those it leaves out); asking each VM with `Promise.allSettled`, so one broken VM doesn't blank a list |
 | `lib/perVmList.svelte.ts` | images and volumes aren't in the snapshot: fetched on view open, after actions, on Refresh and every 15 s |
-| `lib/containers.ts`, `lib/images.ts`, `lib/volumes.ts` | each view's rows, filters and derived facts (an image is in use when a container in the same VM has its id; a volume's size and users come from `system df`, on demand — it walks every volume) |
+| `lib/containers.ts`, `lib/images.ts`, `lib/volumes.ts` | each view's rows, filters and derived facts (an image is in use when its VM's engine counts a container on it, or the snapshot shows one; a volume's size and users come from `system df`, on demand — it walks every volume) |
 | `routes/containers`, `routes/images`, `routes/volumes` | the views; `?vm=` (and `&running=1` for containers) in the URL is the filter, so other pages can link to it |
 
 The pure modules have `.test.ts` files next to them (`pnpm test`); `lib/testing.ts` builds snapshots
