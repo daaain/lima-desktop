@@ -139,6 +139,10 @@ for (const dark of [false, true]) {
     // Sizes and users wait for a measurement: until then it says how many, and where.
     assert.equal(await page.getByRole('heading', { level: 1 }).innerText(), 'Five VMs hold eleven volumes.');
     assert.match(await page.locator('section', { hasText: 'atlas' }).first().innerText(), /not measured/);
+    // Under the Size head, before and after measuring, is the size: said, then drawn.
+    const sizeHead = page.locator('.column-heads > span', { hasText: 'Size' });
+    const sizeCell = () => page.locator('.line').first().locator(':scope > *').nth(1);
+    assert.equal((await sizeCell().boundingBox()).x, (await sizeHead.boundingBox()).x);
     await page.getByRole('button', { name: 'Measure sizes' }).click();
     await page.getByRole('heading', { level: 1, name: /aren't used/ }).waitFor();
     assert.equal(await page.getByRole('heading', { level: 1 }).innerText(), "Four of 11 volumes aren't used by any container.");
@@ -146,6 +150,7 @@ for (const dark of [false, true]) {
     const quill = page.locator('section').first();
     assert.match(await quill.locator('h2').innerText(), /^quill holds three volumes; two aren't used\.$/);
     assert.match(await quill.locator('.line').first().innerText(), /quill_target[\s\S]*6\.2 GiB[\s\S]*no container/);
+    assert.equal((await sizeCell().boundingBox()).x, (await sizeHead.boundingBox()).x);
     await shoot(page, `volumes${suffix}`);
     assert.deepEqual(errors, []);
     await close();

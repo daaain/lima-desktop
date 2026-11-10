@@ -1,6 +1,6 @@
 <script lang="ts">
   // An image or a volume as a line: its name and what it is, its size drawn against the largest
-  // listed, who uses it, and its removal. A size not yet measured is a dash, not a bar.
+  // listed, who uses it, and its removal. A size not yet measured is said, not drawn.
   import type { Snippet } from 'svelte';
   import { share } from './almanac';
   import { bytes } from './format';
@@ -30,16 +30,19 @@
     <span class="name serif" {title}>{@render name()}</span>
     <span class="second" title={secondTitle}>{second}</span>
   </div>
-  <div class="drawn">
-    {#if size != null}
+  {#if size != null}
+    <div class="drawn">
       <Bar pct={share(own ?? size, scale)} behind={own != null ? share(size, scale) : undefined} plain
         label={`${title}: ${bytes(size)}${own != null ? `, ${bytes(own)} of it its own` : ''}; full width ${bytes(scale)}`} />
-    {/if}
-  </div>
-  <div class="said">
-    <strong>{size != null ? bytes(size) : '–'}</strong>
-    <span class="label">{sizeLabel}</span>
-  </div>
+    </div>
+    <div class="said">
+      <strong>{bytes(size)}</strong>
+      <span class="label">{sizeLabel}</span>
+    </div>
+  {:else}
+    <!-- Not measured: said where the size would be drawn, under its column's head. -->
+    <span class="unmeasured label">{sizeLabel}</span>
+  {/if}
   <div class="users" title={usedTitle}>
     {#if used != null}<span class="dot" class:off={!used}></span>{/if}
     <span class:muted={!used}>{usedText}</span>
@@ -62,6 +65,7 @@
   .said { display: grid; gap: 0.05rem; min-width: 0; }
   .said strong { font-size: 1rem; font-weight: 600; white-space: nowrap; }
   .said .label { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .unmeasured { grid-column: span 2; padding-bottom: 0.2rem; }
   .users { display: flex; align-items: center; gap: 0.45rem; min-width: 0; padding-bottom: 0.15rem; font-size: 0.9rem; }
   .users span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--bar); box-sizing: border-box; }
