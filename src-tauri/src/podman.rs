@@ -197,8 +197,9 @@ struct RawInspect {
 struct RawGraphDriver {
     #[serde(default)]
     name: String,
+    /// Go writes an empty map as `null`: absent and null both mean none.
     #[serde(default)]
-    data: BTreeMap<String, String>,
+    data: Option<BTreeMap<String, String>>,
 }
 
 /// From an image's `inspect`: the guest folder of each of its layers, newest first — what each
@@ -213,8 +214,9 @@ pub fn parse_layer_dirs(body: &[u8]) -> Result<Vec<String>, PodmanError> {
             if driver.name.is_empty() { "unnamed" } else { &driver.name }
         )));
     }
-    let upper = driver.data.get("UpperDir").into_iter().map(String::as_str);
-    let lower = driver.data.get("LowerDir").into_iter().flat_map(|l| l.split(':'));
+    let data = driver.data.unwrap_or_default();
+    let upper = data.get("UpperDir").into_iter().map(String::as_str);
+    let lower = data.get("LowerDir").into_iter().flat_map(|l| l.split(':'));
     Ok(upper.chain(lower).filter(|d| !d.is_empty()).map(str::to_string).collect())
 }
 
@@ -723,8 +725,16 @@ mod tests {
         // A one-layer image has no LowerDir.
         let body = br#"{"GraphDriver":{"Name":"overlay","Data":{"UpperDir":"/s/overlay/a/diff"}}}"#;
         assert_eq!(parse_layer_dirs(body).unwrap(), ["/s/overlay/a/diff"]);
-        let body = br#"{"GraphDriver":{"Name":"vfs","Data":{}}}"#;
-        assert!(parse_layer_dirs(body).unwrap_err().to_string().contains("vfs driver"));
+        // Another driver is said by name, whether its data is empty, null or absent.
+        for body in [
+            &br#"{"GraphDriver":{"Name":"vfs","Data":{}}}"#[..],
+            br#"{"GraphDriver":{"Name":"vfs","Data":null}}"#,
+            br#"{"GraphDriver":{"Name":"vfs"}}"#,
+        ] {
+            assert!(parse_layer_dirs(body).unwrap_err().to_string().contains("vfs driver"));
+        }
+        // Overlay with no data: no layers, rather than a decode error.
+        assert!(parse_layer_dirs(br#"{"GraphDriver":{"Name":"overlay","Data":null}}"#).unwrap().is_empty());
     }
 
     #[test]
