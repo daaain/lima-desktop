@@ -284,6 +284,21 @@
     Volumes: volumeRows(vm).map((v) => ({ VolumeName: v.name, Size: v.mib * MiB, Links: v.links, ReclaimableSize: v.links ? 0 : v.mib * MiB })),
   });
 
+  // A container's last 120 log lines, every ten minutes back across midnight, as podman sends them
+  // with timestamps on: an RFC 3339 time and a space before each line.
+  const containerLogs = (id) => {
+    const seed = parseInt(id.slice(0, 4), 16);
+    const routes = ['/api/health', '/api/items', '/api/items/42', '/login', '/static/app.js'];
+    return Array.from({ length: 120 }, (_, i) => {
+      const t = new Date(NOW - (119 - i) * 10 * 60_000 - Math.floor(noise(seed, i) * 9000));
+      const n = noise(seed, i, 1);
+      const text = i === 0 ? 'listening on :8080'
+        : n < 0.06 ? `WARN slow query took ${Math.round(800 + n * 9000)} ms: SELECT * FROM items WHERE owner_id = $1 ORDER BY updated_at DESC LIMIT 50`
+        : `GET ${routes[Math.floor(n * routes.length)]} ${n < 0.1 ? 404 : 200} ${Math.round(2 + n * 40)} ms`;
+      return `${t.toISOString().replace('Z', '123456Z')} ${text}`;
+    }).join('\n') + '\n';
+  };
+
   const later = (value) => new Promise((resolve) => setTimeout(() => resolve(value), 150));
   const commands = {
     snapshot,
@@ -293,7 +308,7 @@
     images: ({ vm }) => images(vm),
     volumes: ({ vm }) => volumes(vm),
     system_df: ({ vm }) => later(systemDf(vm)),
-    container_logs: () => '2026-01-01T00:00:00Z listening on :8080\n2026-01-01T00:00:01Z ready\n',
+    container_logs: ({ id }) => containerLogs(id),
     container_inspect: ({ id }) => ({ Id: id, State: { Status: 'running' } }),
     vm_action: () => later(),
     vm_resize: () => later(),

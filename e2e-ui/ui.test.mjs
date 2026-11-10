@@ -189,6 +189,26 @@ test('Container details open inline, several at once, and hold a value being rea
   await close();
 });
 
+test("A container's log opens at its newest line, each with podman's time", async () => {
+  const { page, errors, close } = await open('/containers');
+  await page.locator('.line', { has: page.locator('.name', { hasText: /^frontend/ }) }).first().click();
+  await page.locator('section.detail').getByRole('button', { name: 'logs' }).click();
+  const log = page.locator('section.detail .log');
+  await log.locator('.ln').first().waitFor();
+  assert.equal(await log.locator('.ln').count(), 120);
+  // The day is said where it changes (the fake log crosses midnight), the time on every line.
+  assert.match(await log.locator('.day').first().innerText(), /^Monday 9 November$/);
+  assert.match(await log.locator('.ln .t').last().innerText(), /^\d\d:\d\d:\d\d$/);
+  const { top, height, client } = await log.evaluate((el) => ({ top: el.scrollTop, height: el.scrollHeight, client: el.clientHeight }));
+  assert.ok(top > 0 && top + client >= height - 1, `scrolled to the end (${top} + ${client} of ${height})`);
+  // Scrolled up to read, it stays there: the live updates don't fetch it again.
+  await log.evaluate((el) => (el.scrollTop = 0));
+  await page.waitForTimeout(2500);
+  assert.equal(await log.evaluate((el) => el.scrollTop), 0);
+  assert.deepEqual(errors, []);
+  await close();
+});
+
 for (const [path, ready] of [['/', 'article'], ['/containers', '.line'], ['/images', '.line'], ['/volumes', '.line']]) {
   test(`${path} stacks on a narrow window`, async () => {
     const { page, errors, close } = await open(path, { width: 420, height: 900 });

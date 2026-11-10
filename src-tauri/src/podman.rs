@@ -530,9 +530,10 @@ impl Libpod {
             .await
     }
 
+    /// The last `tail` lines, each starting with the RFC 3339 time podman recorded it at and a space.
     pub async fn logs(&self, id: &str, tail: u32) -> Result<String, PodmanError> {
         let path = format!(
-            "/containers/{}/logs?stdout=true&stderr=true&timestamps=false&tail={tail}",
+            "/containers/{}/logs?stdout=true&stderr=true&timestamps=true&tail={tail}",
             encode_component(id)
         );
         Ok(demux_logs(&self.request(Method::GET, &path).await?))
