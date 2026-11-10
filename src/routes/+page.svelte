@@ -75,7 +75,7 @@
 
   {#if running.length}
     <section class="fleet">
-      <div class="row heads serif" aria-hidden="true">
+      <div class="row heads column-heads" aria-hidden="true">
         <span>{countWord(running.length)} {running.length === 1 ? 'is' : 'are'} running</span>
         <span>Memory</span><span>CPU</span><span>Disk</span><span>Containers</span>
       </div>
@@ -167,7 +167,6 @@
   .capacities { display: grid; gap: 0.9rem; }
   .fleet { margin-top: 1.6rem; }
   .row { display: grid; grid-template-columns: minmax(15rem, 1.25fr) repeat(3, minmax(0, 1fr)) minmax(10.5rem, 0.85fr); column-gap: 2.2rem; }
-  .heads { font-size: 2.1rem; font-weight: 500; letter-spacing: -0.01em; line-height: 1.1; padding-bottom: 0.9rem; border-bottom: 1px solid var(--fg); align-items: end; }
   .vm { padding: 1.6rem 0; border-bottom: 1px solid var(--border); align-items: start; }
   .who { display: grid; gap: 0.5rem; min-width: 0; justify-items: start; }
   .name-line { display: flex; align-items: center; gap: 0.5rem; min-width: 0; max-width: 100%; }

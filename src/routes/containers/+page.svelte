@@ -3,7 +3,7 @@
   import { page } from '$app/state';
   import { live } from '$lib/live.svelte';
   import { bytes } from '$lib/format';
-  import { containersHeadline, exitedSentence, runsSentence } from '$lib/almanac';
+  import { containersHeadline, countWord, exitedSentence, runsSentence } from '$lib/almanac';
   import { History } from '$lib/history.svelte';
   import { containerRows, filterContainers, readContainerFilter } from '$lib/containers';
   import { podmanFailures, podmanScope } from '$lib/perVm';
@@ -81,15 +81,13 @@
 {:else if rows.length === 0}
   <p class="note">{all.length === 0 ? 'Nothing to list.' : 'No containers match.'}</p>
 {:else}
-  <p class="note">
-    Memory bars share one scale: full width is the largest container listed{#if largest}, {largest.c.composeService ?? largest.c.name} at {bytes(memScale)}{/if}; the pale stretch is each one's peak.
-    CPU bars are scaled to the cores of the container's VM. Above each, the last 24 hours; hover for how long was spent at each level.
-  </p>
+  <div class="column-heads containers-grid" aria-hidden="true">
+    <span>{countWord(groups.length)} {groups.length === 1 ? 'VM' : 'VMs'}</span><span class="span">Memory</span><span class="span">CPU</span><span class="r">Up</span><span></span>
+  </div>
   <div class="lines">
     {#each groups as g (g.vm)}
       <section>
         <h2 class="head"><a href={`/vm/${encodeURIComponent(g.vm)}`}>{g.vm}</a> {runsSentence(g.rows.map((r) => r.c))}</h2>
-        <div class="heads label" aria-hidden="true"><span></span><span>Memory</span><span></span><span>CPU</span><span></span><span class="r">Up</span><span></span></div>
         {#each g.rows as { vm, c } (c.id)}
           <ContainerLine {vm} {c} history={history.get(c.entity)} {memScale} vmCpus={g.live?.instance.cpus ?? 1} vmMemory={g.live?.instance.memory ?? 0} second="image"
             now={live.snapshot?.updated} selected={selected?.vm === vm && selected.id === c.id} onselect={() => toggle(vm, c.id)} onerror={(e) => (actionError = e)} />
@@ -97,6 +95,10 @@
       </section>
     {/each}
   </div>
+  <p class="note">
+    Memory bars share one scale: full width is the largest container listed{#if largest}, {largest.c.composeService ?? largest.c.name} at {bytes(memScale)}{/if}; the pale stretch is each one's peak.
+    CPU bars are scaled to the cores of the container's VM. Above each, the last 24 hours; hover for how long was spent at each level.
+  </p>
 {/if}
 
 {#if selected && selectedRow}
@@ -110,12 +112,14 @@
   .dot { width: 12px; height: 12px; border-radius: 50%; background: var(--bar); box-sizing: border-box; }
   .dot.off { background: none; border: 2px solid var(--warn); }
   .check { display: flex; align-items: center; gap: 0.3rem; font-size: 0.9rem; }
-  .lines { --container-columns: minmax(13rem, 1.3fr) minmax(9rem, 1fr) 8.5rem minmax(7rem, 0.6fr) 5.5rem 5rem 11.5rem; display: grid; gap: 2.2rem; margin-top: 0.6rem; }
+  .lines, .containers-grid { --container-columns: minmax(13rem, 1.3fr) minmax(9rem, 1fr) 8.5rem minmax(7rem, 0.6fr) 5.5rem 5rem 11.5rem; }
+  .containers-grid { grid-template-columns: var(--container-columns); column-gap: 1.4rem; margin-top: 0.6rem; }
+  .lines { display: grid; gap: 2.2rem; }
   section { border-top: 1px solid var(--fg); padding-top: 0.8rem; border-bottom: 1px solid var(--border); }
+  section:first-child { border-top: 0; }
   .head a { color: var(--fg); font-weight: 600; }
-  .heads { display: grid; grid-template-columns: var(--container-columns); column-gap: 1.4rem; padding: 0.7rem 0 0.4rem; }
-  .heads .r { text-align: right; }
   @media (max-width: 860px) {
-    .heads { display: none; }
+    .column-heads { display: none; }
+    section:first-child { border-top: 1px solid var(--fg); }
   }
 </style>

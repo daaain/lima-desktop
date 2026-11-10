@@ -99,7 +99,8 @@ under the sentence, figures and bar it explains, with the allocation as a dashed
 - **A VM**: the headline verdict; four figures (Memory, CPU, Pressure, Disk), each a verdict
   sentence, three numbers, a bar and its chart; the resize sentence; out-of-memory kills when
   there are any; its containers as lines.
-- **Containers**: the headline and a dot per container; filters; then a group per VM ("atlas runs
+- **Containers**: the headline and a dot per container; filters; then the column heads (the
+  overview's serif ones, `.column-heads`, as on a VM's page, Images and Volumes) and a group per VM ("atlas runs
   twelve, all in atlas, and one has exited."), each container a line with memory and CPU drawn.
 - **Images, Volumes**: the headline counts what no container uses ("Seven of 27 images aren't used
   by any container."), with a dot per image or volume (a hollow ring for unused) and a sentence on

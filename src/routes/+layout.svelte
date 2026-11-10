@@ -92,6 +92,14 @@
     font: inherit; font-size: 0.9rem; height: 2.3rem; padding: 0 0.9rem; border-radius: 1.15rem;
     border: 1px solid var(--border); background: transparent; color: var(--fg);
   }
+  /* Column heads over a list (VMs, containers, images, volumes): serif, on the list's rule. A page
+     lays them on its list's grid and hides them where its lines stack. */
+  :global(.column-heads) {
+    display: grid; font-family: var(--serif); font-size: 2.1rem; font-weight: 500; letter-spacing: -0.01em; line-height: 1.1;
+    padding-bottom: 0.9rem; border-bottom: 1px solid var(--fg); align-items: end;
+  }
+  :global(.column-heads .r) { text-align: right; }
+  :global(.column-heads .span) { grid-column: span 2; }
   /* An image's or a volume's line (ItemLine) and its group's column heads (GroupHead). */
   :global(.items) { --item-columns: minmax(14rem, 1.7fr) minmax(8rem, 1fr) 8.5rem minmax(9rem, 0.9fr) 6rem; }
   :global(table.list) { width: 100%; border-collapse: collapse; font-size: 0.9rem; }

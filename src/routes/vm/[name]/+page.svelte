@@ -214,7 +214,7 @@
         Above each, the last 24 hours. Compose projects are read-only groups. <a href={`/containers?vm=${encodeURIComponent(name)}`}>Filter and search them in Containers.</a>
       </p>
       <div class="lines">
-        <div class="heads label" aria-hidden="true"><span></span><span>Memory</span><span></span><span>CPU</span><span></span><span class="r">Up</span><span></span></div>
+        <div class="column-heads" aria-hidden="true"><span></span><span class="span">Memory</span><span class="span">CPU</span><span class="r">Up</span><span></span></div>
         {#each groups as g (g.project)}
           {#if groups.length > 1 || g.project}<h3 class="group serif">{g.project ?? 'Not in a compose project'}</h3>{/if}
           {#each g.containers as c (c.id)}
@@ -241,8 +241,8 @@
   .title.small .head { flex: 1 1 20rem; }
   .panel { display: grid; gap: 0.7rem; margin-top: 1.4rem; }
   .lines { --container-columns: minmax(13rem, 1.3fr) minmax(9rem, 1fr) 8.5rem minmax(7rem, 0.6fr) 5.5rem 5rem 11.5rem; border-bottom: 1px solid var(--border); }
-  .heads { display: grid; grid-template-columns: var(--container-columns); column-gap: 1.4rem; padding: 0.3rem 0 0.4rem; }
-  .heads .r { text-align: right; }
+  .column-heads { grid-template-columns: var(--container-columns); column-gap: 1.4rem; margin-top: 0.4rem; }
+  .column-heads + .group, .column-heads + :global(.line) { border-top: 0; }
   .group { margin: 0; padding: 1rem 0 0.4rem; font-size: 1.05rem; font-weight: 500; color: var(--muted); border-top: 1px solid var(--border); }
   .group + :global(.line) { border-top: 0; }
   .cname { font-weight: 500; }
@@ -252,6 +252,6 @@
   #oom .badge { margin-left: 0.3rem; }
   button.link { border: none; background: none; padding: 0; height: auto; color: var(--accent); cursor: pointer; font-size: inherit; }
   @media (max-width: 860px) {
-    .heads { display: none; }
+    .column-heads { display: none; }
   }
 </style>

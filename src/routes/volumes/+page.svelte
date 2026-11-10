@@ -4,7 +4,7 @@
   import { live } from '$lib/live.svelte';
   import { api } from '$lib/api';
   import { age, bytes } from '$lib/format';
-  import { gauges, holdsSentence, unusedHeadline, unusedLede } from '$lib/almanac';
+  import { countWord, gauges, holdsSentence, unusedHeadline, unusedLede } from '$lib/almanac';
   import { measured } from '$lib/measured.svelte';
   import { podmanScope } from '$lib/perVm';
   import { PerVmList } from '$lib/perVmList.svelte';
@@ -144,13 +144,13 @@
 {:else if groups.length === 0}
   <p class="note">{all.length === 0 ? 'Nothing to list.' : 'No volumes match.'}</p>
 {:else}
-  {#if largest}
-    <p class="note">Size bars share one scale: full width is the largest volume listed, {largest.v.name} at {bytes(scale)}. Removing a volume deletes its data for good.</p>
-  {/if}
+  <div class="column-heads items" aria-hidden="true">
+    <span>{countWord(groups.length)} {groups.length === 1 ? 'VM' : 'VMs'}</span><span class="span">Size</span><span>Used by</span><span></span>
+  </div>
   <div class="lines items">
     {#each groups as g (g.vm)}
       <section>
-        <GroupHead vm={g.vm} live={g.live} sentence={g.sentence} said={said[g.vm]} heads={g.lines.length > 0}>
+        <GroupHead vm={g.vm} live={g.live} sentence={g.sentence} said={said[g.vm]}>
           {#snippet actions()}
             <VolumePrune vm={g.vm} count={g.count} unused={g.unused} onpruned={() => changed(g.vm)} bind:said={said[g.vm]} />
           {/snippet}
@@ -172,6 +172,9 @@
       </section>
     {/each}
   </div>
+  {#if largest}
+    <p class="note">Size bars share one scale: full width is the largest volume listed, {largest.v.name} at {bytes(scale)}. Removing a volume deletes its data for good.</p>
+  {/if}
 {/if}
 
 <style>
@@ -180,6 +183,12 @@
   .dot { width: 12px; height: 12px; border-radius: 50%; background: var(--bar); box-sizing: border-box; }
   .dot.off { background: none; border: 2px solid var(--warn); }
   .dot.unknown { background: var(--soft); }
-  .lines { display: grid; gap: 2.2rem; margin-top: 0.6rem; }
+  .column-heads { grid-template-columns: var(--item-columns); column-gap: 1.4rem; margin-top: 0.6rem; }
+  .lines { display: grid; gap: 2.2rem; }
   section { border-top: 1px solid var(--fg); padding-top: 0.8rem; border-bottom: 1px solid var(--border); }
+  section:first-child { border-top: 0; }
+  @media (max-width: 860px) {
+    .column-heads { display: none; }
+    section:first-child { border-top: 1px solid var(--fg); }
+  }
 </style>

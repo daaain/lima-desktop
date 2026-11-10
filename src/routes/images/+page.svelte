@@ -4,7 +4,7 @@
   import { live } from '$lib/live.svelte';
   import { api, type Image } from '$lib/api';
   import { age, bytes, shortId } from '$lib/format';
-  import { gauges, holdsSentence, unusedHeadline, unusedLede } from '$lib/almanac';
+  import { countWord, gauges, holdsSentence, unusedHeadline, unusedLede } from '$lib/almanac';
   import { danglingCount, filterImages, imageRows, imageUsers, inUse, splitReference, type ImageRow } from '$lib/images';
   import { measured } from '$lib/measured.svelte';
   import { podmanScope } from '$lib/perVm';
@@ -145,15 +145,13 @@
 {:else if groups.length === 0}
   <p class="note">{all.length === 0 ? 'Nothing to list.' : 'No images match.'}</p>
 {:else}
-  <p class="note">
-    Size bars share one scale: full width is the largest image listed{#if largest}, {largest.tagged ? largest.name : `untagged ${shortId(largest.id)}`} at {bytes(scale)}{/if}.
-    An image's size counts the layers it shares with others, so sizes don't add up;
-    {#if everyMeasured}the solid part is what it holds alone, what removing it would free.{:else}measure sizes to see what each holds alone.{/if}
-  </p>
+  <div class="column-heads items" aria-hidden="true">
+    <span>{countWord(groups.length)} {groups.length === 1 ? 'VM' : 'VMs'}</span><span class="span">Size</span><span>Used by</span><span></span>
+  </div>
   <div class="lines items">
     {#each groups as g (g.vm)}
       <section>
-        <GroupHead vm={g.vm} live={g.live} sentence={g.sentence} said={said[g.vm]} heads={g.lines.length > 0}>
+        <GroupHead vm={g.vm} live={g.live} sentence={g.sentence} said={said[g.vm]}>
           {#snippet actions()}
             <ImagePrune vm={g.vm} dangling={g.dangling} unused={g.unused.length} onpruned={() => changed(g.vm)} bind:said={said[g.vm]} />
           {/snippet}
@@ -176,6 +174,11 @@
       </section>
     {/each}
   </div>
+  <p class="note">
+    Size bars share one scale: full width is the largest image listed{#if largest}, {largest.tagged ? largest.name : `untagged ${shortId(largest.id)}`} at {bytes(scale)}{/if}.
+    An image's size counts the layers it shares with others, so sizes don't add up;
+    {#if everyMeasured}the solid part is what it holds alone, what removing it would free.{:else}measure sizes to see what each holds alone.{/if}
+  </p>
 {/if}
 
 <style>
@@ -183,6 +186,12 @@
   .dots { display: flex; flex-wrap: wrap; gap: 6px; max-width: 100%; }
   .dot { width: 12px; height: 12px; border-radius: 50%; background: var(--bar); box-sizing: border-box; }
   .dot.off { background: none; border: 2px solid var(--warn); }
-  .lines { display: grid; gap: 2.2rem; margin-top: 0.6rem; }
+  .column-heads { grid-template-columns: var(--item-columns); column-gap: 1.4rem; margin-top: 0.6rem; }
+  .lines { display: grid; gap: 2.2rem; }
   section { border-top: 1px solid var(--fg); padding-top: 0.8rem; border-bottom: 1px solid var(--border); }
+  section:first-child { border-top: 0; }
+  @media (max-width: 860px) {
+    .column-heads { display: none; }
+    section:first-child { border-top: 1px solid var(--fg); }
+  }
 </style>
