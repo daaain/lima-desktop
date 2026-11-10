@@ -22,7 +22,8 @@
     height = 160,
     markers = [],
   }: {
-    title: string;
+    /** Shown above the plot; leave out where the surrounding text names it. */
+    title?: string;
     data: Series | null;
     lines: Line[];
     format: (v: number) => string;
@@ -62,7 +63,7 @@
           ctx.fillStyle = color;
           ctx.lineWidth = px;
           ctx.setLineDash([3 * px, 3 * px]);
-          ctx.font = `${10 * px}px system-ui, sans-serif`;
+          ctx.font = `${10 * px}px 'Inter Variable', system-ui, sans-serif`;
           let labelEnd = -Infinity;
           for (const m of [...markers].sort((a, b) => a.ts - b.ts)) {
             const t = m.ts / 1000;
@@ -83,10 +84,15 @@
     },
   };
 
-  function build(d: Series) {
+  /** The moment under the cursor, short enough that the legend doesn't change width with it. */
+  const when = (t: number) =>
+    new Date(t * 1000).toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', second: '2-digit' });
+
+  /** The plotted columns, and what draws them: the lines found in `d`, each a band and its average. */
+  function shape(d: Series) {
     const xs = d.ts.map((t) => t / 1000);
     const cols: (number | null)[][] = [xs];
-    const series: uPlot.Series[] = [{}];
+    const series: uPlot.Series[] = [{ value: (_u, v) => (v == null ? '–' : when(v)) }];
     const bands: uPlot.Band[] = [];
     for (const line of lines) {
       const band = d.metrics[line.key];
@@ -107,6 +113,15 @@
       cols.push(xs.map(() => ceiling));
       series.push({ label: 'allocated', stroke: cssVar('--muted'), dash: [4, 4], width: 1, points: { show: false }, value: () => format(ceiling) });
     }
+    return { cols, series, bands, key: series.map((s) => s.label ?? '').join('|') };
+  }
+
+  // What the plot was built with: new data of the same shape only replaces the columns.
+  let builtKey = '';
+
+  function build(d: Series) {
+    const { cols, series, bands, key } = shape(d);
+    builtKey = `${key}|${scheme}`;
     const axis = { stroke: cssVar('--muted'), grid: { stroke: cssVar('--grid'), width: 1 }, ticks: { stroke: cssVar('--grid') } };
     const opts: uPlot.Options = {
       width,
@@ -123,6 +138,19 @@
     plot = new uPlot(opts, cols as uPlot.AlignedData, host);
   }
 
+  /**
+   * New data for the same lines: swap the columns in place, and put the cursor back where it was,
+   * so a value being read stays read (updating under the pointer) instead of the plot being rebuilt
+   * and forgetting it.
+   */
+  function update(d: Series) {
+    const { cols, key } = shape(d);
+    if (!plot || `${key}|${scheme}` !== builtKey) return build(d);
+    const { left, top } = plot.cursor;
+    plot.setData(cols as uPlot.AlignedData);
+    if (left != null && left >= 0 && top != null) plot.setCursor({ left, top });
+  }
+
   // uPlot paints a canvas with colours read once from CSS, so it has to be rebuilt when the OS
   // switches between light and dark; the CSS around it follows on its own.
   let scheme = $state(0);
@@ -135,7 +163,7 @@
 
   $effect(() => {
     void scheme;
-    if (data && host) build(data);
+    if (data && host) update(data);
   });
 
   $effect(() => {
@@ -151,7 +179,7 @@
 </script>
 
 <section class="chart">
-  <h3>{title}{#if data}<span class="res">{data.resolution === '1s' ? 'per second' : 'per minute'}</span>{/if}</h3>
+  {#if title}<h3>{title}{#if data}<span class="res">{data.resolution === '1s' ? 'per second' : 'per minute'}</span>{/if}</h3>{/if}
   <div bind:this={host} bind:clientWidth={width}></div>
   {#if data && data.ts.length === 0}<p class="empty">No samples in this range.</p>{/if}
 </section>
@@ -161,6 +189,11 @@
   h3 { font-size: 0.85rem; font-weight: 600; margin: 0 0 0.25rem; display: flex; gap: 0.5rem; align-items: baseline; }
   .res { color: var(--muted); font-weight: 400; font-size: 0.75rem; }
   .empty { color: var(--muted); font-size: 0.8rem; margin: 0; }
-  :global(.u-legend) { font-size: 0.72rem; color: var(--fg); }
+  :global(.u-legend) { font-size: 0.72rem; color: var(--fg); font-variant-numeric: tabular-nums; }
+  /* Each value keeps its width whether the cursor is on the plot or not, so hovering never
+     re-wraps the legend and pushes the page about. */
+  :global(.u-legend.u-inline tr) { white-space: nowrap; }
+  :global(.u-legend.u-inline .u-value) { min-width: 6.5em; text-align: left; }
+  :global(.u-legend.u-inline .u-series:first-child .u-value) { min-width: 8.5em; }
   :global(.u-legend .u-series:nth-child(3n + 2)), :global(.u-legend .u-series:nth-child(3n + 3)) { display: none; }
 </style>

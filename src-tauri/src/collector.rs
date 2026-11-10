@@ -86,10 +86,53 @@ pub struct VmLive {
     pub containers: Vec<ContainerLive>,
 }
 
+/// What the computer the app runs on has, to scale the VMs' allocations against: its cores, its
+/// RAM, and the size of the filesystem Lima keeps its instances on (0 until an instance says where).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Host {
+    pub cpus: u32,
+    pub memory: u64,
+    pub disk: u64,
+}
+
+fn read_host(instances_at: Option<&Path>) -> Option<Host> {
+    let mut sys = sysinfo::System::new().ok()?;
+    sys.refresh_memory();
+    let cpus = std::thread::available_parallelism().map_or(0, |n| n.get() as u32);
+    let disk = instances_at.and_then(filesystem_size).unwrap_or(0);
+    Some(Host {
+        cpus,
+        memory: sys.total_memory(),
+        disk,
+    })
+}
+
+fn filesystem_size(path: &Path) -> Option<u64> {
+    let disks = sysinfo::Disks::new_with_refreshed_list().ok()?;
+    size_of_mount_above(
+        disks.iter().map(|d| (d.mount_point(), d.total_space())),
+        path,
+    )
+}
+
+/// The size of the filesystem `path` is on: of the mount points above it, the deepest.
+fn size_of_mount_above<'a>(
+    mounts: impl Iterator<Item = (&'a Path, u64)>,
+    path: &Path,
+) -> Option<u64> {
+    mounts
+        .filter(|(mount, _)| path.starts_with(mount))
+        .max_by_key(|(mount, _)| mount.components().count())
+        .map(|(_, size)| size)
+}
+
 #[derive(Debug, Clone, Serialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct Snapshot {
     pub vms: Vec<VmLive>,
+    /// What this computer has, for scale; `None` when it can't be read.
+    pub host: Option<Host>,
     /// What's wrong with Lima itself; the VMs are then as last seen.
     pub lima_problem: Option<lima::LimaProblem>,
     pub updated: i64,
@@ -128,6 +171,7 @@ pub struct Collector {
     vms: Mutex<HashMap<String, VmState>>,
     lima_problem: Mutex<Option<lima::LimaProblem>>,
     retention: Retention,
+    host: Mutex<Option<Host>>,
 }
 
 impl Collector {
@@ -137,6 +181,7 @@ impl Collector {
             vms: Mutex::new(HashMap::new()),
             lima_problem: Mutex::new(None),
             retention,
+            host: Mutex::new(None),
         })
     }
 
@@ -148,13 +193,26 @@ impl Collector {
         let vms = self.vms.lock().expect("vms lock");
         let mut list: Vec<VmLive> = vms.values().map(|v| v.live.clone()).collect();
         list.sort_by(|a, b| a.instance.name.cmp(&b.instance.name));
+        let host = self.host(list.first().map(|v| Path::new(&v.instance.dir)));
         Snapshot {
             vms: list,
+            host,
             lima_problem: self.lima_problem.lock().expect("lock").clone(),
             updated: now_ms(),
             store_bytes: self.store().file_size().unwrap_or(0),
             retention: Some(self.retention),
         }
+    }
+
+    /// The host's totals, read once; read again while the disk is unknown and an instance's
+    /// directory can say which filesystem to measure.
+    fn host(&self, instances_at: Option<&Path>) -> Option<Host> {
+        let mut host = self.host.lock().expect("host lock");
+        let disk_unknown = host.is_none_or(|h| h.disk == 0);
+        if host.is_none() || (disk_unknown && instances_at.is_some()) {
+            *host = read_host(instances_at).or(*host);
+        }
+        *host
     }
 
     /// Re-read `limactl list` now (after a lifecycle action) instead of waiting for the next tick.
@@ -252,6 +310,17 @@ impl Collector {
                 for c in state.live.containers.iter_mut() {
                     c.latest.clear();
                 }
+            }
+            // Stopped, a VM still takes its disk image's real size on this computer: the one
+            // reading it has. (A running VM's comes with each probe row.)
+            if !running {
+                match disk_image_alloc(&state.live.instance) {
+                    0 => state.live.latest.remove("host_disk_alloc"),
+                    alloc => state
+                        .live
+                        .latest
+                        .insert("host_disk_alloc".into(), alloc as i64),
+                };
             }
         }
     }
@@ -592,14 +661,20 @@ fn host_columns(row: &mut [i64], inst: &Instance, sys: Option<&mut sysinfo::Syst
             }
         }
     }
-    let alloc: u64 = ["diffdisk", "basedisk"]
-        .iter()
-        .filter_map(|f| std::fs::metadata(Path::new(&inst.dir).join(f)).ok())
-        .map(|m| m.blocks() * 512)
-        .sum();
+    let alloc = disk_image_alloc(inst);
     if alloc > 0 {
         row[col("host_disk_alloc")] = alloc as i64;
     }
+}
+
+/// The bytes an instance's disk image really takes on the host: a sparse file's blocks, not its
+/// virtual length. 0 when there is no image to measure.
+fn disk_image_alloc(inst: &Instance) -> u64 {
+    ["diffdisk", "basedisk"]
+        .iter()
+        .filter_map(|f| std::fs::metadata(Path::new(&inst.dir).join(f)).ok())
+        .map(|m| m.blocks() * 512)
+        .sum()
 }
 
 /// A container's row from its stats (rates against the previous reading) and cgroup counters.
@@ -650,6 +725,33 @@ pub fn container_row(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_filesystem_of_a_path_is_its_deepest_mount() {
+        let mounts = [
+            (Path::new("/"), 100),
+            (Path::new("/home"), 200),
+            (Path::new("/home/ada/big"), 300),
+            (Path::new("/var"), 400),
+        ];
+        let size = |p: &str| size_of_mount_above(mounts.iter().copied(), Path::new(p));
+        assert_eq!(size("/home/ada/.lima/vm"), Some(200));
+        assert_eq!(size("/home/ada/big/lima/vm"), Some(300));
+        assert_eq!(size("/opt/lima"), Some(100));
+        assert_eq!(
+            size_of_mount_above(std::iter::empty(), Path::new("/x")),
+            None
+        );
+    }
+
+    #[test]
+    fn the_host_reports_its_cores_and_memory() {
+        let host = read_host(None).expect("readable on the test machine");
+        assert!(host.cpus >= 1);
+        assert!(host.memory > 0);
+        assert_eq!(host.disk, 0);
+        assert!(read_host(Some(Path::new("/"))).is_some_and(|h| h.disk > 0));
+    }
 
     fn stat(cpu_nano: u64, net_in: u64) -> RawStat {
         RawStat {

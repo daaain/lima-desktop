@@ -113,6 +113,11 @@ recommend = [
   { host = "static.rust-lang.org", why = "rustup — clippy/rustfmt for the box image" },
   { host = "index.crates.io", why = "cargo — the crates.io sparse index" },
   { host = "static.crates.io", why = "cargo — crate downloads" },
+  # Playwright's Chromium, baked into the box image (box.Dockerfile) for `just ui-e2e`: only the
+  # build fetches it. To install it in a running box instead, grant just the path there:
+  # `fy allow add storage.googleapis.com/chrome-for-testing-public/` (recommend takes hosts only).
+  { host = "cdn.playwright.dev", when = "build", why = "box image build — Playwright's browser downloads (redirects to the next)" },
+  { host = "storage.googleapis.com", when = "build", why = "box image build — Chrome for Testing, where cdn.playwright.dev redirects" },
 ]
 # passthrough = ["@jvm", "@linux"]   # the default: tunnelled UN-decrypted (Java, apt);
 #                                    # the rest is decrypted. ["@all"] = every bundle
@@ -131,6 +136,7 @@ recommend = [
 # below it. Same progressive opt-in as the rest of this file.
 [claude]
 keyless = "oauth"      # Bearer on api.anthropic.com ← `claude setup-token` on your computer
+transcript_sync_seconds = 5
 # keyless = "api-key"  # x-api-key on api.anthropic.com ← from console.anthropic.com
 # (on your own, keyless is fine here; on a team, put it in foldyard.local.toml — which
 #  subscription you pay for is personal, and a shared one prompts every colleague)
@@ -258,6 +264,7 @@ live test is safe against it
 # there (npm_config_store_dir), or it relocates the store inside the node_modules volume
 # and re-downloads every time.
 [box]
+packages = ["tmux"]
 # Rust + Node/pnpm + Tauri's Linux build deps + Xvfb: box.Dockerfile says what and why.
 image = { dockerfile = "box.Dockerfile", tag = "lima-desktop-box:latest" }
 # The Mac builds into these same dirs (macOS binaries, its own node_modules): the box gets its own.
@@ -284,6 +291,8 @@ CARGO_HOME = "~/.cargo"
 # WebKitGTK under Xvfb: no GPU buffers, no accessibility bus to look for
 WEBKIT_DISABLE_DMABUF_RENDERER = "1"
 NO_AT_BRIDGE = "1"
+# The browser tests' Chromium, baked into the image there (box.Dockerfile)
+PLAYWRIGHT_BROWSERS_PATH = "/opt/ms-playwright"
 #
 # System packages, baked once into a cached layer on the box image (any package manager):
 # packages = ["postgresql-client", "just"]
@@ -298,6 +307,6 @@ NO_AT_BRIDGE = "1"
 # what YOUR COMPUTER installs, so it is read from the adopted copy); settings are applied to
 # the box's server.
 [vscode]
-extensions = ["anthropic.claude-code"]
+extensions = ["anthropic.claude-code", "rust-lang.rust-analyzer", "tauri-apps.tauri-vscode", "svelte.svelte-vscode", "tamasfe.even-better-toml"]
 [vscode.settings]
 "remote.autoForwardPorts" = false

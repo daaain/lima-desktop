@@ -35,6 +35,12 @@ async fn lists_stats_logs_and_df_from_a_real_engine() {
 
     let logs = pod.logs(&web.id, 5).await.expect("logs");
     assert!(logs.contains("tick"), "logs: {logs:?}");
+    // Each line starts with when podman recorded it.
+    assert!(
+        logs.lines()
+            .all(|l| l.split(' ').next().is_some_and(|t| chrono::DateTime::parse_from_rfc3339(t).is_ok())),
+        "timestamps: {logs:?}"
+    );
 
     let inspect = pod.inspect(&web.id).await.expect("inspect");
     assert_eq!(inspect["Id"].as_str(), Some(web.id.as_str()));
@@ -67,8 +73,10 @@ async fn lists_images_and_volumes_from_a_real_engine() {
     let containers = pod.containers().await.expect("list");
     for c in containers.iter().filter(|c| c.state == "running") {
         assert!(
-            images.iter().any(|i| i.id == c.image_id),
-            "{}'s image {} is listed",
+            images
+                .iter()
+                .any(|i| i.id == c.image_id && i.containers > 0),
+            "{}'s image {} is listed, as in use",
             c.name,
             c.image_id
         );

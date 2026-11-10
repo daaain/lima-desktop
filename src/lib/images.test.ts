@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import type { Image } from './api';
-import { danglingCount, filterImages, imageRows, imageUsers } from './images';
+import { danglingCount, filterImages, imageOwnSizes, imageRows, imageUsers, inUse, splitReference } from './images';
 import { container, snapshot, vm } from './testing';
 
-const img = (o: Partial<Image>): Image => ({ id: 'i', tags: [], created: 1_700_000_000, size: 100, ...o });
+const img = (o: Partial<Image>): Image => ({ id: 'i', tags: [], created: 1_700_000_000, size: 100, containers: 0, ...o });
 
 describe('imageRows', () => {
   it('gives an image one row per tag, each removable by its tag', () => {
@@ -35,6 +35,10 @@ describe('imageUsers', () => {
   it("names the containers in that VM using the image, whatever their state", () => {
     expect(imageUsers(s, 'shop', 'abc')).toEqual(['web', 'worker']);
   });
+  it('names a compose service by its service', () => {
+    const composed = snapshot([vm({ name: 'shop' }, [container({ name: 'shop-web-1', composeService: 'web', imageId: 'abc' })])]);
+    expect(imageUsers(composed, 'shop', 'abc')).toEqual(['web']);
+  });
   it("doesn't count another VM's containers: images are per VM", () => {
     expect(imageUsers(s, 'shop', 'zzz')).toEqual([]);
     expect(imageUsers(null, 'shop', 'abc')).toEqual([]);
@@ -54,5 +58,29 @@ describe('filterImages', () => {
     expect(filterImages(rows, { vm: 'shop', query: '' }).map((r) => r.id)).toEqual(['1', '2']);
     expect(filterImages(rows, { vm: null, query: 'NGINX' }).map((r) => r.id)).toEqual(['1']);
     expect(filterImages(rows, { vm: null, query: '3' }).map((r) => r.id)).toEqual(['3']);
+  });
+});
+
+describe('inUse', () => {
+  it("takes the engine's count, which holds where the snapshot has no containers", () => {
+    expect(inUse(img({ containers: 1 }), [])).toBe(true);
+    expect(inUse(img({ containers: 0 }), ['web'])).toBe(true);
+    expect(inUse(img({ containers: 0 }), [])).toBe(false);
+  });
+});
+
+describe('splitReference', () => {
+  it('splits where an image comes from from what it is', () => {
+    expect(splitReference('docker.io/library/postgres:17')).toEqual(['docker.io/library/', 'postgres:17']);
+    expect(splitReference('localhost/shop_web:latest')).toEqual(['localhost/', 'shop_web:latest']);
+    expect(splitReference('alpine')).toEqual(['', 'alpine']);
+  });
+});
+
+describe('imageOwnSizes', () => {
+  it("reads what each image holds alone from libpod's system df", () => {
+    const df = { Images: [{ ImageID: 'abc', Size: 900, SharedSize: 600, UniqueSize: 300, Containers: 1 }] };
+    expect(imageOwnSizes(df).get('abc')).toBe(300);
+    expect(imageOwnSizes({ Images: null }).size).toBe(0);
   });
 });

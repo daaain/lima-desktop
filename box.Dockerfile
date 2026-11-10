@@ -5,6 +5,7 @@
 #   - Tauri 2's Linux build dependencies (WebKitGTK 4.1, GTK 3, librsvg, appindicator, xdo)
 #   - Xvfb + dbus to run the real app with no display, ImageMagick to screenshot it
 #   - the podman client (foldyard points it at the VM's engine), git and just (the justfile)
+#   - Playwright 1.63.0's headless Chromium, for the UI's browser tests (`just ui-e2e`)
 #   - uv 0.13.1, which foldyard needs to install its CLI in the box
 # foldyard adds its own pieces (engine socket, fy CLI, proxy CA) at box-up.
 FROM node:24.15.0-trixie-slim AS node
@@ -52,6 +53,17 @@ RUN ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
 
 # uv: foldyard installs its own CLI into the box with it (`fy` in here), so a custom image needs it.
 COPY --from=uv /uv /uvx /usr/local/bin/
+
+# Playwright's headless Chromium for the UI's browser tests (`just ui-e2e`), with the system
+# libraries it needs. A browser build belongs to one Playwright release: keep this version the same
+# as package.json's `playwright`, or the tests look for a build that isn't here. It lives outside
+# HOME, at a path [box.env] in foldyard.toml points Playwright to as well (foldyard sets the box's
+# own environment, so this ENV alone may not reach it). Downloads from cdn.playwright.dev, which
+# redirects to storage.googleapis.com/chrome-for-testing-public/.
+ARG PLAYWRIGHT_VERSION=1.63.0
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright
+RUN npx -y playwright@${PLAYWRIGHT_VERSION} install --with-deps --only-shell chromium \
+ && rm -rf /var/lib/apt/lists/* /root/.npm
 
 RUN rustup component add clippy rustfmt
 

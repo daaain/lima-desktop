@@ -19,13 +19,10 @@
 </script>
 
 {#if c.state === 'running'}
-  <button disabled={busy} onclick={() => act('stop')}>stop</button>
-  <button disabled={busy} onclick={() => act('restart')}>restart</button>
+  <button disabled={busy} onclick={() => act('stop')}>Stop</button>
+  <button disabled={busy} onclick={() => act('restart')}>Restart</button>
 {:else}
-  <button disabled={busy} onclick={() => act('start')}>start</button>
-  <button class="danger" disabled={busy} onclick={() => act('remove')}>remove</button>
+  <button disabled={busy} onclick={() => act('start')}>Start</button>
+  <button class="danger" disabled={busy} onclick={() => act('remove')}>Remove</button>
 {/if}
 
-<style>
-  button { padding: 0.15rem 0.5rem; font-size: 0.75rem; }
-</style>
