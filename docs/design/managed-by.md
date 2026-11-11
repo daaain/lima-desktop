@@ -86,4 +86,5 @@ When Lima ships `meta:`, the same object moves to `meta.managedBy` in `lima.yaml
 `.config.meta.managedBy` first, then the file. The `instance` field keeps working there too:
 `limactl clone` copies `lima.yaml` as well.
 
-The draft comment for #5610 is in [../upstream/lima-5610-comment.md](../upstream/lima-5610-comment.md).
+This use case is described on #5610 in
+[this comment](https://github.com/lima-vm/lima/issues/5610#issuecomment-6765571747).
