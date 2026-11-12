@@ -121,8 +121,11 @@ job, after the tag is public. The pre-push hook (`.githooks/pre-push`, switched 
 setting `core.hooksPath`) runs the same check, `tools/check-release-version.sh`, on any `v*` tag
 before it leaves. To take back a bad tag: `git push origin :refs/tags/vX.Y.Z && git tag -d vX.Y.Z`.
 
-Run by hand (Actions → Release → Run workflow), it builds any branch and keeps the bundles as the
-run's artifacts, releasing nothing.
+Run by hand on a branch, it's a dry run: Actions → Release → Run workflow, or
+`gh workflow run release.yml --ref <branch>`. It checks the version, builds everything and keeps the
+files as the run's artifacts, and instead of drafting a release it puts the draft it would make
+(files, notes and changelog) in the run's summary. Use it to try a workflow change, or to time a
+build, before tagging.
 
 The macOS app is only ad-hoc signed (`bundle.macOS.signingIdentity: "-"` in `tauri.conf.json`), so a
 downloaded copy needs its quarantine removed (`xattr -dr com.apple.quarantine`, as the README
