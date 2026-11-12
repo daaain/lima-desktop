@@ -114,10 +114,15 @@ export interface Snapshot {
   intervalSecs?: number;
 }
 
+/** Light or dark: as the computer is, or always one (settings::Theme). */
+export type Theme = 'system' | 'light' | 'dark';
+export const THEMES: readonly Theme[] = ['system', 'light', 'dark'];
+
 /** What's chosen in Settings (settings.rs). */
 export interface Settings {
   /** One of `INTERVALS`. */
   intervalSecs: number;
+  theme: Theme;
 }
 /** How often a running VM can be measured, in seconds (settings::INTERVALS). */
 export const INTERVALS = [1, 2, 5, 10] as const;

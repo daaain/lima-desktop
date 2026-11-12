@@ -31,12 +31,14 @@ pub fn settings(saved: State<'_, Saved>) -> Settings {
 /// Saves `settings` and puts them into effect; refused, with why, when a value isn't offered.
 #[tauri::command]
 pub fn set_settings(
+    app: tauri::AppHandle,
     c: C<'_>,
     saved: State<'_, Saved>,
     settings: Settings,
 ) -> Result<Settings, String> {
     saved.set(settings)?;
     c.set_interval(settings.interval_secs);
+    crate::apply_theme(&app, settings.theme);
     Ok(saved.get())
 }
 

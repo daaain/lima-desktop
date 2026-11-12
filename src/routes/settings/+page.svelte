@@ -1,10 +1,13 @@
 <script lang="ts">
-  // What can be chosen about the app itself. For now one thing: how often each running VM is
-  // measured (settings.rs keeps it beside the history; the backend and the polls follow at once).
+  // What can be chosen about the app itself: how often each running VM is measured (the backend
+  // and the polls follow at once), and the theme. settings.rs keeps both beside the history.
   import { onMount } from 'svelte';
-  import { api, INTERVALS, type Settings } from '$lib/api';
+  import { api, INTERVALS, THEMES, type Settings, type Theme } from '$lib/api';
   import { live } from '$lib/live.svelte';
   import { intervalPhrase } from '$lib/almanac';
+  import { theme } from '$lib/theme.svelte';
+
+  const THEME_LABELS: Record<Theme, string> = { system: 'System', light: 'Light', dark: 'Dark' };
 
   let settings = $state<Settings | null>(null);
   let saving = $state(false);
@@ -18,13 +21,15 @@
     }
   });
 
-  async function choose(intervalSecs: number) {
-    if (!settings || saving || settings.intervalSecs === intervalSecs) return;
+  /** Saves `change`; each setting then takes effect where it shows. */
+  async function save(change: Partial<Settings>) {
+    if (!settings || saving) return;
     saving = true;
     error = null;
     try {
-      settings = await api.setSettings({ ...settings, intervalSecs });
-      live.poke();
+      settings = await api.setSettings({ ...settings, ...change });
+      if (change.intervalSecs != null) live.poke();
+      theme.apply(settings.theme);
     } catch (e) {
       error = String(e);
     } finally {
@@ -43,10 +48,9 @@
     <div class="choices" role="group" aria-label="Measure each running VM every">
       {#each INTERVALS as s}
         <button class="choice num" class:active={settings.intervalSecs === s} aria-pressed={settings.intervalSecs === s}
-          disabled={saving} onclick={() => choose(s)}>{s} s</button>
+          disabled={saving} onclick={() => settings!.intervalSecs !== s && save({ intervalSecs: s })}>{s} s</button>
       {/each}
     </div>
-    {#if error}<p class="error">{error}</p>{/if}
     <p class="note">
       A measurement is a short read of the VM's own counters over ssh, and of podman's figures for its containers; the
       lists and charts here update at the same pace. Less often costs each VM and this computer less, and the history
@@ -54,6 +58,18 @@
       peak memory is still caught, whatever the interval: the kernel keeps it.
     </p>
   </section>
+
+  <section class="panel">
+    <h2 class="head">Theme</h2>
+    <div class="choices" role="group" aria-label="Theme">
+      {#each THEMES as t}
+        <button class="choice" class:active={settings.theme === t} aria-pressed={settings.theme === t}
+          disabled={saving} onclick={() => settings!.theme !== t && save({ theme: t })}>{THEME_LABELS[t]}</button>
+      {/each}
+    </div>
+    <p class="note">System is light or dark as this computer is, and follows it when it changes.</p>
+  </section>
+  {#if error}<p class="error">{error}</p>{/if}
 {/if}
 
 <style>

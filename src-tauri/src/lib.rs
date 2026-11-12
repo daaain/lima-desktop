@@ -38,6 +38,15 @@ fn dev_apart(ctx: &mut tauri::Context) {
     }
 }
 
+/// Every window takes `theme` (its title bar, and on macOS what its page sees as the system's).
+pub(crate) fn apply_theme<R: tauri::Runtime>(app: &impl Manager<R>, theme: settings::Theme) {
+    for (label, w) in app.webview_windows() {
+        if let Err(e) = w.set_theme(theme.native()) {
+            log::warn!("can't set {label}'s theme: {e}");
+        }
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let mut ctx = tauri::generate_context!();
@@ -57,6 +66,7 @@ pub fn run() {
             let collector = collector::Collector::new(store, collector::Retention::default());
             collector.set_interval(saved.get().interval_secs);
             collector.start();
+            apply_theme(app, saved.get().theme);
             app.manage(collector);
             app.manage(saved);
             Ok(())

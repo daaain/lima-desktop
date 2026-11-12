@@ -8,17 +8,43 @@ use std::sync::Mutex;
 /// How often a running VM can be measured, in seconds.
 pub const INTERVALS: [u64; 4] = [1, 2, 5, 10];
 
+/// Light or dark: as the computer is (and follows it as it changes), or always one.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Theme {
+    #[default]
+    System,
+    Light,
+    Dark,
+}
+
+impl Theme {
+    /// For the window itself (its title bar; on macOS the webview's `prefers-color-scheme` too):
+    /// `None` follows the system.
+    pub fn native(self) -> Option<tauri::Theme> {
+        match self {
+            Theme::System => None,
+            Theme::Light => Some(tauri::Theme::Light),
+            Theme::Dark => Some(tauri::Theme::Dark),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Settings {
     /// Seconds between measurements of each running VM (the probe, libpod's stats), and between
     /// the UI's polls of them.
     pub interval_secs: u64,
+    pub theme: Theme,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { interval_secs: 1 }
+        Settings {
+            interval_secs: 1,
+            theme: Theme::System,
+        }
     }
 }
 
@@ -116,6 +142,21 @@ mod tests {
         assert_eq!(Settings::load(&d.join("odd.json")), Settings::default());
         std::fs::write(d.join("old.json"), "{}").unwrap();
         assert_eq!(Settings::load(&d.join("old.json")), Settings::default());
+        // A file from before the theme was a setting: its interval stands, the theme follows the system.
+        std::fs::write(d.join("v1.json"), r#"{"intervalSecs": 10}"#).unwrap();
+        assert_eq!(
+            Settings::load(&d.join("v1.json")),
+            Settings {
+                interval_secs: 10,
+                theme: Theme::System
+            }
+        );
+        std::fs::write(
+            d.join("theme.json"),
+            r#"{"intervalSecs": 1, "theme": "sepia"}"#,
+        )
+        .unwrap();
+        assert_eq!(Settings::load(&d.join("theme.json")), Settings::default());
     }
 
     #[test]
@@ -123,16 +164,27 @@ mod tests {
         let d = dir();
         let saved = Saved::load(d.join("settings.json"));
         assert_eq!(saved.get().interval_secs, 1);
-        saved.set(Settings { interval_secs: 5 }).unwrap();
+        saved
+            .set(Settings {
+                interval_secs: 5,
+                theme: Theme::Dark,
+            })
+            .unwrap();
         assert_eq!(saved.get().interval_secs, 5);
-        assert_eq!(Saved::load(d.join("settings.json")).get().interval_secs, 5);
+        let again = Saved::load(d.join("settings.json")).get();
+        assert_eq!((again.interval_secs, again.theme), (5, Theme::Dark));
     }
 
     #[test]
     fn an_interval_not_offered_is_refused_and_changes_nothing() {
         let d = dir();
         let saved = Saved::load(d.join("refused.json"));
-        let e = saved.set(Settings { interval_secs: 3 }).unwrap_err();
+        let e = saved
+            .set(Settings {
+                interval_secs: 3,
+                ..Settings::default()
+            })
+            .unwrap_err();
         assert_eq!(
             e,
             "3 s isn't one of the intervals offered (1 s, 2 s, 5 s, 10 s)"

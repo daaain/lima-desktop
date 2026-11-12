@@ -166,6 +166,32 @@ for (const dark of [false, true]) {
   });
 }
 
+test('The theme is the computer\'s, or the one chosen in Settings, on every page', async () => {
+  const LIGHT = 'rgb(255, 255, 255)';
+  const DARK = 'rgb(17, 20, 24)';
+  const background = (page) => page.evaluate(() => getComputedStyle(document.body).backgroundColor);
+  for (const dark of [false, true]) {
+    const { page, errors, close } = await open('/settings', { dark });
+    const pick = (name) => page.getByRole('group', { name: 'Theme' }).getByRole('button', { name });
+    await pick('System').waitFor();
+    assert.equal(await pick('System').getAttribute('aria-pressed'), 'true');
+    assert.equal(await background(page), dark ? DARK : LIGHT);
+    // The other one than the computer's, kept as the app moves between pages.
+    await pick(dark ? 'Light' : 'Dark').click();
+    await page.waitForFunction((t) => document.documentElement.dataset.theme === t, dark ? 'light' : 'dark');
+    assert.equal(await background(page), dark ? LIGHT : DARK);
+    await page.getByRole('link', { name: 'VMs' }).click();
+    await page.locator('article').first().waitFor();
+    assert.equal(await background(page), dark ? LIGHT : DARK);
+    await page.getByRole('link', { name: 'Settings' }).click();
+    await pick('System').click();
+    await page.waitForFunction(() => !('theme' in document.documentElement.dataset));
+    assert.equal(await background(page), dark ? DARK : LIGHT);
+    assert.deepEqual(errors, []);
+    await close();
+  }
+});
+
 const vmNames = (page) => page.locator('article .name').allInnerTexts();
 const stoppedNames = (page) => page.locator('.stopped .name').allInnerTexts();
 

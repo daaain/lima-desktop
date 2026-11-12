@@ -190,9 +190,10 @@
   }
 
   // As settings.rs: one of the intervals offered, or refused.
-  const settings = { intervalSecs: 1 };
+  const settings = { intervalSecs: 1, theme: 'system' };
   function setSettings({ settings: s }) {
     if (![1, 2, 5, 10].includes(s.intervalSecs)) throw `${s.intervalSecs} s isn't one of the intervals offered (1 s, 2 s, 5 s, 10 s)`;
+    if (!['system', 'light', 'dark'].includes(s.theme)) throw `unknown variant \`${s.theme}\``;
     Object.assign(settings, s);
     return { ...settings };
   }

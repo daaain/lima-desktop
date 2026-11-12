@@ -3,6 +3,7 @@
   import 'uplot/dist/uPlot.min.css';
   import { onDestroy } from 'svelte';
   import type { Series } from './api';
+  import { theme } from './theme.svelte';
 
   interface Line {
     key: string;
@@ -121,7 +122,7 @@
 
   function build(d: Series) {
     const { cols, series, bands, key } = shape(d);
-    builtKey = `${key}|${scheme}`;
+    builtKey = `${key}|${scheme}|${theme.choice}`;
     const axis = { stroke: cssVar('--muted'), grid: { stroke: cssVar('--grid'), width: 1 }, ticks: { stroke: cssVar('--grid') } };
     const opts: uPlot.Options = {
       width,
@@ -145,14 +146,14 @@
    */
   function update(d: Series) {
     const { cols, key } = shape(d);
-    if (!plot || `${key}|${scheme}` !== builtKey) return build(d);
+    if (!plot || `${key}|${scheme}|${theme.choice}` !== builtKey) return build(d);
     const { left, top } = plot.cursor;
     plot.setData(cols as uPlot.AlignedData);
     if (left != null && left >= 0 && top != null) plot.setCursor({ left, top });
   }
 
   // uPlot paints a canvas with colours read once from CSS, so it has to be rebuilt when the OS
-  // switches between light and dark; the CSS around it follows on its own.
+  // switches between light and dark, or Settings does; the CSS around it follows on its own.
   let scheme = $state(0);
   $effect(() => {
     const query = matchMedia('(prefers-color-scheme: dark)');
@@ -163,6 +164,7 @@
 
   $effect(() => {
     void scheme;
+    void theme.choice;
     if (data && host) update(data);
   });
 

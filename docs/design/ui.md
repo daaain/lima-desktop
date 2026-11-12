@@ -48,7 +48,9 @@ the three numbers are the largest thing in the sentence, because they are what i
 
 ## Colour
 
-Tokens are in `src/routes/+layout.svelte`, light and dark (the OS's choice).
+Tokens are in `src/routes/+layout.svelte`, light and dark: the computer's, following it as it
+changes, unless Settings chooses one (`data-theme` on `<html>`, `lib/theme.svelte.ts`; the window's
+own title bar follows too). The charts read their colours once, so they're rebuilt on either change.
 
 | token | for |
 | --- | --- |
@@ -114,7 +116,7 @@ under the sentence, figures and bar it explains, with the allocation as a dashed
   The page always shows its scrollbar (disabled when there's nothing to scroll), so going from a
   short page to a long one doesn't shift everything sideways.
 - **Settings**: the headline says how often each running VM is measured; the choices (1, 2, 5,
-  10 s) and what a slower one costs and saves.
+  10 s) and what a slower one costs and saves; then the theme: System, Light or Dark.
 - **A VM**: the headline verdict; four figures (Memory, CPU, Pressure, Disk), each a verdict
   sentence, three numbers, a bar and its chart; the resize sentence; out-of-memory kills when
   there are any; its containers as lines.

@@ -38,7 +38,7 @@ prerequisites). macOS needs Xcode's command-line tools.
 | `journal.rs` | a one-shot, read-only `journalctl _TRANSPORT=kernel -o json --grep …` over Lima's ssh: as the user where Lima put it in `systemd-journal` (only when the host UID is under 1000, i.e. macOS), else with `sudo -n` (Lima's default passwordless sudo); where neither works, says why and the `usermod` fix |
 | `oom.rs` | OOM kills: the kernel's `oom-kill:` / `Killed process` / `memory: usage … limit` lines paired into events (container, process, constraint, limit, anon-rss), and the counter-only fallback |
 | `store.rs` | the history ([design](./design/metrics-storage.md)), and the OOM kill log |
-| `settings.rs` | what's chosen in Settings (the measuring interval: 1, 2, 5 or 10 s), as `settings.json` beside the history |
+| `settings.rs` | what's chosen in Settings (the measuring interval: 1, 2, 5 or 10 s; the theme, which the windows take too), as `settings.json` beside the history |
 | `commands.rs` | what the UI can call |
 
 ## Frontend map (`src/`)
@@ -64,6 +64,7 @@ Containers, Images, Volumes; and after them **Settings**. How it looks and reads
 | `lib/perVm.ts` | which VMs a podman-wide view lists (and the sentences about those it leaves out); asking each VM with `Promise.allSettled`, so one broken VM doesn't blank a list |
 | `lib/perVmList.svelte.ts`, `lib/podmanLists.svelte.ts` | images and volumes aren't in the snapshot: fetched from the start (the layout follows them, and measures each VM once), kept for the app's life so their views open on what's known, again after actions, on Refresh and every 15 s |
 | `lib/ImageLayers.svelte`, `lib/Files.svelte` | the details an image's or a volume's line opens: its layers (each opening what it added); its files |
+| `lib/theme.svelte.ts` | the theme the page is drawn in: `data-theme` on `<html>` from Settings, kept in the webview's storage too so `app.html` sets it before the first paint |
 | `lib/motion.ts` | details unfolding under their line, reordered lines gliding to their place (none under reduced motion) |
 | `lib/containers.ts`, `lib/images.ts`, `lib/volumes.ts` | each view's rows, filters and derived facts (an image is in use when its VM's engine counts a container on it, or the snapshot shows one; a volume's size and users come from `system df`, on demand — it walks every volume) |
 | `routes/settings` | the measuring interval |
