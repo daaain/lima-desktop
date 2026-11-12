@@ -25,8 +25,23 @@ fn data_dir(app: &tauri::App) -> tauri::Result<PathBuf> {
     }
 }
 
+/// A debug build (`pnpm tauri dev`) is another app to the system: its own identifier, so its own
+/// data directory (history, settings) and remembered window, and "(dev)" in its title. It can run
+/// beside the installed app without either writing over the other's history.
+fn dev_apart(ctx: &mut tauri::Context) {
+    if cfg!(debug_assertions) {
+        let config = ctx.config_mut();
+        config.identifier.push_str(".dev");
+        for w in &mut config.app.windows {
+            w.title.push_str(" (dev)");
+        }
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let mut ctx = tauri::generate_context!();
+    dev_apart(&mut ctx);
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
@@ -77,6 +92,6 @@ pub fn run() {
             commands::entities,
             commands::oom_events,
         ])
-        .run(tauri::generate_context!())
+        .run(ctx)
         .expect("error while running tauri application");
 }

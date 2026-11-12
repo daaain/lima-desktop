@@ -14,6 +14,14 @@ just --list                    # the same and more as recipes; `just check` runs
 the platform's app data directory: anything run against fake or replayed VMs should set it, so the
 real history never mixes with theirs.
 
+A debug build (`pnpm tauri dev`, `tauri build --debug`) is a different app to the system:
+`dev.limadesktop.app.dev` (`dev_apart` in `lib.rs`), so its history, settings and remembered window
+are its own, its title says "(dev)", and it can run beside the installed app without the two writing
+over each other's minutes of history.
+
+The icon is drawn by `tools/app-icon.mjs` (the masthead's serif L on a white tile, in Playwright's
+Chromium); `just icon` draws it again and makes every size in `src-tauri/icons/`.
+
 Linux needs WebKitGTK to build: `libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev` (see Tauri's
 prerequisites). macOS needs Xcode's command-line tools.
 

@@ -83,6 +83,18 @@ ui-e2e:
     pnpm build
     node --test e2e-ui/ui.test.mjs
 
+# Draw the app icon (tools/app-icon.mjs) and make every size the bundles use into src-tauri/icons/
+icon:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    tmp=$(mktemp -d)
+    trap 'rm -rf "$tmp"' EXIT
+    node tools/app-icon.mjs "$tmp/app-icon.png"
+    pnpm tauri icon "$tmp/app-icon.png" -o "$tmp/icons" >/dev/null
+    # Only the sizes the app already ships (tauri icon also makes Android and iOS sets).
+    for f in src-tauri/icons/*; do cp "$tmp/icons/$(basename "$f")" "$f"; done
+    git status --short src-tauri/icons
+
 # Everything CI would run: type checks, all tests, clippy (the browser run is `just ui-e2e`)
 check:
     pnpm check
