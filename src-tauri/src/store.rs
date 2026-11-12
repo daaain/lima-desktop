@@ -1,4 +1,5 @@
-//! The metrics history: SQLite, one row per (entity, minute) of 1 Hz samples, compressed.
+//! The metrics history: SQLite, one row per (entity, minute) of samples (1 Hz unless Settings asks
+//! for fewer), compressed.
 //!
 //! Layout (measured in docs/design/metrics-storage.md): a row per sample costs ~13 B, a row per
 //! entity per tick ~4 B, a minute chunk of delta+varint+zstd columns <1 B per sample — ~0.5 GB for

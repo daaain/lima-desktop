@@ -72,7 +72,7 @@ for (const dark of [false, true]) {
     assert.match(await page.locator('article', { hasText: 'harbor' }).innerText(), /1 OOM/);
     assert.match(await page.locator('article', { hasText: 'ember' }).innerText(), /podman 4\.3\.1 in this VM is too old/);
     assert.match(await page.locator('.stopped').innerText(), /Five are not running\./);
-    // The fullest VM leads, and its history has arrived.
+    // Listed by name, and the first one's history has arrived.
     assert.equal(await page.locator('article .name').first().innerText(), 'atlas');
     await atlas.locator('.sketch:not(.empty)').first().waitFor();
     // Capacity is drawn against the host.
@@ -138,7 +138,7 @@ for (const dark of [false, true]) {
     // Sizes and users come from a measurement taken as the app starts.
     await page.getByRole('heading', { level: 1, name: /aren't used/ }).waitFor();
     // Under the Size head is the size, drawn.
-    const sizeHead = page.locator('.column-heads > span', { hasText: 'Size' });
+    const sizeHead = page.locator('.column-heads > button', { hasText: 'Size' });
     const sizeCell = () => page.locator('.line').first().locator(':scope > *').nth(1);
     assert.equal(await page.getByRole('heading', { level: 1 }).innerText(), "Four of 11 volumes aren't used by any container.");
     assert.equal(await page.locator('p.lede').innerText(), "quill's disk is past three quarters. Removing the unused ones would free 8.1 GiB.");
@@ -150,7 +150,98 @@ for (const dark of [false, true]) {
     assert.deepEqual(errors, []);
     await close();
   });
+
+  test(`Settings${suffix}`, async () => {
+    const { page, errors, close } = await open('/settings', { dark });
+    const headline = page.getByRole('heading', { level: 1 });
+    await headline.waitFor();
+    assert.equal(await headline.innerText(), 'Each running VM is measured every second.');
+    await page.getByRole('button', { name: '5 s' }).click();
+    await page.getByRole('heading', { level: 1, name: /every 5 seconds/ }).waitFor();
+    assert.equal(await page.getByRole('button', { name: '5 s' }).getAttribute('aria-pressed'), 'true');
+    assert.equal(await page.getByRole('link', { name: 'Settings' }).getAttribute('aria-current'), 'page');
+    await shoot(page, `settings${suffix}`);
+    assert.deepEqual(errors, []);
+    await close();
+  });
 }
+
+const vmNames = (page) => page.locator('article .name').allInnerTexts();
+const stoppedNames = (page) => page.locator('.stopped .name').allInnerTexts();
+
+test('VMs are listed by name until a column head orders them, and the order is kept', async () => {
+  const { page, errors, close } = await open('/');
+  await page.locator('article').first().waitFor();
+  const head = (name) => page.getByRole('group', { name: 'Order the VMs by' }).getByRole('button', { name });
+  assert.deepEqual(await vmNames(page), ['atlas', 'ember', 'harbor', 'lantern', 'quill']);
+  assert.deepEqual(await stoppedNames(page), ['foundry', 'kiln', 'mirror', 'relic', 'sprout']);
+  assert.equal(await head('Five are running').getAttribute('aria-pressed'), 'true');
+  // quill's disk is nearly full.
+  await head('Disk').click();
+  assert.equal(await head('Disk').getAttribute('aria-pressed'), 'true');
+  assert.equal(await head('Five are running').getAttribute('aria-pressed'), 'false');
+  assert.equal((await vmNames(page))[0], 'quill');
+  // atlas's memory is past three quarters; relic is given less memory than sprout.
+  await head('Memory').click();
+  assert.equal((await vmNames(page))[0], 'atlas');
+  assert.deepEqual(await stoppedNames(page), ['foundry', 'kiln', 'mirror', 'sprout', 'relic']);
+  await head('Disk').click();
+  // Chosen again, it reverses, and says so.
+  await head('Disk').click();
+  assert.equal((await vmNames(page)).at(-1), 'quill');
+  assert.match(await head('Disk').innerText(), /the least first/);
+  await page.reload();
+  await page.locator('article').first().waitFor();
+  assert.equal(await head('Disk').getAttribute('aria-pressed'), 'true');
+  assert.equal((await vmNames(page)).at(-1), 'quill');
+  await head('Disk').click();
+  assert.equal((await vmNames(page))[0], 'quill');
+  assert.doesNotMatch(await head('Disk').innerText(), /first/);
+  assert.deepEqual(errors, []);
+  await close();
+});
+
+test('Containers, images and volumes are ordered by their column heads too', async () => {
+  const { page, errors, close } = await open('/containers');
+  await page.locator('.line').first().waitFor();
+  const head = (name) => page.locator('.column-heads').getByRole('button', { name });
+  const vmsInOrder = () => page.locator('section h2 a').allInnerTexts();
+  // By default the VM using the most memory first; by name, the VMs A to Z, then Z to A.
+  assert.equal(await head('Memory').getAttribute('aria-pressed'), 'true');
+  await head(/VMs$/).click();
+  const az = await vmsInOrder();
+  assert.deepEqual(az, [...az].sort());
+  await head(/VMs$/).click();
+  assert.deepEqual(await vmsInOrder(), [...az].reverse());
+  await close();
+
+  // Images: what no container uses leads; reversed, what is in use.
+  const images = await open('/images');
+  await images.page.getByText('atlas_frontend').first().waitFor();
+  const quill = images.page.locator('section').first();
+  assert.match(await quill.locator('.line').first().innerText(), /no container/);
+  const used = images.page.locator('.column-heads').getByRole('button', { name: 'Used by' });
+  assert.equal(await used.getAttribute('aria-pressed'), 'true');
+  await used.click();
+  assert.doesNotMatch(await quill.locator('.line').first().innerText(), /no container/);
+  assert.match(await used.innerText(), /in use first/);
+  assert.deepEqual([...errors, ...images.errors], []);
+  await images.close();
+});
+
+test('On a narrow window the order is chosen from a word, as the heads are gone', async () => {
+  const { page, errors, close } = await open('/', { width: 420, height: 900 });
+  await page.locator('article').first().waitFor();
+  const picker = page.getByLabel('Listed by');
+  assert.ok(await picker.isVisible());
+  assert.equal(await picker.inputValue(), 'name');
+  await picker.selectOption('disk');
+  assert.equal((await vmNames(page))[0], 'quill');
+  await page.getByLabel('Which way').selectOption({ label: 'the least first' });
+  assert.equal((await vmNames(page)).at(-1), 'quill');
+  assert.deepEqual(errors, []);
+  await close();
+});
 
 test('Container details open inline, several at once, and hold a value being read', async () => {
   const { page, errors, close } = await open('/containers', { height: 1400 });

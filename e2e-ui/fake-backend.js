@@ -185,7 +185,16 @@
       updated: t,
       storeBytes: 412 * MiB,
       retention: { rawDays: 7, rollupDays: 365 },
+      intervalSecs: settings.intervalSecs,
     };
+  }
+
+  // As settings.rs: one of the intervals offered, or refused.
+  const settings = { intervalSecs: 1 };
+  function setSettings({ settings: s }) {
+    if (![1, 2, 5, 10].includes(s.intervalSecs)) throw `${s.intervalSecs} s isn't one of the intervals offered (1 s, 2 s, 5 s, 10 s)`;
+    Object.assign(settings, s);
+    return { ...settings };
   }
 
   // Each point's band: `per` sub-samples spread across the point's span.
@@ -364,6 +373,8 @@
   const later = (value) => new Promise((resolve) => setTimeout(() => resolve(value), 150));
   const commands = {
     snapshot,
+    settings: () => ({ ...settings }),
+    set_settings: (args) => later(setSettings(args)),
     series,
     summary,
     oom_events: ({ vm, from, to, limit = 500 }) => oom.filter((e) => (vm == null || e.vm === vm) && e.ts >= from && e.ts <= to).slice(0, limit),

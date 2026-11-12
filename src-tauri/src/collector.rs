@@ -11,7 +11,7 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::io::AsyncReadExt;
-use tokio::sync::Notify;
+use tokio::sync::{Notify, watch};
 use tokio::task::JoinHandle;
 
 use crate::journal::{self, JournalError};
@@ -22,7 +22,8 @@ use crate::probe::{self, Block};
 use crate::store::{ABSENT, CT_METRICS, Kind, Store, VM_METRICS};
 
 const LIST_EVERY: Duration = Duration::from_secs(3);
-const CONTAINERS_EVERY: u32 = 3; // in stats ticks
+/// How often each VM's container list is read again, at most (and at least once a stats tick).
+const CONTAINERS_EVERY: Duration = Duration::from_secs(3);
 const FLUSH_EVERY: Duration = Duration::from_secs(10);
 const RETAIN_EVERY: Duration = Duration::from_secs(3600);
 const PROBE_RETRY: Duration = Duration::from_secs(5);
@@ -53,6 +54,13 @@ pub fn now_ms() -> i64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0)
+}
+
+/// A tick every `secs`, the first at once; a late one is skipped rather than made up.
+fn stats_interval(secs: u64) -> tokio::time::Interval {
+    let mut i = tokio::time::interval(Duration::from_secs(secs.max(1)));
+    i.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    i
 }
 
 fn named(names: &[&str], row: &[i64]) -> HashMap<String, i64> {
@@ -138,6 +146,8 @@ pub struct Snapshot {
     pub updated: i64,
     pub store_bytes: i64,
     pub retention: Option<Retention>,
+    /// Seconds between measurements of each running VM; the UI polls at the same pace.
+    pub interval_secs: u64,
 }
 
 /// A kill the counters saw, waiting for the journal reader: it becomes an event of its own only
@@ -172,6 +182,8 @@ pub struct Collector {
     lima_problem: Mutex<Option<lima::LimaProblem>>,
     retention: Retention,
     host: Mutex<Option<Host>>,
+    /// Seconds between measurements; the loops watch it and follow a change at once.
+    interval: watch::Sender<u64>,
 }
 
 impl Collector {
@@ -182,7 +194,20 @@ impl Collector {
             lima_problem: Mutex::new(None),
             retention,
             host: Mutex::new(None),
+            interval: watch::Sender::new(1),
         })
+    }
+
+    pub fn interval_secs(&self) -> u64 {
+        *self.interval.borrow()
+    }
+
+    /// Measure every running VM every `secs` from now on: running probes are restarted at the new
+    /// pace, and libpod's stats follow on their next tick.
+    pub fn set_interval(&self, secs: u64) {
+        let secs = secs.max(1);
+        self.interval
+            .send_if_modified(|s| std::mem::replace(s, secs) != secs);
     }
 
     pub fn store(&self) -> std::sync::MutexGuard<'_, Store> {
@@ -201,6 +226,7 @@ impl Collector {
             updated: now_ms(),
             store_bytes: self.store().file_size().unwrap_or(0),
             retention: Some(self.retention),
+            interval_secs: self.interval_secs(),
         }
     }
 
@@ -341,6 +367,10 @@ impl Collector {
 
     async fn probe_loop(self: Arc<Self>, name: String) {
         let mut sys = sysinfo::System::new().ok();
+        let mut interval = self.interval.subscribe();
+        // The last block before a restart for a new interval, so the first block after it still
+        // has a rate. (After a failure there's none: the VM may have rebooted.)
+        let mut carried: Option<Block> = None;
         loop {
             let Some(inst) = self.instance(&name) else {
                 return;
@@ -352,7 +382,8 @@ impl Collector {
                 tokio::time::sleep(PROBE_RETRY).await;
                 continue;
             }
-            let mut child = match probe::spawn(&inst.ssh_config_file, &name).await {
+            let secs = *interval.borrow_and_update();
+            let mut child = match probe::spawn_every(&inst.ssh_config_file, &name, secs).await {
                 Ok(c) => c,
                 Err(e) => {
                     self.set_vm(&name, |v| {
@@ -370,10 +401,10 @@ impl Collector {
                 .expect("lock")
                 .get(&name)
                 .and_then(|v| v.live.entity);
-            let mut prev: Option<Block> = None;
+            let mut prev: Option<Block> = carried.take();
             let me = self.clone();
             let n = name.clone();
-            let _ = probe::read_blocks(stdout, |block| {
+            let reading = probe::read_blocks(stdout, |block| {
                 let mut row = probe::vm_row(prev.as_ref(), &block, inst.cpus);
                 host_columns(&mut row, &inst, sys.as_mut());
                 let ts = now_ms();
@@ -392,8 +423,17 @@ impl Collector {
                     queue_kills(v, ts, kills);
                 });
                 prev = Some(block);
-            })
-            .await;
+            });
+            let restart = tokio::select! {
+                _ = reading => false,
+                changed = interval.changed() => changed.is_ok(),
+            };
+            if restart {
+                // Dropping the child ends its ssh session (kill_on_drop); start again at once.
+                drop(child);
+                carried = prev;
+                continue;
+            }
             let mut err = String::new();
             let _ = stderr.read_to_string(&mut err).await;
             let last = err
@@ -412,10 +452,16 @@ impl Collector {
         let mut tick: u32 = 0;
         // An unsupported podman: its error stands, and its stats aren't read, until it's upgraded.
         let mut refused = false;
-        let mut interval = tokio::time::interval(Duration::from_secs(1));
-        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let mut every = self.interval.subscribe();
+        let mut secs = *every.borrow_and_update();
+        let mut interval = stats_interval(secs);
         loop {
+            if every.has_changed().unwrap_or(false) {
+                secs = *every.borrow_and_update();
+                interval = stats_interval(secs);
+            }
             interval.tick().await;
+            let list_every = (CONTAINERS_EVERY.as_secs() / secs).max(1) as u32;
             let Some(inst) = self.instance(&name) else {
                 return;
             };
@@ -427,7 +473,7 @@ impl Collector {
                 continue;
             };
             let pod = Libpod::new(&sock);
-            if tick.is_multiple_of(CONTAINERS_EVERY) {
+            if tick.is_multiple_of(list_every) {
                 // The version is checked with the list, so an upgraded VM is picked up within a
                 // few seconds, and an unsupported one is never half-read.
                 let list = match pod.ensure_supported().await {

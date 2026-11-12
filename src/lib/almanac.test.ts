@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { containersHeadline, containersSentence, countWord, exitedSentence, fullWindow, holdsSentence, runsSentence, fleetHeadline, hostBar, quarters, share, sketch, unusedHeadline, unusedLede, vmHeadline, vmSentence } from './almanac';
+import { containersHeadline, containersSentence, countWord, exitedSentence, fullWindow, holdsSentence, intervalPhrase, runsSentence, fleetHeadline, hostBar, quarters, share, sketch, unusedHeadline, unusedLede, vmHeadline, vmSentence } from './almanac';
 import type { Hint } from './rightsize';
 import { container, vm } from './testing';
 
@@ -17,6 +17,13 @@ describe('quarters', () => {
     expect(quarters(51)).toBe('More than half');
     expect(quarters(75)).toBe('More than half');
     expect(quarters(85)).toBe('More than three quarters');
+  });
+});
+
+describe('intervalPhrase', () => {
+  it('says a second as a word, more in digits (it is never the first word)', () => {
+    expect(intervalPhrase(1)).toBe('every second');
+    expect(intervalPhrase(5)).toBe('every 5 seconds');
   });
 });
 

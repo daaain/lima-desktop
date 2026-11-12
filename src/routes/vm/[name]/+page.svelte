@@ -13,7 +13,12 @@
   import Sizing from '$lib/Sizing.svelte';
   import ContainerLine from '$lib/ContainerLine.svelte';
   import ContainerDetail from '$lib/ContainerDetail.svelte';
-  import { unfold } from '$lib/motion';
+  import OrderPicker from '$lib/OrderPicker.svelte';
+  import SortHead from '$lib/SortHead.svelte';
+  import { BY_MEMORY, CONTAINER_COLUMNS, CONTAINER_ORDER, CONTAINER_SORTS, type ContainerSort } from '$lib/containers';
+  import { byText, sortBy } from '$lib/order';
+  import { Ordering } from '$lib/ordering.svelte';
+  import { glide, unfold } from '$lib/motion';
 
   const name = $derived(decodeURIComponent(page.params.name ?? ''));
   const vm = $derived(live.vm(name));
@@ -89,6 +94,7 @@
     return new Date(ts).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'medium' });
   }
 
+  const ordering = new Ordering('vm-containers', CONTAINER_SORTS, BY_MEMORY);
   type Group = { project: string | null; containers: ContainerLive[] };
   const groups: Group[] = $derived.by(() => {
     const map = new Map<string | null, ContainerLive[]>();
@@ -96,11 +102,17 @@
       const k = c.composeProject ?? null;
       map.set(k, [...(map.get(k) ?? []), c]);
     }
-    const byMemory = (a: ContainerLive, b: ContainerLive) => (b.latest.mem ?? -1) - (a.latest.mem ?? -1);
+    // Projects A to Z (Z to A when the names are reversed), those in none last; the containers in
+    // each by the column chosen, the largest first by default.
+    const o = ordering.current;
+    const dir = o.by === 'name' && o.reversed ? -1 : 1;
     return [...map.entries()]
-      .sort(([a], [b]) => (a === null ? 1 : b === null ? -1 : a.localeCompare(b)))
-      .map(([project, containers]) => ({ project, containers: [...containers].sort(byMemory) }));
+      .sort(([a], [b]) => (a === null ? 1 : b === null ? -1 : dir * byText(a, b)))
+      .map(([project, containers]) => ({ project, containers: sortBy(containers, CONTAINER_ORDER, o) }));
   });
+  const heads: { key: ContainerSort; text: string; span?: number; right?: boolean }[] = [
+    { key: 'name', text: 'Name' }, { key: 'memory', text: 'Memory', span: 2 }, { key: 'cpu', text: 'CPU', span: 2 }, { key: 'up', text: 'Up', right: true },
+  ];
   function toggle(id: string) {
     open = open.includes(id) ? open.filter((o) => o !== id) : [...open, id];
   }
@@ -223,17 +235,26 @@
         Above each, the last 24 hours. Compose projects are read-only groups. <a href={`/containers?vm=${encodeURIComponent(name)}`}>Filter and search them in Containers.</a>
       </p>
       <div class="lines">
-        <div class="column-heads" aria-hidden="true"><span></span><span class="span">Memory</span><span class="span">CPU</span><span class="r">Up</span><span></span></div>
+        <div class="narrow-order"><OrderPicker columns={CONTAINER_COLUMNS} {ordering} /></div>
+        <div class="column-heads" role="group" aria-label="Order the containers by">
+          {#each heads as h (h.key)}
+            <SortHead column={CONTAINER_COLUMNS[h.key]} active={ordering.current.by === h.key} reversed={ordering.current.reversed}
+              span={h.span} align={h.right ? 'right' : 'left'} onclick={() => ordering.choose(h.key)}>{h.text}</SortHead>
+          {/each}
+          <span></span>
+        </div>
         {#each groups as g (g.project)}
           {#if groups.length > 1 || g.project}<h3 class="group serif">{g.project ?? 'Not in a compose project'}</h3>{/if}
           {#each g.containers as c (c.id)}
-            <ContainerLine vm={name} {c} history={history.get(c.entity)} {memScale} vmCpus={i.cpus} vmMemory={i.memory} second="activity" now={live.snapshot?.updated}
-              selected={open.includes(c.id)} onselect={() => toggle(c.id)} onerror={(e) => (actionError = e)} />
-            {#if open.includes(c.id)}
-              <div id={`detail-${c.id}`} transition:unfold>
-                <ContainerDetail vm={name} {c} {from} {to} vmMemory={i.memory} oomMarkers={oomMarkers(oom, c.id)} onclose={() => toggle(c.id)} />
-              </div>
-            {/if}
+            <div class="row" animate:glide>
+              <ContainerLine vm={name} {c} history={history.get(c.entity)} {memScale} vmCpus={i.cpus} vmMemory={i.memory} second="activity" now={live.snapshot?.updated}
+                selected={open.includes(c.id)} onselect={() => toggle(c.id)} onerror={(e) => (actionError = e)} />
+              {#if open.includes(c.id)}
+                <div id={`detail-${c.id}`} transition:unfold>
+                  <ContainerDetail vm={name} {c} {from} {to} vmMemory={i.memory} oomMarkers={oomMarkers(oom, c.id)} onclose={() => toggle(c.id)} />
+                </div>
+              {/if}
+            </div>
           {/each}
         {/each}
       </div>
@@ -253,9 +274,10 @@
   .panel { display: grid; gap: 0.7rem; margin-top: 1.4rem; }
   .lines { --container-columns: minmax(13rem, 1.3fr) minmax(9rem, 1fr) 8.5rem minmax(7rem, 0.6fr) 5.5rem 5rem 11.5rem; border-bottom: 1px solid var(--border); }
   .column-heads { grid-template-columns: var(--container-columns); column-gap: 1.4rem; margin-top: 0.4rem; }
-  .column-heads + .group, .column-heads + :global(.line) { border-top: 0; }
+  .column-heads + .group, .column-heads + .row > :global(.line) { border-top: 0; }
   .group { margin: 0; padding: 1rem 0 0.4rem; font-size: 1.05rem; font-weight: 500; color: var(--muted); border-top: 1px solid var(--border); }
-  .group + :global(.line) { border-top: 0; }
+  .group + .row > :global(.line) { border-top: 0; }
+  .narrow-order { display: none; }
   .cname { font-weight: 500; }
   .cid { margin-left: 0.4rem; }
   #oom tbody tr.clickable { cursor: pointer; }
@@ -264,5 +286,6 @@
   button.link { border: none; background: none; padding: 0; height: auto; color: var(--accent); cursor: pointer; font-size: inherit; }
   @media (max-width: 860px) {
     .column-heads { display: none; }
+    .narrow-order { display: block; padding-bottom: 0.5rem; }
   }
 </style>

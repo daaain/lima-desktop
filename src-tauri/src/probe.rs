@@ -10,7 +10,14 @@ use crate::store::ABSENT;
 
 pub const SCRIPT: &str = include_str!("probe.sh");
 
-/// One second's readings from the guest, as printed.
+/// The probe, printing a block every `interval_secs`: the setting goes on its second line, so the
+/// first still says what the script is.
+pub fn script(interval_secs: u64) -> String {
+    let (first, rest) = SCRIPT.split_once('\n').unwrap_or((SCRIPT, ""));
+    format!("{first}\ninterval={}\n{rest}", interval_secs.max(1))
+}
+
+/// One interval's readings from the guest, as printed.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Block {
     pub uptime: f64,
@@ -157,11 +164,21 @@ pub fn ssh(ssh_config: &str, instance: &str) -> Command {
     cmd
 }
 
-/// `ssh` into the instance with Lima's own config, running the probe.
+/// `ssh` into the instance with Lima's own config, running the probe at one block a second.
 pub async fn spawn(ssh_config: &str, instance: &str) -> std::io::Result<Child> {
+    spawn_every(ssh_config, instance, 1).await
+}
+
+/// `ssh` into the instance with Lima's own config, running the probe at a block every
+/// `interval_secs`.
+pub async fn spawn_every(
+    ssh_config: &str,
+    instance: &str,
+    interval_secs: u64,
+) -> std::io::Result<Child> {
     let mut child = ssh(ssh_config, instance).spawn()?;
     let mut stdin = child.stdin.take().expect("piped stdin");
-    stdin.write_all(SCRIPT.as_bytes()).await?;
+    stdin.write_all(script(interval_secs).as_bytes()).await?;
     drop(stdin);
     Ok(child)
 }
@@ -263,7 +280,18 @@ G abcdef 1 1
         assert_eq!(row[5], ABSENT);
     }
 
-    /// The real script under this machine's `sh`, against its real /proc: two blocks parse.
+    #[test]
+    fn the_interval_goes_on_the_second_line() {
+        let s = script(5);
+        let lines: Vec<&str> = s.lines().take(2).collect();
+        assert!(lines[0].starts_with("# lima-desktop guest probe"));
+        assert_eq!(lines[1], "interval=5");
+        let rest = &s[s.find("interval=5\n").unwrap() + "interval=5\n".len()..];
+        assert_eq!(rest, SCRIPT.split_once('\n').unwrap().1);
+    }
+
+    /// The real script under this machine's `sh`, against its real /proc, at a 2 s interval: two
+    /// blocks parse.
     #[cfg(target_os = "linux")]
     #[tokio::test]
     async fn the_script_runs_under_sh() {
@@ -275,7 +303,7 @@ G abcdef 1 1
             .spawn()
             .unwrap();
         let mut stdin = child.stdin.take().unwrap();
-        stdin.write_all(SCRIPT.as_bytes()).await.unwrap();
+        stdin.write_all(script(2).as_bytes()).await.unwrap();
         drop(stdin);
         let out = child.stdout.take().unwrap();
         let mut blocks = Vec::new();

@@ -27,6 +27,9 @@ const WORDS = ['No', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eig
 /** "One", "Two", … for a sentence's first word; digits past twelve. */
 export const countWord = (n: number) => WORDS[n] ?? String(n);
 
+/** How often, mid-sentence: "every second", "every 5 seconds". */
+export const intervalPhrase = (secs: number) => (secs === 1 ? 'every second' : `every ${secs} seconds`);
+
 export interface Gauge {
   used: number | undefined;
   size: number | undefined;

@@ -1,6 +1,7 @@
-# lima-desktop guest probe, v1. READ-ONLY: prints one block per second until its stdout closes
+# lima-desktop guest probe, v1. READ-ONLY: prints one block per interval until its stdout closes
 # (the ssh session ends), then dies of SIGPIPE. Sent on stdin to `sh -s`; nothing is installed.
-# POSIX sh (dash, bash, busybox ash); builtins only on the per-second path except df and sleep.
+# The app puts `interval=<seconds>` on the second line (probe::script); without it, one second.
+# POSIX sh (dash, bash, busybox ash); builtins only on the per-block path except df and sleep.
 #   U <uptime s>                      C cpu <user> <nice> <system> <idle> <iowait> <irq> <softirq> <steal> ...
 #   M <MemTotal:|MemAvailable:|SwapTotal:|SwapFree:> <kB>
 #   P <memory|cpu> <some|full> total=<us>         O <oom_kill count>
@@ -9,6 +10,10 @@
 #   .                                             (end of block)
 store="${XDG_DATA_HOME:-$HOME/.local/share}/containers/storage"
 [ -d "$store" ] || store="$HOME"
+interval=${interval:-1}
+# Containers' cgroups are looked for again about every 5 seconds, at least once a block.
+rescan=$((5 / interval))
+[ "$rescan" -ge 1 ] || rescan=1
 i=0
 scopes=
 while :; do
@@ -28,7 +33,7 @@ while :; do
     if [ "$k" = oom_kill ]; then echo "O $v"; break; fi
   done < /proc/vmstat
   df -kP / "$store" 2>/dev/null | { read -r _; while read -r _ size used _; do echo "D $size $used"; done; }
-  if [ $((i % 5)) -eq 0 ] && [ -f /sys/fs/cgroup/cgroup.controllers ]; then
+  if [ $((i % rescan)) -eq 0 ] && [ -f /sys/fs/cgroup/cgroup.controllers ]; then
     scopes=$(find /sys/fs/cgroup -maxdepth 9 -type d -name 'libpod-*' ! -name 'libpod-conmon-*' 2>/dev/null)
   fi
   for s in $scopes; do
@@ -47,5 +52,5 @@ while :; do
   done
   echo "."
   i=$((i + 1))
-  sleep 1
+  sleep "$interval"
 done

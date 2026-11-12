@@ -1,6 +1,6 @@
 <script lang="ts">
   // The masthead: the app's name, then its two levels — Lima's VMs, and the podman things inside
-  // every running one (containers, images, volumes).
+  // every running one (containers, images, volumes) — and the app's settings.
   import { page } from '$app/state';
   import { live } from './live.svelte';
   import { bytes } from './format';
@@ -22,6 +22,8 @@
     <a href="/containers" aria-current={current(path === '/containers')} title="In every running VM">Containers</a>
     <a href="/images" aria-current={current(path === '/images')} title="In every running VM">Images</a>
     <a href="/volumes" aria-current={current(path === '/volumes')} title="In every running VM">Volumes</a>
+    <span class="rule" aria-hidden="true"></span>
+    <a href="/settings" aria-current={current(path === '/settings')}>Settings</a>
   </nav>
 </header>
 {#if live.snapshot}

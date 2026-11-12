@@ -5,14 +5,17 @@
   import { bytes } from '$lib/format';
   import { containersHeadline, countWord, exitedSentence, runsSentence } from '$lib/almanac';
   import { History } from '$lib/history.svelte';
-  import { containerRows, filterContainers, readContainerFilter } from '$lib/containers';
+  import { BY_MEMORY, CONTAINER_COLUMNS, CONTAINER_SORTS, containerRows, filterContainers, groupContainers, readContainerFilter, type ContainerSort } from '$lib/containers';
   import { podmanFailures, podmanScope } from '$lib/perVm';
   import { withParam } from '$lib/url';
   import ContainerLine from '$lib/ContainerLine.svelte';
   import ContainerDetail from '$lib/ContainerDetail.svelte';
   import UnlistedVms from '$lib/UnlistedVms.svelte';
   import VmSelect from '$lib/VmSelect.svelte';
-  import { unfold } from '$lib/motion';
+  import OrderPicker from '$lib/OrderPicker.svelte';
+  import SortHead from '$lib/SortHead.svelte';
+  import { glide, unfold } from '$lib/motion';
+  import { Ordering } from '$lib/ordering.svelte';
 
   const DETAIL_WINDOW_MS = 3_600_000;
 
@@ -31,16 +34,16 @@
   // Every memory bar shares one scale: the largest container listed.
   const largest = $derived(rows.reduce<typeof rows[number] | null>((top, r) => ((r.c.latest.mem ?? 0) > (top?.c.latest.mem ?? 0) ? r : top), null));
   const memScale = $derived(Math.max(1, largest?.c.latest.mem ?? 0));
-  // One group per VM, the VM using the most first; within it, the largest container first.
-  const groups = $derived.by(() => {
-    const mem = (r: (typeof rows)[number]) => r.c.latest.mem ?? -1;
-    const byVm = new Map<string, typeof rows>();
-    for (const r of rows) byVm.set(r.vm, [...(byVm.get(r.vm) ?? []), r]);
-    const total = (rs: typeof rows) => rs.reduce((n, r) => n + Math.max(0, mem(r)), 0);
-    return [...byVm.entries()]
-      .map(([vm, rs]) => ({ vm, live: live.vm(vm), rows: [...rs].sort((a, b) => mem(b) - mem(a)), total: total(rs) }))
-      .sort((a, b) => b.total - a.total);
-  });
+  // One group per VM. By default the VM using the most memory first, and within it the largest
+  // container first; a column head orders both by its column (containers.ts).
+  const ordering = new Ordering('containers', CONTAINER_SORTS, BY_MEMORY);
+  const groups = $derived(groupContainers(rows, ordering.current).map((g) => ({ ...g, live: live.vm(g.vm) })));
+  const heads = $derived<{ key: ContainerSort; text: string; span?: number; right?: boolean }[]>([
+    { key: 'name', text: `${countWord(groups.length)} ${groups.length === 1 ? 'VM' : 'VMs'}` },
+    { key: 'memory', text: 'Memory', span: 2 },
+    { key: 'cpu', text: 'CPU', span: 2 },
+    { key: 'up', text: 'Up', right: true },
+  ]);
 
   function setParam(key: string, value: string | null) {
     goto(withParam(page.url, key, value), { replaceState: true, keepFocus: true, noScroll: true });
@@ -87,22 +90,29 @@
 {:else if rows.length === 0}
   <p class="note">{all.length === 0 ? 'Nothing to list.' : 'No containers match.'}</p>
 {:else}
-  <div class="column-heads containers-grid" aria-hidden="true">
-    <span>{countWord(groups.length)} {groups.length === 1 ? 'VM' : 'VMs'}</span><span class="span">Memory</span><span class="span">CPU</span><span class="r">Up</span><span></span>
+  <div class="column-heads containers-grid" role="group" aria-label="Order the containers by">
+    {#each heads as h (h.key)}
+      <SortHead column={CONTAINER_COLUMNS[h.key]} active={ordering.current.by === h.key} reversed={ordering.current.reversed}
+        span={h.span} align={h.right ? 'right' : 'left'} onclick={() => ordering.choose(h.key)}>{h.text}</SortHead>
+    {/each}
+    <span></span>
   </div>
+  <div class="narrow-order"><OrderPicker columns={CONTAINER_COLUMNS} {ordering} /></div>
   <div class="lines">
     {#each groups as g (g.vm)}
-      <section>
+      <section animate:glide>
         <h2 class="head"><a href={`/vm/${encodeURIComponent(g.vm)}`}>{g.vm}</a> {runsSentence(g.rows.map((r) => r.c))}</h2>
         {#each g.rows as { vm, c } (c.id)}
           {@const key = keyOf(vm, c.id)}
-          <ContainerLine {vm} {c} history={history.get(c.entity)} {memScale} vmCpus={g.live?.instance.cpus ?? 1} vmMemory={g.live?.instance.memory ?? 0} second="image"
-            now={live.snapshot?.updated} selected={key in open} onselect={() => toggle(key)} onerror={(e) => (actionError = e)} />
-          {#if open[key] != null}
-            <div transition:unfold>
-              <ContainerDetail {vm} {c} from={open[key] - DETAIL_WINDOW_MS} to={open[key]} vmMemory={g.live?.instance.memory ?? 0} onclose={() => close(key)} />
-            </div>
-          {/if}
+          <div animate:glide>
+            <ContainerLine {vm} {c} history={history.get(c.entity)} {memScale} vmCpus={g.live?.instance.cpus ?? 1} vmMemory={g.live?.instance.memory ?? 0} second="image"
+              now={live.snapshot?.updated} selected={key in open} onselect={() => toggle(key)} onerror={(e) => (actionError = e)} />
+            {#if open[key] != null}
+              <div transition:unfold>
+                <ContainerDetail {vm} {c} from={open[key] - DETAIL_WINDOW_MS} to={open[key]} vmMemory={g.live?.instance.memory ?? 0} onclose={() => close(key)} />
+              </div>
+            {/if}
+          </div>
         {/each}
       </section>
     {/each}
@@ -126,8 +136,10 @@
   section { border-top: 1px solid var(--fg); padding-top: 0.8rem; border-bottom: 1px solid var(--border); }
   section:first-child { border-top: 0; }
   .head a { color: var(--fg); font-weight: 600; }
+  .narrow-order { display: none; }
   @media (max-width: 860px) {
     .column-heads { display: none; }
+    .narrow-order { display: block; }
     section:first-child { border-top: 1px solid var(--fg); }
   }
 </style>
