@@ -100,16 +100,19 @@ under the sentence, figures and bar it explains, with the allocation as a dashed
   column heads go and each cell carries its own.
 - **Order**: every list under serif column heads (VMs, a VM's containers, Containers, Images,
   Volumes) is ordered by clicking a head (`SortHead.svelte`, `lib/order.ts`). A head orders its
-  column the natural way first (names A to Z, amounts the most first); chosen again, the other way.
+  column the natural way first (names A to Z, amounts most first); chosen again, the other way.
   There are no arrows: the chosen head's stretch of the rule under the heads is drawn 3px (a hover
-  raises the same mark in grey), and only a reversed order says which way, in small grey words
-  beside the head ("the least first", "Z to A"). What has no value (not running, not measured) is
+  raises the same mark in grey), and only a reversed order says which way, in small grey words at
+  the column's right end on the head's baseline ("least first", "Z to A"), broken into lines where
+  the column is tight (columns are at least wide enough for that). What has no value (not running, not measured) is
   last either way. Where a list is grouped by VM, ordering by name orders the groups too; otherwise
   the groups keep their own order (the most memory first, the fullest disk first). Each list opens
   as it did before it could be ordered — VMs by name, containers by memory, images and volumes with
   the unused first — and keeps the choice for next time. A live order changes as the numbers do, so
   lines glide to their new places (`motion.ts`). Where the heads are hidden on a narrow window, the
-  order is chosen in words instead ("Listed by memory in use, the most first", `OrderPicker.svelte`).
+  order is chosen in words instead ("Listed by memory in use, most first", `OrderPicker.svelte`).
+  The page always shows its scrollbar (disabled when there's nothing to scroll), so going from a
+  short page to a long one doesn't shift everything sideways.
 - **Settings**: the headline says how often each running VM is measured; the choices (1, 2, 5,
   10 s) and what a slower one costs and saves.
 - **A VM**: the headline verdict; four figures (Memory, CPU, Pressure, Disk), each a verdict

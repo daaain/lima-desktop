@@ -13,11 +13,12 @@ export type Compare<T> = (a: T, b: T, dir: number) => number;
 /** A list's columns: what each is called when spoken, and which way it runs in words. */
 export interface Column {
   label: string;
-  /** The natural way, then reversed: ["A to Z", "Z to A"], ["the most first", "the least first"]. */
+  /** The natural way, then reversed: ["A to Z", "Z to A"], ["most first", "least first"]. Short:
+   *  the reversed one sits beside its head, in columns as narrow as 5.5rem. */
   ways: readonly [string, string];
 }
 export const NAMES: Column['ways'] = ['A to Z', 'Z to A'];
-export const AMOUNTS: Column['ways'] = ['the most first', 'the least first'];
+export const AMOUNTS: Column['ways'] = ['most first', 'least first'];
 
 /** What choosing column `by` leads to: its natural way, or the other way when it's already chosen. */
 export const next = <K extends string>(current: Order<K>, by: K): Order<K> =>

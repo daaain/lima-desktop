@@ -46,7 +46,7 @@ export const CONTAINER_COLUMNS: Record<ContainerSort, Column> = {
   name: { label: 'name', ways: NAMES },
   memory: { label: 'memory in use', ways: AMOUNTS },
   cpu: { label: 'CPU in use', ways: AMOUNTS },
-  up: { label: 'time up', ways: ['the longest up first', 'the latest started first'] },
+  up: { label: 'time up', ways: ['longest up first', 'newest first'] },
 };
 
 /** What a container's line is called: its compose service, else its name. */

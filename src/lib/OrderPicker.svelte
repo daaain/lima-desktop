@@ -1,6 +1,6 @@
 <script lang="ts" generics="K extends string">
   // A list's order in words, where its column heads aren't there to click (a narrow window):
-  // "Listed by memory in use, the least first".
+  // "Listed by memory in use, least first".
   import type { Column } from './order';
   import type { Ordering } from './ordering.svelte';
 

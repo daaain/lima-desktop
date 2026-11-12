@@ -50,7 +50,7 @@ describe('way', () => {
   it('says which way in words', () => {
     const columns = { name: { label: 'name', ways: NAMES }, n: { label: 'n', ways: AMOUNTS } };
     expect(way(columns, o('name', true))).toBe('Z to A');
-    expect(way(columns, o('n'))).toBe('the most first');
+    expect(way(columns, o('n'))).toBe('most first');
   });
 });
 

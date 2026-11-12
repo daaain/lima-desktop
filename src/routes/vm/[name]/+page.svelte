@@ -110,8 +110,8 @@
       .sort(([a], [b]) => (a === null ? 1 : b === null ? -1 : dir * byText(a, b)))
       .map(([project, containers]) => ({ project, containers: sortBy(containers, CONTAINER_ORDER, o) }));
   });
-  const heads: { key: ContainerSort; text: string; span?: number; right?: boolean }[] = [
-    { key: 'name', text: 'Name' }, { key: 'memory', text: 'Memory', span: 2 }, { key: 'cpu', text: 'CPU', span: 2 }, { key: 'up', text: 'Up', right: true },
+  const heads: { key: ContainerSort; text: string; span?: number }[] = [
+    { key: 'name', text: 'Name' }, { key: 'memory', text: 'Memory', span: 2 }, { key: 'cpu', text: 'CPU', span: 2 }, { key: 'up', text: 'Up' },
   ];
   function toggle(id: string) {
     open = open.includes(id) ? open.filter((o) => o !== id) : [...open, id];
@@ -239,7 +239,7 @@
         <div class="column-heads" role="group" aria-label="Order the containers by">
           {#each heads as h (h.key)}
             <SortHead column={CONTAINER_COLUMNS[h.key]} active={ordering.current.by === h.key} reversed={ordering.current.reversed}
-              span={h.span} align={h.right ? 'right' : 'left'} onclick={() => ordering.choose(h.key)}>{h.text}</SortHead>
+              span={h.span} onclick={() => ordering.choose(h.key)}>{h.text}</SortHead>
           {/each}
           <span></span>
         </div>
@@ -272,8 +272,8 @@
   .title.small { align-items: baseline; }
   .title.small .head { flex: 1 1 20rem; }
   .panel { display: grid; gap: 0.7rem; margin-top: 1.4rem; }
-  .lines { --container-columns: minmax(13rem, 1.3fr) minmax(9rem, 1fr) 8.5rem minmax(7rem, 0.6fr) 5.5rem 5rem 11.5rem; border-bottom: 1px solid var(--border); }
-  .column-heads { grid-template-columns: var(--container-columns); column-gap: 1.4rem; margin-top: 0.4rem; }
+  .lines { --container-columns: minmax(13rem, 1.3fr) minmax(9rem, 1fr) 8.5rem minmax(7rem, 0.6fr) 5.5rem 6.5rem 10rem; border-bottom: 1px solid var(--border); }
+  .column-heads { grid-template-columns: var(--container-columns); column-gap: 1.4rem; margin-top: 0.1rem; } /* 0.3rem less: SortHead's min-height */
   .column-heads + .group, .column-heads + .row > :global(.line) { border-top: 0; }
   .group { margin: 0; padding: 1rem 0 0.4rem; font-size: 1.05rem; font-weight: 500; color: var(--muted); border-top: 1px solid var(--border); }
   .group + .row > :global(.line) { border-top: 0; }

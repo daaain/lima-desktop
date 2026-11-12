@@ -38,11 +38,11 @@
   // container first; a column head orders both by its column (containers.ts).
   const ordering = new Ordering('containers', CONTAINER_SORTS, BY_MEMORY);
   const groups = $derived(groupContainers(rows, ordering.current).map((g) => ({ ...g, live: live.vm(g.vm) })));
-  const heads = $derived<{ key: ContainerSort; text: string; span?: number; right?: boolean }[]>([
+  const heads = $derived<{ key: ContainerSort; text: string; span?: number }[]>([
     { key: 'name', text: `${countWord(groups.length)} ${groups.length === 1 ? 'VM' : 'VMs'}` },
     { key: 'memory', text: 'Memory', span: 2 },
     { key: 'cpu', text: 'CPU', span: 2 },
-    { key: 'up', text: 'Up', right: true },
+    { key: 'up', text: 'Up' },
   ]);
 
   function setParam(key: string, value: string | null) {
@@ -93,7 +93,7 @@
   <div class="column-heads containers-grid" role="group" aria-label="Order the containers by">
     {#each heads as h (h.key)}
       <SortHead column={CONTAINER_COLUMNS[h.key]} active={ordering.current.by === h.key} reversed={ordering.current.reversed}
-        span={h.span} align={h.right ? 'right' : 'left'} onclick={() => ordering.choose(h.key)}>{h.text}</SortHead>
+        span={h.span} onclick={() => ordering.choose(h.key)}>{h.text}</SortHead>
     {/each}
     <span></span>
   </div>
@@ -130,8 +130,8 @@
   .dot { width: 12px; height: 12px; border-radius: 50%; background: var(--bar); box-sizing: border-box; }
   .dot.off { background: none; border: 2px solid var(--warn); }
   .check { display: flex; align-items: center; gap: 0.3rem; font-size: 0.9rem; }
-  .lines, .containers-grid { --container-columns: minmax(13rem, 1.3fr) minmax(9rem, 1fr) 8.5rem minmax(7rem, 0.6fr) 5.5rem 5rem 11.5rem; }
-  .containers-grid { grid-template-columns: var(--container-columns); column-gap: 1.4rem; margin-top: 0.6rem; }
+  .lines, .containers-grid { --container-columns: minmax(13rem, 1.3fr) minmax(9rem, 1fr) 8.5rem minmax(7rem, 0.6fr) 5.5rem 6.5rem 10rem; }
+  .containers-grid { grid-template-columns: var(--container-columns); column-gap: 1.4rem; margin-top: 0.3rem; } /* 0.3rem less: SortHead's min-height */
   .lines { display: grid; gap: 2.2rem; }
   section { border-top: 1px solid var(--fg); padding-top: 0.8rem; border-bottom: 1px solid var(--border); }
   section:first-child { border-top: 0; }

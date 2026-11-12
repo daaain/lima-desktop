@@ -215,7 +215,7 @@
   .dot { width: 12px; height: 12px; border-radius: 50%; background: var(--bar); box-sizing: border-box; }
   .dot.off { background: none; border: 2px solid var(--warn); }
   .dot.unknown { background: var(--soft); }
-  .column-heads { grid-template-columns: var(--item-columns); column-gap: 1.4rem; margin-top: 0.6rem; }
+  .column-heads { grid-template-columns: var(--item-columns); column-gap: 1.4rem; margin-top: 0.3rem; } /* 0.3rem less: SortHead's min-height */
   .lines { display: grid; gap: 2.2rem; }
   section { border-top: 1px solid var(--fg); padding-top: 0.8rem; border-bottom: 1px solid var(--border); }
   section:first-child { border-top: 0; }

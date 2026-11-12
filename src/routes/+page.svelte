@@ -183,8 +183,9 @@
 <style>
   .top { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); gap: 2rem 4rem; align-items: end; }
   .capacities { display: grid; gap: 0.9rem; }
-  .fleet { margin-top: 1.6rem; }
-  .row { display: grid; grid-template-columns: minmax(15rem, 1.25fr) repeat(3, minmax(0, 1fr)) minmax(10.5rem, 0.85fr); column-gap: 2.2rem; }
+  .fleet { margin-top: 1.3rem; } /* 0.3rem less: SortHead's min-height */
+  /* The last column is at least wide enough for its head and a reversed order's words beside it. */
+  .row { display: grid; grid-template-columns: minmax(15rem, 1.25fr) repeat(3, minmax(0, 1fr)) minmax(12.5rem, 0.85fr); column-gap: 2.2rem; }
   .vm { padding: 1.6rem 0; border-bottom: 1px solid var(--border); align-items: start; }
   .who { display: grid; gap: 0.5rem; min-width: 0; justify-items: start; }
   .name-line { display: flex; align-items: center; gap: 0.5rem; min-width: 0; max-width: 100%; }

@@ -44,6 +44,9 @@
       --series-1: #93b4ff; --series-2: #ff9a52; --series-3: #b9a4ee; --series-4: #b4bcc8;
     }
   }
+  /* The scrollbar always there (disabled when there's nothing to scroll): a page doesn't shift
+     sideways as it gets long enough to scroll, or going from a short page to a long one. */
+  :global(html) { overflow-y: scroll; }
   :global(body) { margin: 0; background: var(--bg); color: var(--fg); }
   :global(a) { color: var(--accent); text-decoration: none; }
   :global(a:hover) { text-decoration: underline; }

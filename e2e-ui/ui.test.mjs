@@ -189,7 +189,7 @@ test('VMs are listed by name until a column head orders them, and the order is k
   // Chosen again, it reverses, and says so.
   await head('Disk').click();
   assert.equal((await vmNames(page)).at(-1), 'quill');
-  assert.match(await head('Disk').innerText(), /the least first/);
+  assert.match(await head('Disk').innerText(), /least first/);
   await page.reload();
   await page.locator('article').first().waitFor();
   assert.equal(await head('Disk').getAttribute('aria-pressed'), 'true');
@@ -237,7 +237,7 @@ test('On a narrow window the order is chosen from a word, as the heads are gone'
   assert.equal(await picker.inputValue(), 'name');
   await picker.selectOption('disk');
   assert.equal((await vmNames(page))[0], 'quill');
-  await page.getByLabel('Which way').selectOption({ label: 'the least first' });
+  await page.getByLabel('Which way').selectOption({ label: 'least first' });
   assert.equal((await vmNames(page)).at(-1), 'quill');
   assert.deepEqual(errors, []);
   await close();
