@@ -109,11 +109,17 @@ generated changelog.
    bumps the version in `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml` (and `Cargo.lock`) and
    `package.json` — the workflow refuses a tag that doesn't match all three — commits that as
    `Release v0.2.0` and tags it, all locally (`git tag -d v0.2.0 && git reset --hard HEAD~1` undoes
-   it). Given the version already in the files, it only tags.
+   it). Given the version already in the files, it only tags. It fetches first and refuses unless
+   main is exactly `origin/main`.
 2. **`just release-push`**: pushes main and the tag together (`--atomic`), which starts the build.
    main has to take a direct push for this; where it only takes pull requests, merge the bump
    commit through one and push just the tag.
 3. Read the draft under Releases, then publish it.
+
+Don't tag by hand: a tag on a commit that still says the old version fails the workflow's first
+job, after the tag is public. The pre-push hook (`.githooks/pre-push`, switched on by `pnpm install`
+setting `core.hooksPath`) runs the same check, `tools/check-release-version.sh`, on any `v*` tag
+before it leaves. To take back a bad tag: `git push origin :refs/tags/vX.Y.Z && git tag -d vX.Y.Z`.
 
 Run by hand (Actions → Release → Run workflow), it builds any branch and keeps the bundles as the
 run's artifacts, releasing nothing.

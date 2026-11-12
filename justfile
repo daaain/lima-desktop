@@ -113,6 +113,7 @@ test:
 # tauri.conf.json, Cargo.toml (and Cargo.lock) and package.json, commits and tags v<version>, all
 # local — `git tag -d v<version> && git reset --hard HEAD~1` undoes it. `just release-push` then
 # starts the Release workflow, which builds the .dmg, .deb and AppImage into a draft GitHub Release.
+# A pre-push hook (.githooks/pre-push) refuses any v* tag whose commit says another version.
 # Bump the version, commit and tag it - e.g. `just release patch` or `just release 0.2.0`
 release version_or_bump:
     #!/usr/bin/env bash
@@ -122,6 +123,10 @@ release version_or_bump:
     branch=$(git branch --show-current)
     [ "$branch" = main ] || { echo "Release from main (this is '$branch')." >&2; exit 1; }
     [ -z "$(git status --porcelain)" ] || { echo "Commit or stash these first:" >&2; git status --short >&2; exit 1; }
+    # The tag has to name what's on GitHub's main, not a stale or ahead-of-it local copy.
+    git fetch -q origin main
+    [ "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)" ] \
+      || { echo "main isn't origin/main: git pull --ff-only (or push) first." >&2; exit 1; }
     current=$(node -p 'require("./src-tauri/tauri.conf.json").version')
     IFS=. read -r major minor patch <<< "$current"
     case "{{version_or_bump}}" in

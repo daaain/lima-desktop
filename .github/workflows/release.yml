@@ -38,14 +38,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: tauri.conf.json, Cargo.toml and package.json all say ${{ github.ref_name }}
-        run: |
-          want="${GITHUB_REF_NAME#v}"
-          conf=$(node -p 'require("./src-tauri/tauri.conf.json").version')
-          pkg=$(node -p 'require("./package.json").version')
-          crate=$(sed -n 's/^version = "\(.*\)"$/\1/p' src-tauri/Cargo.toml | head -1)
-          echo "tag $want · tauri.conf.json $conf · package.json $pkg · Cargo.toml $crate"
-          [ "$conf" = "$want" ] && [ "$pkg" = "$want" ] && [ "$crate" = "$want" ] \
-            || { echo "::error::bump all three to $want before tagging"; exit 1; }
+        run: tools/check-release-version.sh HEAD "${GITHUB_REF_NAME#v}" || { echo "::error::bump all three to ${GITHUB_REF_NAME#v} before tagging"; exit 1; }
 
   macos:
     name: macOS (universal .dmg)

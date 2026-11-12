@@ -307,6 +307,13 @@ PLAYWRIGHT_BROWSERS_PATH = "/opt/ms-playwright"
 # what YOUR COMPUTER installs, so it is read from the adopted copy); settings are applied to
 # the box's server.
 [vscode]
-extensions = ["anthropic.claude-code", "rust-lang.rust-analyzer", "tauri-apps.tauri-vscode", "svelte.svelte-vscode", "tamasfe.even-better-toml"]
+extensions = [
+  "anthropic.claude-code",
+  "rust-lang.rust-analyzer",
+  "tauri-apps.tauri-vscode",
+  "svelte.svelte-vscode",
+  "tamasfe.even-better-toml",
+  "nefrob.vscode-just-syntax",
+]
 [vscode.settings]
 "remote.autoForwardPorts" = false
