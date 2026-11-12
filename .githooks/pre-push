@@ -7,6 +7,6 @@ status=0
 while read -r local_ref local_sha remote_ref remote_sha; do
   case "$remote_ref" in refs/tags/v*) ;; *) continue ;; esac
   case "$local_sha" in *[!0]*) ;; *) continue ;; esac   # all zeros: deleting the tag
-  "$root/tools/check-release-version.sh" "$local_sha^{commit}" "${remote_ref#refs/tags/v}" || status=1
+  sh "$root/tools/check-release-version.sh" "$local_sha^{commit}" "${remote_ref#refs/tags/v}" || status=1
 done
 exit $status

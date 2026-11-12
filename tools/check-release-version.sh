@@ -10,6 +10,6 @@ pkg=$(json package.json)
 crate=$(git show "$rev:src-tauri/Cargo.toml" | sed -n 's/^version = "\(.*\)"$/\1/p' | head -n 1)
 echo "v$want · tauri.conf.json $conf · package.json $pkg · Cargo.toml $crate"
 if [ "$conf" != "$want" ] || [ "$pkg" != "$want" ] || [ "$crate" != "$want" ]; then
-  echo "v$want names a commit whose version isn't $want everywhere: tag with \`just release $want\`." >&2
+  echo "${GITHUB_ACTIONS:+::error::}v$want names a commit whose version isn't $want everywhere: tag with \`just release $want\`." >&2
   exit 1
 fi
