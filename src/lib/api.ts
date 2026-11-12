@@ -133,7 +133,9 @@ export interface Band {
   avg: (number | null)[];
 }
 export interface Series {
-  resolution: '1s' | '1m';
+  /** Seconds between samples where they come steadily (the sparsest, if the interval changed in
+   *  the range); 60 beyond 6 h, where minutes are kept; 0 until there are enough to tell. */
+  sampleSecs: number;
   ts: number[];
   metrics: Record<string, Band>;
 }

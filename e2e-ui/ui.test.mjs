@@ -289,6 +289,8 @@ test('Container details open inline, several at once, and hold a value being rea
   const chart = details.first().locator('.chart').first();
   await chart.locator('.u-over').waitFor();
   await chart.scrollIntoViewIfNeeded();
+  // Its title says how often it was measured, as Settings has it.
+  assert.equal(await chart.locator('h3 .res').textContent(), 'every second');
   const legend = chart.locator('.u-legend');
   const before = await legend.boundingBox();
   const over = await chart.locator('.u-over').boundingBox();

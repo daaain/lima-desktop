@@ -43,6 +43,14 @@ describe('sortRunning', () => {
     expect(names(sortRunning(fleet, o('memory', true)))).toEqual(['quill', 'vm9', 'vm10', 'atlas']);
   });
 
+  it('puts a VM with no reading yet last, either way', () => {
+    const fresh = { ...running('aaron'), latest: {} };
+    const withFresh = [...fleet, fresh];
+    expect(names(sortRunning(withFresh, o('memory'))).at(-1)).toBe('aaron');
+    expect(names(sortRunning(withFresh, o('memory', true))).at(-1)).toBe('aaron');
+    expect(names(sortRunning(withFresh, o('cpu', true))).at(-1)).toBe('aaron');
+  });
+
   it("doesn't reorder what it was given", () => {
     sortRunning(fleet, o('name'));
     expect(names(fleet)).toEqual(['quill', 'atlas', 'vm10', 'vm9']);

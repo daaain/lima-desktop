@@ -86,7 +86,11 @@ const ROW_ORDER = Object.fromEntries(
 /** `rows` as one group per VM, the groups and the lines in each in order `o`. */
 export function groupContainers(rows: ContainerRow[], o: Order<ContainerSort>): ContainerGroup[] {
   const byVm = new Map<string, ContainerRow[]>();
-  for (const r of rows) byVm.set(r.vm, [...(byVm.get(r.vm) ?? []), r]);
+  for (const r of rows) {
+    const group = byVm.get(r.vm);
+    if (group) group.push(r);
+    else byVm.set(r.vm, [r]);
+  }
   const groups = [...byVm.entries()].map(([vm, rs]) => ({ vm, rows: sortBy(rs, ROW_ORDER, o) }));
   return sortBy(groups, GROUP_ORDER, o);
 }

@@ -216,7 +216,7 @@
       }
       out[key] = band;
     }
-    return { resolution: to - from <= 6 * HOUR ? '1s' : '1m', ts, metrics: out };
+    return { sampleSecs: to - from <= 6 * HOUR ? settings.intervalSecs : 60, ts, metrics: out };
   }
 
   function summary({ entity: id, from, to }) {

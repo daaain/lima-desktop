@@ -1,5 +1,5 @@
 // The order of the VM overview's lists (order.ts): by name unless a column head was chosen.
-import { gauges } from './almanac';
+import { gauges, type Gauge } from './almanac';
 import type { VmLive } from './api';
 import { AMOUNTS, byText, most, named, NAMES, sortBy, type Column, type Compare, type Order } from './order';
 
@@ -17,14 +17,16 @@ export const VM_COLUMNS: Record<VmSort, Column> = {
 };
 
 const nameOf = (v: VmLive) => v.instance.name;
-const amount = (key: (v: VmLive) => number) => most(key, nameOf);
+const amount = (key: (v: VmLive) => number | undefined) => most(key, nameOf);
+// A gauge with no reading yet has no share: last either way, not the least.
+const inUse = (g: Gauge) => (g.used == null ? undefined : g.pct);
 const runningContainers = (v: VmLive) => v.containers.filter((c) => c.state === 'running').length;
 
 const RUNNING: Record<VmSort, Compare<VmLive>> = {
   name: named(nameOf),
-  memory: amount((v) => gauges(v).memory.pct),
-  cpu: amount((v) => gauges(v).cpu.pct),
-  disk: amount((v) => gauges(v).disk.pct),
+  memory: amount((v) => inUse(gauges(v).memory)),
+  cpu: amount((v) => inUse(gauges(v).cpu)),
+  disk: amount((v) => inUse(gauges(v).disk)),
   // Running ones first; a tie goes to the VM with more in all.
   containers: amount((v) => runningContainers(v) * 10_000 + v.containers.length),
 };

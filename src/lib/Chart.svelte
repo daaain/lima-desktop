@@ -4,6 +4,7 @@
   import { onDestroy } from 'svelte';
   import type { Series } from './api';
   import { theme } from './theme.svelte';
+  import { intervalPhrase } from './almanac';
 
   interface Line {
     key: string;
@@ -181,7 +182,7 @@
 </script>
 
 <section class="chart">
-  {#if title}<h3>{title}{#if data}<span class="res">{data.resolution === '1s' ? 'per second' : 'per minute'}</span>{/if}</h3>{/if}
+  {#if title}<h3>{title}{#if data?.sampleSecs}<span class="res">{intervalPhrase(data.sampleSecs)}</span>{/if}</h3>{/if}
   <div bind:this={host} bind:clientWidth={width}></div>
   {#if data && data.ts.length === 0}<p class="empty">No samples in this range.</p>{/if}
 </section>

@@ -24,6 +24,7 @@ describe('intervalPhrase', () => {
   it('says a second as a word, more in digits (it is never the first word)', () => {
     expect(intervalPhrase(1)).toBe('every second');
     expect(intervalPhrase(5)).toBe('every 5 seconds');
+    expect(intervalPhrase(60)).toBe('every minute');
   });
 });
 
@@ -97,15 +98,15 @@ describe('fullWindow', () => {
   const b = (xs: (number | null)[]) => ({ min: xs, max: xs, avg: xs });
   it('pads a short history so its columns sit at their time, at full-window width', () => {
     // 10 buckets of 10 over [0, 100): samples only in buckets 6 and 7.
-    const s = fullWindow({ resolution: '1m', ts: [60, 70], metrics: { mem: b([5, 6]) } }, 0, 100, 10);
+    const s = fullWindow({ sampleSecs: 60, ts: [60, 70], metrics: { mem: b([5, 6]) } }, 0, 100, 10);
     expect(s.ts).toEqual([0, 10, 20, 30, 40, 50, 60, 70, 80, 90]);
     expect(s.metrics.mem.avg).toEqual([null, null, null, null, null, null, 5, 6, null, null]);
     expect(sketch(s.metrics.mem, 10)?.columns.length).toBe(10);
   });
   it('leaves a full or empty one alone', () => {
-    const full = { resolution: '1m' as const, ts: [0, 50], metrics: { mem: b([1, 2]) } };
+    const full = { sampleSecs: 60, ts: [0, 50], metrics: { mem: b([1, 2]) } };
     expect(fullWindow(full, 0, 100, 2)).toBe(full);
-    const empty = { resolution: '1m' as const, ts: [], metrics: {} };
+    const empty = { sampleSecs: 60, ts: [], metrics: {} };
     expect(fullWindow(empty, 0, 100, 10)).toBe(empty);
   });
 });

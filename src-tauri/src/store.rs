@@ -198,6 +198,20 @@ fn rollup_minute(rows: &[(i64, Vec<i64>)], ncols: usize) -> Vec<i64> {
     out
 }
 
+/// How far apart samples taken at `ts` (in order) come while they come steadily: the widest gap
+/// that the next one repeats to within a quarter. The interval can change mid-window, so the
+/// sparsest steady run counts; a lone long gap (the app or the VM was down) doesn't. 0 when no two
+/// gaps agree.
+fn steady_spacing(ts: impl Iterator<Item = i64>) -> i64 {
+    let ts: Vec<i64> = ts.collect();
+    let gaps: Vec<i64> = ts.windows(2).map(|w| w[1] - w[0]).collect();
+    gaps.windows(2)
+        .filter(|g| g[0] > 0 && g[1] > 0 && (g[0] - g[1]).abs() * 4 <= g[0].max(g[1]))
+        .map(|g| g[0].max(g[1]))
+        .max()
+        .unwrap_or(0)
+}
+
 // ---- the store ------------------------------------------------------------------------------
 
 /// Schema evolution for a database an older build created.
@@ -247,7 +261,10 @@ pub struct Store {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Series {
-    pub resolution: &'static str,
+    /// Seconds between the samples where they come steadily (the sparsest, if the interval
+    /// changed in the range); a minute beyond 6 h, where minutes are kept. 0 until there are
+    /// enough samples to tell.
+    pub sample_secs: i64,
     pub ts: Vec<i64>,
     pub metrics: HashMap<String, Band>,
 }
@@ -563,13 +580,22 @@ impl Store {
         let ncols = self.ncols(entity);
         let names = self.kinds.get(&entity).map(|k| k.metrics()).unwrap_or(&[]);
         let use_raw = to - from <= RAW_QUERY_SPAN;
-        let (rows, resolution) = if use_raw {
-            (self.rows_between("raw", entity, from, to, MINUTE)?, "1s")
+        let rows = if use_raw {
+            self.rows_between("raw", entity, from, to, MINUTE)?
         } else {
-            (self.rows_between("rollup", entity, from, to, HOUR)?, "1m")
+            self.rows_between("rollup", entity, from, to, HOUR)?
         };
-        let points = points.max(1);
-        let width = ((to - from) / points as i64).max(1);
+        // A bucket is never narrower than the samples are apart (5 s or 10 s ones in a 15 min
+        // window), with a quarter to spare for late ones: else most buckets would be empty, and
+        // the chart's line nothing but breaks. Fewer buckets, then.
+        let spacing = steady_spacing(rows.iter().map(|r| r.0));
+        let width = ((to - from) / points.max(1) as i64).max(spacing + spacing / 4).max(1);
+        let points = ((to - from + width - 1) / width).max(1) as usize;
+        let sample_secs = if use_raw {
+            (spacing + 500) / 1000
+        } else {
+            MINUTE / 1000
+        };
         let mut buckets: Vec<Option<Bucket>> = (0..points).map(|_| None).collect();
         for (ts, vals) in &rows {
             let b = (((ts - from) / width) as usize).min(points - 1);
@@ -600,7 +626,7 @@ impl Store {
             }
         }
         let mut series = Series {
-            resolution,
+            sample_secs,
             ts: Vec::new(),
             metrics: HashMap::new(),
         };
@@ -858,7 +884,7 @@ mod tests {
         let gap = s.series(vm, start - HOUR, start + HOUR, 120).unwrap();
         assert_eq!(gap.ts.len(), 60, "leading empty buckets are trimmed");
         let raw = s.series(vm, start, start + HOUR, 60).unwrap();
-        assert_eq!(raw.resolution, "1s");
+        assert_eq!(raw.sample_secs, 1);
         assert_eq!(raw.ts.len(), 60);
         let mem = &raw.metrics["mem_used"];
         assert_eq!(mem.min[0], Some(1_000));
@@ -866,7 +892,7 @@ mod tests {
         let day = s
             .series(vm, start - 10 * HOUR, start + 14 * HOUR, 100)
             .unwrap();
-        assert_eq!(day.resolution, "1m");
+        assert_eq!(day.sample_secs, 60);
         let peak = day.metrics["mem_used"].max.iter().flatten().max().copied();
         assert_eq!(peak, Some(9_000), "the spike survives the rollup");
 
@@ -881,6 +907,54 @@ mod tests {
         assert_eq!(sum["mem_used"].max, Some(9_000));
         assert_eq!(sum["mem_used"].min, Some(1_000));
         assert_eq!(sum["mem_used"].p95, None);
+    }
+
+    /// Where the memory line of a 15 min chart, asked for in 600 buckets, has no value.
+    fn breaks_in_fifteen_minutes(s: &mut Store, vm: i64, start: i64) -> Vec<usize> {
+        let avg = &s.series(vm, start, start + 15 * MINUTE, 600).unwrap().metrics["mem_used"].avg;
+        (0..avg.len()).filter(|&i| avg[i].is_none()).collect()
+    }
+
+    #[test]
+    fn sparse_samples_draw_a_line_and_an_outage_still_breaks_it() {
+        let mut s = Store::in_memory().unwrap();
+        let vm = s.entity(Kind::Vm, "acme", "acme", "acme", 0).unwrap();
+        let start = 10 * HOUR;
+        // Every 10 s, a little late now and then, with a 3 minute outage in the middle.
+        for i in 0..90i64 {
+            if (40..58).contains(&i) {
+                continue;
+            }
+            s.ingest(vm, start + i * 10_000 + (i % 3) * 40, vm_row(1_000 + i));
+        }
+        s.flush(start + 15 * MINUTE).unwrap();
+        // Buckets of 12.5 s: the outage's 3 minutes and a bit, in one run, and nothing else.
+        let breaks = breaks_in_fifteen_minutes(&mut s, vm, start);
+        let fifteen = s.series(vm, start, start + 15 * MINUTE, 600).unwrap();
+        assert_eq!(fifteen.sample_secs, 10, "late ones round to the interval");
+        assert!((14..=16).contains(&breaks.len()), "{breaks:?}");
+        assert_eq!(breaks.last().unwrap() - breaks[0] + 1, breaks.len(), "{breaks:?}");
+    }
+
+    #[test]
+    fn a_change_of_interval_mid_window_keeps_the_sparser_part_whole() {
+        let mut s = Store::in_memory().unwrap();
+        let vm = s.entity(Kind::Vm, "acme", "acme", "acme", 0).unwrap();
+        let start = 10 * HOUR;
+        // 5 minutes every 5 s, then 10 every second.
+        let ts = (0..60).map(|i| i * 5_000).chain((0..600).map(|i| 5 * MINUTE + i * 1_000));
+        for t in ts {
+            s.ingest(vm, start + t, vm_row(1_000));
+        }
+        s.flush(start + 15 * MINUTE).unwrap();
+        assert_eq!(breaks_in_fifteen_minutes(&mut s, vm, start), Vec::<usize>::new());
+    }
+
+    #[test]
+    fn steady_spacing_ignores_a_lone_gap() {
+        assert_eq!(steady_spacing([0, 1_000, 2_000, 60_000, 61_000].into_iter()), 1_000);
+        assert_eq!(steady_spacing([0, 10_000, 20_100, 21_000, 22_000].into_iter()), 10_100);
+        assert_eq!(steady_spacing([0, 5_000].into_iter()), 0);
     }
 
     #[test]
