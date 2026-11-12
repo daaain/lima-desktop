@@ -16,7 +16,12 @@
   import VmSelect from '$lib/VmSelect.svelte';
   import VolumePrune from '$lib/VolumePrune.svelte';
   import Files from '$lib/Files.svelte';
-  import { unfold } from '$lib/motion';
+  import OrderPicker from '$lib/OrderPicker.svelte';
+  import SortHead from '$lib/SortHead.svelte';
+  import { BY_USE, ITEM_COLUMNS, ITEM_SORTS, itemOrder, sortGroups, type ItemSort } from '$lib/itemOrder';
+  import { sortBy } from '$lib/order';
+  import { Ordering } from '$lib/ordering.svelte';
+  import { glide, unfold } from '$lib/motion';
 
   const scope = $derived(podmanScope(live.snapshot));
   // Kept and followed app-wide from the start (podmanLists): the view opens on what's known.
@@ -61,17 +66,24 @@
       };
     }),
   );
-  // Measured: unused first, then the largest. Not yet: by name.
-  const lineOrder = (a: VolumeRow, b: VolumeRow) =>
-    Number(usedOf(a) ?? 0) - Number(usedOf(b) ?? 0) || (usageOf(b)?.size ?? 0) - (usageOf(a)?.size ?? 0) || a.v.name.localeCompare(b.v.name);
-  // The fullest disk first: where removing something matters most.
+  // By default, once measured, the unused first, then the largest; not yet measured, by name. The
+  // fullest disk first, where removing something matters most (itemOrder.ts).
+  const ordering = new Ordering('volumes', ITEM_SORTS, BY_USE);
+  const lineOrder = itemOrder<VolumeRow>({ name: (r) => r.v.name, size: (r) => usageOf(r)?.size, used: usedOf });
   const groups = $derived(
-    facts
-      .filter((f) => shown.includes(f.vm))
-      .map((f) => ({ ...f, lines: rows.filter((r) => r.vm === f.vm).sort(lineOrder) }))
-      .filter((g) => !query || g.lines.length)
-      .sort((a, b) => b.pct - a.pct || a.vm.localeCompare(b.vm)),
+    sortGroups(
+      facts
+        .filter((f) => shown.includes(f.vm))
+        .map((f) => ({ ...f, lines: sortBy(rows.filter((r) => r.vm === f.vm), lineOrder, ordering.current) }))
+        .filter((g) => !query || g.lines.length),
+      ordering.current,
+    ),
   );
+  const heads = $derived<{ key: ItemSort; text: string; span?: number }[]>([
+    { key: 'name', text: `${countWord(groups.length)} ${groups.length === 1 ? 'VM' : 'VMs'}` },
+    { key: 'size', text: 'Size', span: 2 },
+    { key: 'used', text: 'Used by' },
+  ]);
 
   const headline = $derived(unusedHeadline('volume', held, vms));
   const everyMeasured = $derived(measured.every(vms) != null);
@@ -151,12 +163,17 @@
 {:else if groups.length === 0}
   <p class="note">{all.length === 0 ? 'Nothing to list.' : 'No volumes match.'}</p>
 {:else}
-  <div class="column-heads items" aria-hidden="true">
-    <span>{countWord(groups.length)} {groups.length === 1 ? 'VM' : 'VMs'}</span><span class="span">Size</span><span>Used by</span><span></span>
+  <div class="column-heads items" role="group" aria-label="Order the volumes by">
+    {#each heads as h (h.key)}
+      <SortHead column={ITEM_COLUMNS[h.key]} active={ordering.current.by === h.key} reversed={ordering.current.reversed}
+        span={h.span} onclick={() => ordering.choose(h.key)}>{h.text}</SortHead>
+    {/each}
+    <span></span>
   </div>
+  <div class="narrow-order"><OrderPicker columns={ITEM_COLUMNS} {ordering} /></div>
   <div class="lines items">
     {#each groups as g (g.vm)}
-      <section>
+      <section animate:glide>
         <GroupHead vm={g.vm} live={g.live} sentence={g.sentence} said={said[g.vm]}>
           {#snippet actions()}
             <VolumePrune vm={g.vm} count={g.count} unused={g.unused} onpruned={() => changed(g.vm)} bind:said={said[g.vm]} />
@@ -166,21 +183,23 @@
           {@const u = usageOf(row)}
           {@const disk = g.live ? gauges(g.live).disk.size : undefined}
           {@const key = `${row.vm}/${row.v.name}`}
-          <ItemLine selected={!!open[key]} onselect={() => toggle(key)} title={row.v.name}
-            second={`created ${age(row.created)}${row.v.driver !== 'local' ? ` · ${row.v.driver} driver` : ''}`}
-            secondTitle={`In the VM at ${row.v.mountpoint}; created ${new Date(row.v.createdAt).toLocaleString('en-GB')}`}
-            size={u?.size} {scale} sizeLabel={u ? diskShare(u.size, disk) : 'not measured'}
-            used={usedOf(row)} usedText={usedText(row)}
-            removable={(u?.users ?? 0) === 0 && removing !== `${row.vm}/${row.v.name}`}
-            removeTitle={(u?.users ?? 0) > 0 ? 'In use — remove its containers first' : 'Deletes its data for good'}
-            onremove={() => remove(row)}>
-            {#snippet name()}{row.v.name}{/snippet}
-          </ItemLine>
-          {#if open[key]}
-            <div transition:unfold>
-              <Files vm={row.vm} source={{ kind: 'volume', name: row.v.name }} label={row.v.name} onclose={() => toggle(key)} />
-            </div>
-          {/if}
+          <div animate:glide>
+            <ItemLine selected={!!open[key]} onselect={() => toggle(key)} title={row.v.name}
+              second={`created ${age(row.created)}${row.v.driver !== 'local' ? ` · ${row.v.driver} driver` : ''}`}
+              secondTitle={`In the VM at ${row.v.mountpoint}; created ${new Date(row.v.createdAt).toLocaleString('en-GB')}`}
+              size={u?.size} {scale} sizeLabel={u ? diskShare(u.size, disk) : 'not measured'}
+              used={usedOf(row)} usedText={usedText(row)}
+              removable={(u?.users ?? 0) === 0 && removing !== `${row.vm}/${row.v.name}`}
+              removeTitle={(u?.users ?? 0) > 0 ? 'In use — remove its containers first' : 'Deletes its data for good'}
+              onremove={() => remove(row)}>
+              {#snippet name()}{row.v.name}{/snippet}
+            </ItemLine>
+            {#if open[key]}
+              <div transition:unfold>
+                <Files vm={row.vm} source={{ kind: 'volume', name: row.v.name }} label={row.v.name} onclose={() => toggle(key)} />
+              </div>
+            {/if}
+          </div>
         {/each}
       </section>
     {/each}
@@ -196,12 +215,14 @@
   .dot { width: 12px; height: 12px; border-radius: 50%; background: var(--bar); box-sizing: border-box; }
   .dot.off { background: none; border: 2px solid var(--warn); }
   .dot.unknown { background: var(--soft); }
-  .column-heads { grid-template-columns: var(--item-columns); column-gap: 1.4rem; margin-top: 0.6rem; }
+  .column-heads { grid-template-columns: var(--item-columns); column-gap: 1.4rem; margin-top: 0.3rem; } /* 0.3rem less: SortHead's min-height */
   .lines { display: grid; gap: 2.2rem; }
   section { border-top: 1px solid var(--fg); padding-top: 0.8rem; border-bottom: 1px solid var(--border); }
   section:first-child { border-top: 0; }
+  .narrow-order { display: none; }
   @media (max-width: 860px) {
     .column-heads { display: none; }
+    .narrow-order { display: block; padding-bottom: 0.6rem; }
     section:first-child { border-top: 1px solid var(--fg); }
   }
 </style>

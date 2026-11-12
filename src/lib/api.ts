@@ -110,7 +110,22 @@ export interface Snapshot {
   updated: number;
   storeBytes: number;
   retention?: { rawDays: number; rollupDays: number };
+  /** Seconds between measurements of each running VM; the UI polls at the same pace. */
+  intervalSecs?: number;
 }
+
+/** Light or dark: as the computer is, or always one (settings::Theme). */
+export type Theme = 'system' | 'light' | 'dark';
+export const THEMES: readonly Theme[] = ['system', 'light', 'dark'];
+
+/** What's chosen in Settings (settings.rs). */
+export interface Settings {
+  /** One of `INTERVALS`. */
+  intervalSecs: number;
+  theme: Theme;
+}
+/** How often a running VM can be measured, in seconds (settings::INTERVALS). */
+export const INTERVALS = [1, 2, 5, 10] as const;
 
 export interface Band {
   min: (number | null)[];
@@ -118,7 +133,9 @@ export interface Band {
   avg: (number | null)[];
 }
 export interface Series {
-  resolution: '1s' | '1m';
+  /** Seconds between samples where they come steadily (the sparsest, if the interval changed in
+   *  the range); 60 beyond 6 h, where minutes are kept; 0 until there are enough to tell. */
+  sampleSecs: number;
   ts: number[];
   metrics: Record<string, Band>;
 }
@@ -208,6 +225,8 @@ export type ContainerAction = 'start' | 'stop' | 'restart' | 'remove';
 
 export const api = {
   snapshot: () => invoke<Snapshot>('snapshot'),
+  settings: () => invoke<Settings>('settings'),
+  setSettings: (settings: Settings) => invoke<Settings>('set_settings', { settings }),
   vmAction: (name: string, action: VmAction) => invoke<void>('vm_action', { name, action }),
   vmResize: (name: string, resize: { cpus?: number; memory?: number; disk?: number }) =>
     invoke<void>('vm_resize', { name, resize }),

@@ -2,12 +2,18 @@
   import '@fontsource-variable/inter';
   import '@fontsource-variable/newsreader/opsz.css';
   import { onMount } from 'svelte';
+  import { api } from '$lib/api';
   import { live } from '$lib/live.svelte';
   import { followPodman } from '$lib/podmanLists.svelte';
+  import { theme } from '$lib/theme.svelte';
   import Masthead from '$lib/Masthead.svelte';
   import LimaProblem from '$lib/LimaProblem.svelte';
   let { children } = $props();
-  onMount(() => live.start());
+  onMount(() => {
+    live.start();
+    // Settings has the say; what app.html put on <html> was only last time's.
+    api.settings().then((s) => theme.apply(s.theme), () => {});
+  });
   followPodman();
 </script>
 
@@ -36,14 +42,27 @@
     font-family: var(--sans);
     font-size: 14px;
   }
+  /* Dark as the computer is, unless Settings chose light; or dark because Settings chose it. The
+     two blocks are the same tokens. */
   @media (prefers-color-scheme: dark) {
-    :global(:root) {
+    :global(:root:not([data-theme='light'])) {
       --bg: #111418; --fg: #eceef1; --muted: #9da5b0; --border: #2c323a; --wash: #191d23;
       --accent: #93b4ff; --warn: #ff9a52; --alert: #ff8a80; --ok: #eceef1;
       --track: #2a3038; --bar: #b4bcc8; --soft: #5b6573; --grid: #20252b;
       --series-1: #93b4ff; --series-2: #ff9a52; --series-3: #b9a4ee; --series-4: #b4bcc8;
     }
   }
+  :global(:root[data-theme='dark']) {
+    --bg: #111418; --fg: #eceef1; --muted: #9da5b0; --border: #2c323a; --wash: #191d23;
+    --accent: #93b4ff; --warn: #ff9a52; --alert: #ff8a80; --ok: #eceef1;
+    --track: #2a3038; --bar: #b4bcc8; --soft: #5b6573; --grid: #20252b;
+    --series-1: #93b4ff; --series-2: #ff9a52; --series-3: #b9a4ee; --series-4: #b4bcc8;
+    color-scheme: dark;
+  }
+  :global(:root[data-theme='light']) { color-scheme: light; }
+  /* The scrollbar always there (disabled when there's nothing to scroll): a page doesn't shift
+     sideways as it gets long enough to scroll, or going from a short page to a long one. */
+  :global(html) { overflow-y: scroll; }
   :global(body) { margin: 0; background: var(--bg); color: var(--fg); }
   :global(a) { color: var(--accent); text-decoration: none; }
   :global(a:hover) { text-decoration: underline; }

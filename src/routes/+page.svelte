@@ -8,13 +8,25 @@
   import Capacity from '$lib/Capacity.svelte';
   import Sketch from '$lib/Sketch.svelte';
   import VmActions from '$lib/VmActions.svelte';
+  import OrderPicker from '$lib/OrderPicker.svelte';
+  import SortHead from '$lib/SortHead.svelte';
+  import { glide } from '$lib/motion';
+  import { Ordering } from '$lib/ordering.svelte';
+  import { BY_NAME, sortRunning, sortStopped, VM_COLUMNS, VM_SORTS, type VmSort } from '$lib/vmSort';
 
   const vms = $derived(live.snapshot?.vms ?? []);
-  // The fullest first: what needs a look leads.
-  const running = $derived(
-    vms.filter((v) => v.instance.status === 'Running').sort((a, b) => gauges(b).memory.pct - gauges(a).memory.pct),
-  );
-  const others = $derived(vms.filter((v) => v.instance.status !== 'Running').sort((a, b) => b.instance.memory - a.instance.memory));
+  // By name unless a column head was chosen; the choice is kept for next time. A live order (the
+  // fullest memory first, say) can change at every measurement: the rows glide to their places.
+  const ordering = new Ordering('vms', VM_SORTS, BY_NAME);
+  const running = $derived(sortRunning(vms.filter((v) => v.instance.status === 'Running'), ordering.current));
+  const others = $derived(sortStopped(vms.filter((v) => v.instance.status !== 'Running'), ordering.current));
+  const heads = $derived<{ key: VmSort; text: string }[]>([
+    { key: 'name', text: `${countWord(running.length)} ${running.length === 1 ? 'is' : 'are'} running` },
+    { key: 'memory', text: 'Memory' },
+    { key: 'cpu', text: 'CPU' },
+    { key: 'disk', text: 'Disk' },
+    { key: 'containers', text: 'Containers' },
+  ]);
   const largest = $derived(Math.max(1, ...others.map((v) => v.instance.memory)));
   const host = $derived(live.snapshot?.host);
 
@@ -75,10 +87,15 @@
 
   {#if running.length}
     <section class="fleet">
-      <div class="row heads column-heads" aria-hidden="true">
-        <span>{countWord(running.length)} {running.length === 1 ? 'is' : 'are'} running</span>
-        <span>Memory</span><span>CPU</span><span>Disk</span><span>Containers</span>
+      <!-- A head orders the list by its column: the rule under the chosen one is drawn heavier. -->
+      <div class="row heads column-heads" role="group" aria-label="Order the VMs by">
+        {#each heads as h (h.key)}
+          <SortHead column={VM_COLUMNS[h.key]} active={ordering.current.by === h.key} reversed={ordering.current.reversed}
+            onclick={() => ordering.choose(h.key)}>{h.text}</SortHead>
+        {/each}
       </div>
+      <!-- Where the heads aren't there to click, the order is chosen in words. -->
+      <div class="narrow-order"><OrderPicker columns={VM_COLUMNS} {ordering} /></div>
       {#each running as vm (vm.instance.name)}
         {@const i = vm.instance}
         {@const l = vm.latest}
@@ -86,7 +103,7 @@
         {@const h = history.get(vm.entity)}
         {@const ctRunning = vm.containers.filter((c) => c.state === 'running').length}
         {@const issues = problems(vm)}
-        <article class="row vm">
+        <article class="row vm" animate:glide>
           <div class="who">
             <div class="name-line"><a class="name serif" href={href(i)} title={i.name}>{i.name}</a>{@render badges(vm)}</div>
             <p class="sentence serif" class:hot={g.memory.hot || g.disk.hot}>{vmSentence(vm)}</p>
@@ -139,11 +156,12 @@
     <section class="stopped">
       <h2 class="head muted">{countWord(others.length)} {others.length === 1 ? 'is' : 'are'} not running.</h2>
       <p class="note">Bars show the memory each is set to, against the largest.</p>
+      {#if !running.length}<OrderPicker columns={VM_COLUMNS} {ordering} />{/if}
       <div class="list">
         {#each others as vm (vm.instance.name)}
           {@const i = vm.instance}
           {@const err = actionErrors[i.name]}
-          <div class="item">
+          <div class="item" animate:glide>
             <div class="name-line">
               <a class="name serif" href={href(i)} title={i.name}>{i.name}</a>
               {#if i.status !== 'Stopped'}<span class="badge" class:alert={i.status === 'Broken'}>{i.status}</span>{/if}
@@ -165,8 +183,9 @@
 <style>
   .top { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); gap: 2rem 4rem; align-items: end; }
   .capacities { display: grid; gap: 0.9rem; }
-  .fleet { margin-top: 1.6rem; }
-  .row { display: grid; grid-template-columns: minmax(15rem, 1.25fr) repeat(3, minmax(0, 1fr)) minmax(10.5rem, 0.85fr); column-gap: 2.2rem; }
+  .fleet { margin-top: 1.3rem; } /* 0.3rem less: SortHead's min-height */
+  /* The last column is at least wide enough for its head and a reversed order's words beside it. */
+  .row { display: grid; grid-template-columns: minmax(15rem, 1.25fr) repeat(3, minmax(0, 1fr)) minmax(12.5rem, 0.85fr); column-gap: 2.2rem; }
   .vm { padding: 1.6rem 0; border-bottom: 1px solid var(--border); align-items: start; }
   .who { display: grid; gap: 0.5rem; min-width: 0; justify-items: start; }
   .name-line { display: flex; align-items: center; gap: 0.5rem; min-width: 0; max-width: 100%; }
@@ -182,6 +201,7 @@
   .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--bar); box-sizing: border-box; }
   .dot.off { background: none; border: 1.5px solid var(--warn); }
   .fleet > .note { margin-top: 0.9rem; max-width: 60rem; }
+  .narrow-order { display: none; }
 
   .stopped { margin-top: 2.4rem; display: grid; gap: 0.4rem; }
   .list { display: grid; grid-template-columns: repeat(auto-fit, minmax(30rem, 1fr)); column-gap: 4rem; border-top: 1px solid var(--border); margin-top: 0.5rem; }
@@ -192,6 +212,7 @@
   @media (max-width: 980px) {
     .top { grid-template-columns: minmax(0, 1fr); }
     .heads { display: none; }
+    .narrow-order { display: block; padding: 0.7rem 0 0.2rem; }
     .fleet { border-top: 1px solid var(--fg); }
     .row.vm { grid-template-columns: repeat(3, minmax(0, 1fr)); row-gap: 1.2rem; column-gap: 1.2rem; }
     .who, .containers { grid-column: 1 / -1; }

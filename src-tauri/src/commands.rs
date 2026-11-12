@@ -9,6 +9,7 @@ use crate::lima::{self, Action, Resize};
 use crate::podman::{ContainerAction, Image, Layer, Libpod, Pruned, Volume};
 use crate::guest_files::{self, Folder, Listing, Peek};
 use serde::Deserialize;
+use crate::settings::{Saved, Settings};
 use crate::store::{Entity, OomRecord, Series, Summary};
 
 type C<'a> = State<'a, Arc<Collector>>;
@@ -20,6 +21,25 @@ fn err(e: impl std::fmt::Display) -> String {
 #[tauri::command]
 pub fn snapshot(c: C<'_>) -> Snapshot {
     c.snapshot()
+}
+
+#[tauri::command]
+pub fn settings(saved: State<'_, Saved>) -> Settings {
+    saved.get()
+}
+
+/// Saves `settings` and puts them into effect; refused, with why, when a value isn't offered.
+#[tauri::command]
+pub fn set_settings(
+    app: tauri::AppHandle,
+    c: C<'_>,
+    saved: State<'_, Saved>,
+    settings: Settings,
+) -> Result<Settings, String> {
+    saved.set(settings)?;
+    c.set_interval(settings.interval_secs);
+    crate::apply_theme(&app, settings.theme);
+    Ok(saved.get())
 }
 
 #[tauri::command]

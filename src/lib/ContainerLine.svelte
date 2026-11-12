@@ -80,7 +80,7 @@
   .said { display: grid; gap: 0.05rem; min-width: 0; }
   .said strong { font-size: 1rem; font-weight: 600; white-space: nowrap; }
   .said .label, .up { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .up { text-align: right; padding-bottom: 0.15rem; }
+  .up { padding-bottom: 0.15rem; }
   .state { grid-column: 2 / 7; padding-bottom: 0.15rem; }
   .off .name { color: var(--muted); font-weight: 500; }
   .acts { display: flex; gap: 0.4rem; justify-content: flex-end; }
