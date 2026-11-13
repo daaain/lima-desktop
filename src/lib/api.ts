@@ -55,7 +55,35 @@ export interface VmLive {
   podmanError?: string;
   /** Why OOM kills come without the kernel's detail (no journal, or not readable), if they do. */
   oomDetailError?: string | null;
+  /** Unix ms of the last probe block, while the VM has stopped responding since. */
+  stalledSince?: number | null;
   containers: ContainerLive[];
+}
+
+/**
+ * A VM that stopped responding: its probe fell silent while Lima still reported it running
+ * (store::StallRecord). What memory looked like comes from the last reading before.
+ */
+export interface VmStall {
+  vm: string;
+  /** Unix ms of the last probe block before the silence. */
+  start: number;
+  /** Unix ms; null while it goes on, or when the app quit before it ended. */
+  end: number | null;
+  /** How it ended; null while it goes on. */
+  endReason: 'resumed' | 'stopped' | 'rebooted' | 'unknown' | null;
+  /** Bytes, at the last reading. */
+  memUsed: number | null;
+  memTotal: number | null;
+  /** ‰ of the time stalled on memory: the highest in the minute before. */
+  psiMemSome: number | null;
+  psiMemFull: number | null;
+  /** The container using the most memory at the last reading, and how much. */
+  containerId: string | null;
+  containerMem: number | null;
+  containerName: string | null;
+  composeProject: string | null;
+  composeService: string | null;
 }
 
 /** One process killed for want of memory (store::OomRecord). */
@@ -257,6 +285,9 @@ export const api = {
   /** OOM kills in [from, to], newest first; every VM's when `vm` is null. */
   oomEvents: (vm: string | null, from: number, to: number, limit = 500) =>
     invoke<OomEvent[]>('oom_events', { vm, from, to, limit }),
+  /** VM stalls overlapping [from, to] (one going on included), newest first; every VM's when `vm` is null. */
+  stalls: (vm: string | null, from: number, to: number, limit = 500) =>
+    invoke<VmStall[]>('stalls', { vm, from, to, limit }),
 };
 
 /** Is `action` locked by the instance's marker (or `limactl protect`)? */

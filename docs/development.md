@@ -37,7 +37,8 @@ prerequisites). macOS needs Xcode's command-line tools.
 | `collector.rs` | the loops: `limactl list` every 3 s; per running VM the probe, libpod stats (both at the measuring interval, restarted when it changes) and the OOM reader; host-side hypervisor RSS/CPU and disk-image allocation; and what the host has (cores, RAM, the size of the filesystem the instances are on), to scale allocations against |
 | `journal.rs` | a one-shot, read-only `journalctl _TRANSPORT=kernel -o json --grep …` over Lima's ssh: as the user where Lima put it in `systemd-journal` (only when the host UID is under 1000, i.e. macOS), else with `sudo -n` (Lima's default passwordless sudo); where neither works, says why and the `usermod` fix |
 | `oom.rs` | OOM kills: the kernel's `oom-kill:` / `Killed process` / `memory: usage … limit` lines paired into events (container, process, constraint, limit, anon-rss), and the counter-only fallback |
-| `store.rs` | the history ([design](./design/metrics-storage.md)), and the OOM kill log |
+| `stall.rs` | VM stalls: a VM Lima says is running whose probe has been silent for 45 s or ten intervals, whichever is longer, measured on `Instant` (`CLOCK_UPTIME_RAW` on macOS, `CLOCK_MONOTONIC` on Linux), which stops while the computer sleeps. Not counted: before a probe's first block, a restart for a new interval, the app's own stop or restart. It ends when blocks come again, at a boot the guest's uptime shows (dropped if the VM went down within the threshold, which makes it a reboot), or when Lima stops reporting it running. It keeps the last reading's memory, the highest memory pressure of the minute before, and the largest container |
+| `store.rs` | the history ([design](./design/metrics-storage.md)), the OOM kill log, and the stalls (written when one begins; one still open when the app starts again is closed as "unknown") |
 | `settings.rs` | what's chosen in Settings (the measuring interval: 1, 2, 5 or 10 s; the theme, which the windows take too), as `settings.json` beside the history |
 | `commands.rs` | what the UI can call |
 
@@ -79,8 +80,8 @@ for them.
 and loads `e2e-ui/fake-backend.js` into the page before the app: it stands in for Tauri's `invoke`
 and answers every command in `lib/api.ts` with an invented fleet, made to exercise the UI — a VM
 whose memory leaks past three quarters, a CPU-bound one with an OOM kill at a container's own
-limit, one with a nearly full disk and a managed-by marker, one whose podman is too old, an idle
-one, and stopped and broken ones. Every value is a function of the entity and the time, and the
+limit and a stall, one with a nearly full disk and a managed-by marker, one whose podman is too old
+and that has stopped responding, an idle one, and stopped and broken ones. Every value is a function of the entity and the time, and the
 test fixes the time, so two runs draw the same picture. The test checks what each page says, in
 light and dark, and that the overview doesn't scroll sideways on a narrow window.
 

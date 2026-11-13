@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import type { ContainerLive, OomEvent } from './api';
+import type { ContainerLive, OomEvent, VmStall } from './api';
 import { GiB } from './format';
-import { oomCause, oomLevel, oomMarkers, oomWho } from './oom';
+import { oomCause, oomLevel, oomMarkers, oomWho, outOfMemoryNote, stallCause, stalledNow, stallFromMemory, stallMarkers } from './oom';
 import { container } from './testing';
 
 const CT = 'a'.repeat(64);
@@ -85,5 +85,87 @@ describe('chart markers', () => {
     const marks = oomMarkers(events, CT);
     expect(marks).toHaveLength(1);
     expect(marks[0].label).toContain('python3');
+  });
+});
+
+const MIN = 60_000;
+const stall = (o: Partial<VmStall> = {}): VmStall => ({
+  vm: 'tangible', start: 1_000_000, end: 1_000_000 + 17 * MIN, endReason: 'stopped',
+  memUsed: 42.9 * GiB, memTotal: 46.9 * GiB, psiMemSome: 250, psiMemFull: 40,
+  containerId: CT, containerMem: 30.3 * GiB, containerName: 'inspect-replay-7-default-1',
+  composeProject: 'inspect-replay-7', composeService: 'default', ...o,
+});
+
+describe('a VM that stalled', () => {
+  it('ran out of memory when memory was nearly full', () => {
+    expect(stallFromMemory(stall({ psiMemSome: 0 }))).toBe(true);
+  });
+  it('ran out of memory when work waited on memory', () => {
+    expect(stallFromMemory(stall({ memUsed: 20 * GiB, psiMemSome: 120 }))).toBe(true);
+  });
+  it('claims no cause when memory was fine', () => {
+    expect(stallFromMemory(stall({ memUsed: 20 * GiB, psiMemSome: 30 }))).toBe(false);
+    expect(stallFromMemory(stall({ memUsed: null, memTotal: null, psiMemSome: null }))).toBe(false);
+  });
+
+  it('out of memory, says so and what to do', () => {
+    const cause = stallCause(stall(), 48 * GiB);
+    expect(cause).toMatch(/^The VM ran out of memory and stalled instead of killing anything/);
+    expect(cause).toContain('42.9 GiB of 46.9 GiB in use');
+    expect(cause).toContain('memory pressure up to 25.0 %');
+    expect(cause).toContain('more memory (it has 48 GiB)');
+    expect(cause).toContain('a memory limit on the container that grew');
+  });
+  it('otherwise only that it stopped responding', () => {
+    const cause = stallCause(stall({ memUsed: 10 * GiB, psiMemSome: 5 }), 48 * GiB);
+    expect(cause).toMatch(/^The VM stopped responding/);
+    expect(cause).toContain('10 GiB of 46.9 GiB in use');
+    expect(cause).toContain('the cause is unknown');
+    expect(cause).not.toMatch(/out of memory|more memory/);
+  });
+  it('without a reading, claims nothing', () => {
+    const cause = stallCause(stall({ memUsed: null, memTotal: null, psiMemSome: null }), 48 * GiB);
+    expect(cause).toMatch(/^The VM stopped responding; the cause is unknown\./);
+  });
+
+  it('says how it ended, and after how long', () => {
+    const end = (o: Partial<VmStall>) => stallCause(stall(o), 48 * GiB, 1_000_000 + 4 * MIN);
+    expect(end({})).toContain('stuck for 17 min, until the VM was stopped');
+    expect(end({ endReason: 'rebooted' })).toContain('stuck for 17 min, until the VM restarted');
+    expect(end({ endReason: 'resumed' })).toContain('answered again after 17 min');
+    expect(end({ endReason: 'unknown', end: null })).toContain('The app quit before it ended');
+    expect(end({ endReason: null, end: null })).toContain('not answered for 4 min so far');
+  });
+
+  it('is marked on the chart from its start to its end', () => {
+    const marks = stallMarkers([stall(), stall({ start: 5_000_000, end: null, endReason: null })], 9_000_000);
+    expect(marks).toEqual([
+      { ts: 1_000_000, until: 1_000_000 + 17 * MIN, label: 'stalled' },
+      { ts: 5_000_000, until: 9_000_000, label: 'stalled' },
+    ]);
+  });
+  it('with no known end, is marked where it began', () => {
+    expect(stallMarkers([stall({ end: null, endReason: 'unknown' })], 9_000_000)[0].until).toBeUndefined();
+  });
+
+  it('going on now, says for how long', () => {
+    expect(stalledNow('tangible', 1_000_000, 1_000_000 + 4 * MIN)).toBe(
+      "tangible hasn't answered for 4 min, though Lima still says it's running.",
+    );
+  });
+});
+
+describe('the out-of-memory summary', () => {
+  const kills = [ev(), ev({ constraint: 'CONSTRAINT_NONE' })];
+  it('counts kills by what ran out', () => {
+    expect(outOfMemoryNote(kills, [])).toBe(
+      "2 kills in this range, newest first · 1 hit a container's (or cgroup's) own limit · 1 because the whole VM ran out",
+    );
+  });
+  it('counts stalls apart from kills', () => {
+    expect(outOfMemoryNote([], [stall()])).toBe('1 stall in this range, newest first');
+    expect(outOfMemoryNote(kills.slice(0, 1), [stall(), stall()])).toBe(
+      "1 kill and 2 stalls in this range, newest first · 1 hit a container's (or cgroup's) own limit · 0 because the whole VM ran out",
+    );
   });
 });

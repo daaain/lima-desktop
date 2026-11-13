@@ -1,8 +1,8 @@
 // A stand-in for the Rust backend, loaded into the page before the app: it answers the commands
 // in src/lib/api.ts with an invented fleet. Nothing here is recorded from a real machine. The fleet is
 // made to exercise the UI: a VM past three quarters of its memory (a leak), a CPU-bound one with
-// an OOM kill, one with a nearly full disk and a managed-by marker, one whose podman is too old,
-// an idle one, and stopped and broken ones; image stores with superseded tags, dangling images and
+// an OOM kill and a stall, one with a nearly full disk and a managed-by marker, one whose podman is
+// too old and that has stopped responding, an idle one, and stopped and broken ones; image stores with superseded tags, dangling images and
 // an image with two tags, and volumes some no container uses (anonymous ones among them). Every value is a function of the entity and the time,
 // so two runs at the same (fixed) time draw the same picture.
 (() => {
@@ -118,7 +118,10 @@
       host_cpu_mc: scaled(shape.cpu, inst.cpus * 1100),
       host_disk_alloc: scaled(shape.disk, inst.disk * 1.05),
     });
-    return { instance: inst, entity: id, latest: {}, containers, probeError: o.probeError, podmanError: o.podmanError, oomDetailError: null };
+    return {
+      instance: inst, entity: id, latest: {}, containers, probeError: o.probeError, podmanError: o.podmanError, oomDetailError: null,
+      stalledSince: o.stalledSince ?? null,
+    };
   }
 
   const local = (name) => `localhost/${name}:latest`;
@@ -164,6 +167,7 @@
     ]),
     vm(instance('ember', 'Running', 2, 4, 20), { cpu: shapes.flat(0.02, 0.01), mem: shapes.flat(0.21, 0.01), disk: shapes.flat(0.36, 0) }, [], {
       podmanError: 'podman 4.3.1 in this VM is too old: Lima Desktop needs podman 5 or newer',
+      stalledSince: NOW - 4 * 60_000,
     }),
     vm(instance('foundry', 'Stopped', 12, 80, 100), null, [], { imageGiB: 61 }),
     vm(instance('kiln', 'Stopped', 8, 16, 60), null, [], { imageGiB: 22 }),
@@ -239,6 +243,22 @@
     cgroup: `/machine.slice/libpod-${harborApp.id}.scope`, process: 'node', pid: 4211, memLimit: 1024 * MiB, anonRss: 1003 * MiB,
     detail: null, containerName: harborApp.name, composeProject: 'harbor', composeService: 'app',
   }];
+
+  // VMs that stopped responding: harbor two hours ago, its memory nearly full, until it was
+  // stopped; ember right now.
+  const harborDevbox = fleet[1].containers[0];
+  const stall = (vm, start, o) => ({
+    vm, start, end: null, endReason: null, memUsed: null, memTotal: null, psiMemSome: null, psiMemFull: null,
+    containerId: null, containerMem: null, containerName: null, composeProject: null, composeService: null, ...o,
+  });
+  const stalls = [
+    stall('harbor', NOW - 2 * HOUR, {
+      end: NOW - 2 * HOUR + 17 * 60_000, endReason: 'stopped', memUsed: 7.4 * GiB, memTotal: 7.75 * GiB, psiMemSome: 250, psiMemFull: 40,
+      containerId: harborDevbox.id, containerMem: 2500 * MiB, containerName: harborDevbox.name,
+    }),
+    stall('ember', fleet[4].stalledSince, { memUsed: 3.7 * GiB, memTotal: 3.75 * GiB, psiMemSome: 310, psiMemFull: 120 }),
+  ];
+  const overlaps = (s, from, to) => s.start <= to && (s.endReason == null || (s.end ?? s.start) >= from);
 
   // Each VM's image store: the images its containers run (any state), and what they left behind —
   // a superseded tag, dangling images from rebuilds, a base no container runs. `own` is what
@@ -379,6 +399,8 @@
     series,
     summary,
     oom_events: ({ vm, from, to, limit = 500 }) => oom.filter((e) => (vm == null || e.vm === vm) && e.ts >= from && e.ts <= to).slice(0, limit),
+    stalls: ({ vm, from, to, limit = 500 }) =>
+      stalls.filter((s) => (vm == null || s.vm === vm) && overlaps(s, from, to)).sort((a, b) => b.start - a.start).slice(0, limit),
     images: ({ vm }) => images(vm),
     volumes: ({ vm }) => volumes(vm),
     system_df: ({ vm }) => later(systemDf(vm)),

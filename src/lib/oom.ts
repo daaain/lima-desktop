@@ -1,7 +1,8 @@
 // OOM kills in plain language. Two levels that need opposite fixes: a container (or other cgroup)
 // hitting its OWN limit — raise that limit — and the whole VM running out — give the VM more.
-import type { ContainerLive, OomEvent } from './api';
-import { bytes } from './format';
+// And VM stalls: a VM that ran out without the kernel killing anything, and stopped responding.
+import type { ContainerLive, OomEvent, VmStall } from './api';
+import { bytes, permille, uptime } from './format';
 
 export type OomLevel = 'container' | 'cgroup' | 'vm' | 'unknown';
 
@@ -47,7 +48,10 @@ export interface OomWho {
   removed: boolean;
 }
 
-export function oomWho(e: OomEvent, containers: ContainerLive[]): OomWho {
+/** A kill's container, or a stall's largest one. */
+type ContainerRef = Pick<OomEvent, 'containerId' | 'containerName' | 'composeProject' | 'composeService'>;
+
+export function oomWho(e: ContainerRef, containers: ContainerLive[]): OomWho {
   if (!e.containerId) return { name: 'not in a container', removed: false };
   const now = containers.find((c) => c.id === e.containerId);
   const service = now?.composeService ?? e.composeService;
@@ -56,9 +60,87 @@ export function oomWho(e: OomEvent, containers: ContainerLive[]): OomWho {
   return { name, context: project ?? undefined, removed: !now };
 }
 
+/** A moment marked on a chart, or a stretch of time when it has an `until` (both unix ms). */
+export interface Marker {
+  ts: number;
+  until?: number;
+  label: string;
+}
+
 /** Vertical chart markers: every kill, or only one container's. */
-export function oomMarkers(events: OomEvent[], containerId?: string): { ts: number; label: string }[] {
+export function oomMarkers(events: OomEvent[], containerId?: string): Marker[] {
   return events
     .filter((e) => containerId == null || e.containerId === containerId)
     .map((e) => ({ ts: e.ts, label: `OOM ${e.process ?? ''}`.trim() }));
+}
+
+/** The badge a stall gets in the out-of-memory list. */
+export const STALL_LABEL = 'VM stalled';
+/** Memory this full of the VM's, at the last reading, says a stall was memory's doing… */
+const NEARLY_FULL = 0.9;
+/** …and so does work waiting on memory this much of the time (‰, PSI "some"): 10 %. */
+const UNDER_PRESSURE = 100;
+
+/** Whether the last reading before a stall says memory ran out: nearly full, or work waiting on it. */
+export function stallFromMemory(s: VmStall): boolean {
+  const full = s.memUsed != null && !!s.memTotal && s.memUsed >= s.memTotal * NEARLY_FULL;
+  return full || (s.psiMemSome ?? 0) >= UNDER_PRESSURE;
+}
+
+/** "42.9 GiB of 46.9 GiB in use, memory pressure up to 25.0 %", as much of it as was read. */
+function stallReading(s: VmStall): string | null {
+  const parts = [
+    s.memUsed != null && s.memTotal != null && `${size(s.memUsed)} of ${size(s.memTotal)} in use`,
+    s.psiMemSome != null && s.psiMemSome > 0 && `memory pressure up to ${permille(s.psiMemSome)}`,
+  ].filter(Boolean);
+  return parts.length ? parts.join(', ') : null;
+}
+
+/** How long a stall lasted (or has lasted, at `now`), and how it ended. */
+function stallEnding(s: VmStall, now: number): string {
+  const lasted = (end: number) => uptime(s.start / 1000, end);
+  if (s.endReason == null) return `It has not answered for ${lasted(now)} so far.`;
+  if (s.end == null || s.endReason === 'unknown') return 'The app quit before it ended.';
+  if (s.endReason === 'resumed') return `It answered again after ${lasted(s.end)}.`;
+  const until = s.endReason === 'rebooted' ? 'the VM restarted' : 'the VM was stopped';
+  return `It stayed stuck for ${lasted(s.end)}, until ${until}.`;
+}
+
+/** Why a VM stalled, as far as the last reading can say, what to do about it, and how it ended. */
+export function stallCause(s: VmStall, vmMemory: number, now = Date.now()): string {
+  const reading = stallReading(s);
+  const cause = stallFromMemory(s)
+    ? `The VM ran out of memory and stalled instead of killing anything (${reading}) — give the VM more memory (it has ${size(vmMemory)}), or put a memory limit on the container that grew, so the kernel kills inside that container instead.`
+    : reading
+      ? `The VM stopped responding with memory not nearly full (${reading}); the cause is unknown.`
+      : 'The VM stopped responding; the cause is unknown.';
+  return `${cause} ${stallEnding(s, now)}`;
+}
+
+/** Chart spans: each stall from its last reading to its end (to `now` while it goes on). */
+export function stallMarkers(stalls: VmStall[], now: number): Marker[] {
+  return stalls.map((s) => ({
+    ts: s.start,
+    until: s.endReason == null ? now : (s.end ?? undefined),
+    label: 'stalled',
+  }));
+}
+
+/** A VM stalled right now, in a sentence. */
+export function stalledNow(vm: string, since: number, now: number): string {
+  return `${vm} hasn't answered for ${uptime(since / 1000, now)}, though Lima still says it's running.`;
+}
+
+const count = (n: number, noun: string) => `${n} ${noun}${n === 1 ? '' : 's'}`;
+
+/** What the range holds: kills (by what ran out) and stalls. */
+export function outOfMemoryNote(kills: OomEvent[], stalls: VmStall[]): string {
+  const what = [kills.length && count(kills.length, 'kill'), stalls.length && count(stalls.length, 'stall')].filter(Boolean);
+  const parts = [`${what.join(' and ')} in this range, newest first`];
+  if (kills.length) {
+    const own = kills.filter((e) => ['container', 'cgroup'].includes(oomLevel(e))).length;
+    const vm = kills.filter((e) => oomLevel(e) === 'vm').length;
+    parts.push(`${own} hit a container's (or cgroup's) own limit`, `${vm} because the whole VM ran out`);
+  }
+  return parts.join(' · ');
 }

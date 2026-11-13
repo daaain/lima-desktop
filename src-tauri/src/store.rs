@@ -16,6 +16,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use crate::oom::{OomEvent, Source};
+use crate::stall::{End, Stall};
 
 /// A value the sample didn't have (PSI on a kernel without it, a counter's first reading).
 pub const ABSENT: i64 = -1;
@@ -288,6 +289,18 @@ pub struct OomRecord {
     pub compose_service: Option<String>,
 }
 
+/// A VM stall as the UI shows it: the stall, and its largest container's name and compose labels
+/// from the entity table.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StallRecord {
+    #[serde(flatten)]
+    pub stall: Stall,
+    pub container_name: Option<String>,
+    pub compose_project: Option<String>,
+    pub compose_service: Option<String>,
+}
+
 /// Right-sizing summary of one metric over a window.
 #[derive(Debug, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -329,7 +342,20 @@ impl Store {
                oom_constraint TEXT, container_id TEXT, cgroup TEXT, process TEXT, pid INTEGER,
                mem_limit INTEGER, anon_rss INTEGER, detail TEXT,
                PRIMARY KEY(vm, key)) WITHOUT ROWID;
-             CREATE INDEX IF NOT EXISTS oom_event_by_time ON oom_event(vm, ts);",
+             CREATE INDEX IF NOT EXISTS oom_event_by_time ON oom_event(vm, ts);
+             -- One row per VM stall (see stall.rs), written when it begins; `end_reason` is NULL
+             -- while it goes on.
+             CREATE TABLE IF NOT EXISTS vm_stall(
+               vm TEXT NOT NULL, start INTEGER NOT NULL, end_ts INTEGER, end_reason TEXT,
+               mem_used INTEGER, mem_total INTEGER, psi_mem_some INTEGER, psi_mem_full INTEGER,
+               container_id TEXT, container_mem INTEGER,
+               PRIMARY KEY(vm, start)) WITHOUT ROWID;",
+        )?;
+        // A stall still open is one an earlier run of the app was watching when it quit: when it
+        // ended can't be known now, only that nobody saw it end.
+        db.execute(
+            "UPDATE vm_stall SET end_reason=?1 WHERE end_reason IS NULL",
+            [End::Unknown.as_str()],
         )?;
         // Compose labels, so a removed container still reads as its project's service.
         add_column(&db, "entity", "project", "TEXT")?;
@@ -525,8 +551,8 @@ impl Store {
         Ok(())
     }
 
-    /// Drop raw chunks older than `raw_ms`, rollups and OOM kills older than `rollup_ms`, then
-    /// entities with nothing left. Returns rows deleted.
+    /// Drop raw chunks older than `raw_ms`, rollups, OOM kills and stalls older than `rollup_ms`,
+    /// then entities with nothing left. Returns rows deleted.
     pub fn retain(&mut self, now: i64, raw_ms: i64, rollup_ms: i64) -> rusqlite::Result<usize> {
         let mut n = self
             .db
@@ -536,6 +562,10 @@ impl Store {
             .execute("DELETE FROM rollup WHERE t0 < ?1", params![now - rollup_ms])?;
         n += self.db.execute(
             "DELETE FROM oom_event WHERE ts < ?1",
+            params![now - rollup_ms],
+        )?;
+        n += self.db.execute(
+            "DELETE FROM vm_stall WHERE COALESCE(end_ts, start) < ?1 AND end_reason IS NOT NULL",
             params![now - rollup_ms],
         )?;
         n += self.db.execute(
@@ -813,6 +843,87 @@ impl Store {
                 container_name: r.get(12)?,
                 compose_project: r.get(13)?,
                 compose_service: r.get(14)?,
+            })
+        })?;
+        rows.collect()
+    }
+
+    /// Record a stall as it begins.
+    pub fn add_stall(&mut self, s: &Stall) -> rusqlite::Result<()> {
+        self.db.execute(
+            "INSERT OR IGNORE INTO vm_stall(vm, start, end_ts, end_reason, mem_used, mem_total,
+               psi_mem_some, psi_mem_full, container_id, container_mem)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
+            params![
+                s.vm,
+                s.start,
+                s.end,
+                s.end_reason.map(End::as_str),
+                s.mem_used,
+                s.mem_total,
+                s.psi_mem_some,
+                s.psi_mem_full,
+                s.container_id,
+                s.container_mem
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Record how and when a stall ended.
+    pub fn end_stall(&mut self, s: &Stall) -> rusqlite::Result<()> {
+        self.db.execute(
+            "UPDATE vm_stall SET end_ts=?3, end_reason=?4 WHERE vm=?1 AND start=?2",
+            params![s.vm, s.start, s.end, s.end_reason.map(End::as_str)],
+        )?;
+        Ok(())
+    }
+
+    /// Forget a stall that turned out not to be one.
+    pub fn drop_stall(&mut self, vm: &str, start: i64) -> rusqlite::Result<()> {
+        self.db.execute(
+            "DELETE FROM vm_stall WHERE vm=?1 AND start=?2",
+            params![vm, start],
+        )?;
+        Ok(())
+    }
+
+    /// Stalls overlapping [from, to] (those going on included), newest first, at most `limit`;
+    /// every VM's when `vm` is `None`.
+    pub fn stalls(
+        &self,
+        vm: Option<&str>,
+        from: i64,
+        to: i64,
+        limit: usize,
+    ) -> rusqlite::Result<Vec<StallRecord>> {
+        let mut st = self.db.prepare_cached(
+            "SELECT s.vm, s.start, s.end_ts, s.end_reason, s.mem_used, s.mem_total, s.psi_mem_some,
+                    s.psi_mem_full, s.container_id, s.container_mem, e.name, e.project, e.service
+             FROM vm_stall s
+             LEFT JOIN entity e ON e.kind='container' AND e.vm=s.vm AND e.key=s.container_id
+             WHERE (?1 IS NULL OR s.vm=?1) AND s.start <= ?3
+               AND (s.end_ts >= ?2 OR s.end_reason IS NULL
+                    OR (s.end_ts IS NULL AND s.start >= ?2))
+             ORDER BY s.start DESC LIMIT ?4",
+        )?;
+        let rows = st.query_map(params![vm, from, to, limit as i64], |r| {
+            Ok(StallRecord {
+                stall: Stall {
+                    vm: r.get(0)?,
+                    start: r.get(1)?,
+                    end: r.get(2)?,
+                    end_reason: r.get::<_, Option<String>>(3)?.as_deref().and_then(End::parse),
+                    mem_used: r.get(4)?,
+                    mem_total: r.get(5)?,
+                    psi_mem_some: r.get(6)?,
+                    psi_mem_full: r.get(7)?,
+                    container_id: r.get(8)?,
+                    container_mem: r.get(9)?,
+                },
+                container_name: r.get(10)?,
+                compose_project: r.get(11)?,
+                compose_service: r.get(12)?,
             })
         })?;
         rows.collect()
@@ -1103,6 +1214,133 @@ mod tests {
         let left = s.oom_events(None, 0, i64::MAX, 100).unwrap();
         assert_eq!(left.len(), 1);
         assert_eq!(left[0].event.pid, Some(2));
+    }
+
+    fn stall(vm: &str, start: i64) -> Stall {
+        Stall {
+            vm: vm.into(),
+            start,
+            end: None,
+            end_reason: None,
+            mem_used: Some(42 << 30),
+            mem_total: Some(47 << 30),
+            psi_mem_some: Some(250),
+            psi_mem_full: Some(40),
+            container_id: None,
+            container_mem: None,
+        }
+    }
+
+    fn ended(mut s: Stall, end: Option<i64>, reason: End) -> Stall {
+        s.end = end;
+        s.end_reason = Some(reason);
+        s
+    }
+
+    #[test]
+    fn a_stall_is_kept_while_it_goes_on_then_closed() {
+        let mut s = Store::in_memory().unwrap();
+        s.add_stall(&stall("tangible", 1_000)).unwrap();
+        let open = s.stalls(Some("tangible"), 0, 10_000, 10).unwrap();
+        assert_eq!(open.len(), 1);
+        assert_eq!(open[0].stall, stall("tangible", 1_000), "every field round-trips");
+        s.end_stall(&ended(stall("tangible", 1_000), Some(5_000), End::Stopped))
+            .unwrap();
+        let closed = &s.stalls(Some("tangible"), 0, 10_000, 10).unwrap()[0];
+        assert_eq!(closed.stall.end, Some(5_000));
+        assert_eq!(closed.stall.end_reason, Some(End::Stopped));
+    }
+
+    #[test]
+    fn a_dropped_stall_is_forgotten() {
+        let mut s = Store::in_memory().unwrap();
+        s.add_stall(&stall("v", 1_000)).unwrap();
+        s.drop_stall("v", 1_000).unwrap();
+        assert!(s.stalls(None, 0, i64::MAX, 10).unwrap().is_empty());
+    }
+
+    #[test]
+    fn stalls_overlapping_the_range_come_newest_first() {
+        let mut s = Store::in_memory().unwrap();
+        s.add_stall(&ended(stall("v", 1_000), Some(9_000), End::Resumed))
+            .unwrap();
+        s.add_stall(&ended(stall("v", 20_000), Some(21_000), End::Resumed))
+            .unwrap();
+        s.add_stall(&stall("v", 30_000)).unwrap(); // still going on
+        s.add_stall(&stall("other", 30_000)).unwrap();
+        let starts = |from, to| -> Vec<i64> {
+            s.stalls(Some("v"), from, to, 10)
+                .unwrap()
+                .iter()
+                .map(|r| r.stall.start)
+                .collect()
+        };
+        assert_eq!(starts(0, i64::MAX), [30_000, 20_000, 1_000]);
+        assert_eq!(starts(5_000, 6_000), [1_000], "began before the range, ended in it");
+        assert_eq!(starts(40_000, 50_000), [30_000], "still going on");
+        assert_eq!(starts(10_000, 15_000), Vec::<i64>::new());
+        assert_eq!(s.stalls(None, 0, i64::MAX, 10).unwrap().len(), 4);
+        assert_eq!(s.stalls(Some("v"), 0, i64::MAX, 1).unwrap()[0].stall.start, 30_000);
+    }
+
+    #[test]
+    fn a_stall_the_app_was_still_watching_when_it_quit_is_closed_on_opening() {
+        let db = Connection::open_in_memory().unwrap();
+        let mut s = Store::init(db).unwrap();
+        s.add_stall(&stall("v", 1_000)).unwrap();
+        s.add_stall(&ended(stall("v", 500), Some(900), End::Resumed))
+            .unwrap();
+        let s = Store::init(s.db).unwrap();
+        let got = s.stalls(None, 0, i64::MAX, 10).unwrap();
+        assert_eq!(got[0].stall.end_reason, Some(End::Unknown));
+        assert_eq!(got[0].stall.end, None, "when it ended isn't known");
+        assert_eq!(got[1].stall.end_reason, Some(End::Resumed), "a closed one is left as it was");
+    }
+
+    #[test]
+    fn an_older_database_gains_the_stall_table() {
+        let db = Connection::open_in_memory().unwrap();
+        db.execute_batch(
+            "CREATE TABLE oom_event(
+               vm TEXT NOT NULL, key TEXT NOT NULL, ts INTEGER NOT NULL, source TEXT NOT NULL,
+               oom_constraint TEXT, container_id TEXT, cgroup TEXT, process TEXT, pid INTEGER,
+               mem_limit INTEGER, anon_rss INTEGER, detail TEXT,
+               PRIMARY KEY(vm, key)) WITHOUT ROWID;
+             INSERT INTO oom_event(vm, key, ts, source) VALUES ('v', 'k', 1, 'kernel');",
+        )
+        .unwrap();
+        let mut s = Store::init(db).unwrap();
+        s.add_stall(&stall("v", 1_000)).unwrap();
+        assert_eq!(s.stalls(None, 0, i64::MAX, 10).unwrap().len(), 1);
+        assert_eq!(s.oom_events(None, 0, 10, 10).unwrap().len(), 1, "kills kept");
+    }
+
+    #[test]
+    fn a_stalls_largest_container_keeps_its_name() {
+        let mut s = Store::in_memory().unwrap();
+        let ct = "b".repeat(64);
+        let id = s.entity(Kind::Container, "v", &ct, "shop-web-1", 0).unwrap();
+        s.label_entity(id, Some("shop"), Some("web")).unwrap();
+        let mut st = stall("v", 1_000);
+        st.container_id = Some(ct);
+        st.container_mem = Some(30 << 30);
+        s.add_stall(&st).unwrap();
+        let got = &s.stalls(None, 0, i64::MAX, 10).unwrap()[0];
+        assert_eq!(got.container_name.as_deref(), Some("shop-web-1"));
+        assert_eq!(got.compose_service.as_deref(), Some("web"));
+        assert_eq!(got.stall.container_mem, Some(30 << 30));
+    }
+
+    #[test]
+    fn stalls_age_out_with_the_rollups() {
+        let mut s = Store::in_memory().unwrap();
+        s.add_stall(&ended(stall("v", 1_000), Some(2_000), End::Resumed))
+            .unwrap();
+        s.add_stall(&stall("v", 50 * HOUR)).unwrap();
+        s.retain(100 * HOUR, HOUR, 60 * HOUR).unwrap();
+        let left = s.stalls(None, 0, i64::MAX, 10).unwrap();
+        assert_eq!(left.len(), 1);
+        assert_eq!(left[0].stall.start, 50 * HOUR);
     }
 
     #[test]

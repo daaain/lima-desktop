@@ -2,7 +2,8 @@
 //! the guest probe over ssh (VM metrics + per-container cgroup peaks) and libpod over the forwarded
 //! socket (containers, their stats). Every sample goes to the store; the latest values and the
 //! instance/container lists are kept in memory for the UI to poll. A third loop records OOM kills
-//! from the guest's kernel journal: once on connecting, then whenever the probe sees a kill.
+//! from the guest's kernel journal: once on connecting, then whenever the probe sees a kill. And a
+//! VM Lima says is running whose probe falls silent is recorded as stalled (`stall.rs`).
 
 use serde::Serialize;
 use std::collections::HashMap;
@@ -19,6 +20,7 @@ use crate::lima::{self, Instance};
 use crate::oom::{self, OomEvent};
 use crate::podman::{Container, Libpod, PodmanError, RawStat};
 use crate::probe::{self, Block};
+use crate::stall::{self, Change, Watch};
 use crate::store::{ABSENT, CT_METRICS, Kind, Store, VM_METRICS};
 
 const LIST_EVERY: Duration = Duration::from_secs(3);
@@ -91,6 +93,8 @@ pub struct VmLive {
     pub podman_error: Option<String>,
     /// Why OOM kills come without the kernel's detail (no journal, or not readable), if they do.
     pub oom_detail_error: Option<String>,
+    /// Unix ms of the last probe block, while the VM has stopped responding since.
+    pub stalled_since: Option<i64>,
     pub containers: Vec<ContainerLive>,
 }
 
@@ -165,6 +169,7 @@ struct VmState {
     cgroups: HashMap<String, (Option<u64>, Option<u64>)>,
     oom_pending: Vec<PendingKill>,
     oom_wake: Arc<Notify>,
+    stall: Watch,
     workers: Vec<JoinHandle<()>>,
 }
 
@@ -296,7 +301,15 @@ impl Collector {
             }
         };
         let now = now_ms();
+        let at = Instant::now();
+        let threshold = stall::threshold(self.interval_secs());
         let mut vms = self.vms.lock().expect("vms lock");
+        // A VM gone from Lima's list (deleted) ends a stall it was in.
+        for (name, state) in vms.iter_mut() {
+            if !instances.iter().any(|i| &i.name == name) {
+                self.record_stall(&mut state.live, state.stall.stopped(now));
+            }
+        }
         vms.retain(|name, _| instances.iter().any(|i| &i.name == name));
         for inst in instances {
             let name = inst.name.clone();
@@ -310,17 +323,21 @@ impl Collector {
                     probe_error: None,
                     podman_error: None,
                     oom_detail_error: None,
+                    stalled_since: None,
                     containers: Vec::new(),
                 },
                 cgroups: HashMap::new(),
                 oom_pending: Vec::new(),
                 oom_wake: Arc::new(Notify::new()),
+                stall: Watch::default(),
                 workers: Vec::new(),
             });
             state.live.instance = inst;
             state.live.entity = entity;
             let alive = state.workers.iter().any(|w| !w.is_finished());
             if running && !alive {
+                // A new probe: nothing counts as silence until it has delivered a block.
+                self.record_stall(&mut state.live, state.stall.stopped(now));
                 state.workers = vec![
                     tokio::spawn(self.clone().probe_loop(name.clone())),
                     tokio::spawn(self.clone().podman_loop(name.clone())),
@@ -337,6 +354,13 @@ impl Collector {
                     c.latest.clear();
                 }
             }
+            let change = if running {
+                let largest = largest_container(&state.live.containers);
+                state.stall.tick(at, threshold, &name, largest)
+            } else {
+                state.stall.stopped(now)
+            };
+            self.record_stall(&mut state.live, change);
             // Stopped, a VM still takes its disk image's real size on this computer: the one
             // reading it has. (A running VM's comes with each probe row.)
             if !running {
@@ -362,6 +386,38 @@ impl Collector {
     fn set_vm<F: FnOnce(&mut VmState)>(&self, name: &str, f: F) {
         if let Some(v) = self.vms.lock().expect("vms lock").get_mut(name) {
             f(v);
+        }
+    }
+
+    /// The app itself is stopping, restarting or deleting `name` (`on`), or has finished: while
+    /// it does, the probe's silence is expected and no stall begins.
+    pub fn hold_stalls(&self, name: &str, on: bool) {
+        self.set_vm(name, |v| v.stall.hold(on, Instant::now()));
+    }
+
+    /// Keep a stall's beginning or end in the store, and in the VM's live state.
+    fn record_stall(&self, live: &mut VmLive, change: Option<Change>) {
+        let Some(change) = change else { return };
+        let mut store = self.store();
+        let recorded = match &change {
+            Change::Began(s) => {
+                log::warn!("{} stopped responding (no probe block since {})", s.vm, s.start);
+                live.stalled_since = Some(s.start);
+                store.add_stall(s)
+            }
+            Change::Ended(s) => {
+                log::info!("{} stall ended: {:?}", s.vm, s.end_reason);
+                live.stalled_since = None;
+                store.end_stall(s)
+            }
+            Change::Dropped(s) => {
+                log::info!("{} was rebooting, not stalled", s.vm);
+                live.stalled_since = None;
+                store.drop_stall(&s.vm, s.start)
+            }
+        };
+        if let Err(e) = recorded {
+            log::error!("recording a stall: {e}");
         }
     }
 
@@ -416,11 +472,15 @@ impl Collector {
                     .as_ref()
                     .map(|p| oom::counter_kills(p, &block))
                     .unwrap_or_default();
+                let uptime = block.uptime;
                 me.set_vm(&n, |v| {
                     v.live.latest = named(VM_METRICS, &row);
                     v.live.probe_error = None;
                     v.cgroups = cgroups;
                     queue_kills(v, ts, kills);
+                    let reading = reading(&v.live.latest);
+                    let change = v.stall.block(Instant::now(), ts, uptime, reading);
+                    me.record_stall(&mut v.live, change);
                 });
                 prev = Some(block);
             });
@@ -429,8 +489,10 @@ impl Collector {
                 changed = interval.changed() => changed.is_ok(),
             };
             if restart {
-                // Dropping the child ends its ssh session (kill_on_drop); start again at once.
+                // Dropping the child ends its ssh session (kill_on_drop); start again at once,
+                // the silence while it reconnects not counting towards a stall.
                 drop(child);
+                self.set_vm(&name, |v| v.stall.probe_restarted(Instant::now()));
                 carried = prev;
                 continue;
             }
@@ -652,6 +714,25 @@ fn queue_kills(v: &mut VmState, ts: i64, kills: Vec<Option<String>>) {
         });
     }
     v.oom_wake.notify_one();
+}
+
+/// The container using the most memory, as last read, and how much.
+fn largest_container(containers: &[ContainerLive]) -> Option<(String, i64)> {
+    containers
+        .iter()
+        .filter_map(|c| Some((c.container.id.clone(), *c.latest.get("mem")?)))
+        .max_by_key(|(_, mem)| *mem)
+}
+
+/// What a VM's latest row says about memory, for a stall that may follow it.
+fn reading(latest: &HashMap<String, i64>) -> stall::Reading {
+    let get = |k: &str| latest.get(k).copied();
+    stall::Reading {
+        mem_used: get("mem_used"),
+        mem_total: get("mem_total"),
+        psi_mem_some: get("psi_mem_some"),
+        psi_mem_full: get("psi_mem_full"),
+    }
 }
 
 /// An unlimited container reports (about) the VM's memory as its limit; that isn't a limit of its own.
@@ -882,6 +963,48 @@ mod tests {
             events[2].detail.as_deref(),
             Some("there's no systemd journal in this VM")
         );
+    }
+
+    fn live(id: &str, mem: Option<i64>) -> ContainerLive {
+        ContainerLive {
+            container: Container {
+                id: id.into(),
+                name: format!("{id}-1"),
+                image: "img".into(),
+                image_id: "i".into(),
+                state: "running".into(),
+                status: "Up".into(),
+                created: 0,
+                started_at: None,
+                compose_project: None,
+                compose_service: None,
+                pod_name: None,
+                labels: Default::default(),
+            },
+            entity: None,
+            latest: mem.map(|m| HashMap::from([("mem".into(), m)])).unwrap_or_default(),
+        }
+    }
+
+    #[test]
+    fn a_stall_names_the_container_using_the_most_memory() {
+        let cs = [live("a", Some(5)), live("b", Some(30)), live("c", None)];
+        assert_eq!(largest_container(&cs), Some(("b".into(), 30)));
+        assert_eq!(largest_container(&[live("c", None)]), None, "none measured");
+    }
+
+    #[test]
+    fn a_stall_keeps_what_the_block_said_about_memory() {
+        let row = named(VM_METRICS, &{
+            let mut row = vec![ABSENT; VM_METRICS.len()];
+            row[1] = 42; // mem_used
+            row[3] = 47; // mem_total
+            row[5] = 250; // psi_mem_some
+            row
+        });
+        let r = reading(&row);
+        assert_eq!((r.mem_used, r.mem_total), (Some(42), Some(47)));
+        assert_eq!((r.psi_mem_some, r.psi_mem_full), (Some(250), None));
     }
 
     #[test]

@@ -5,6 +5,7 @@
   import { share } from './almanac';
   import { bytes, cores, cpuLabel, GiB, permille } from './format';
   import { cpuHint, diskHint, memoryHint, type Hint } from './rightsize';
+  import type { Marker } from './oom';
   import Bar from './Bar.svelte';
   import Chart from './Chart.svelte';
 
@@ -13,8 +14,8 @@
     /** The range's OOM kills: undefined while loading, null when unavailable (then only the counter is known). */
     oomEvents: OomEvent[] | null | undefined;
     series: Series | null;
-    /** OOM kills to mark on the memory chart. */
-    markers: { ts: number; label: string }[];
+    /** OOM kills and stalls to mark on the memory chart. */
+    markers: Marker[];
     /** The verdicts, for the page's headline; empty until the history has arrived. */
     hints?: Hint[];
   } = $props();

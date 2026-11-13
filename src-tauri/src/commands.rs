@@ -10,7 +10,7 @@ use crate::podman::{ContainerAction, Image, Layer, Libpod, Pruned, Volume};
 use crate::guest_files::{self, Folder, Listing, Peek};
 use serde::Deserialize;
 use crate::settings::{Saved, Settings};
-use crate::store::{Entity, OomRecord, Series, Summary};
+use crate::store::{Entity, OomRecord, Series, StallRecord, Summary};
 
 type C<'a> = State<'a, Arc<Collector>>;
 
@@ -44,8 +44,11 @@ pub fn set_settings(
 
 #[tauri::command]
 pub async fn vm_action(c: C<'_>, name: String, action: Action) -> Result<(), String> {
+    // A VM going down on request falls silent before Lima says it has stopped; that's no stall.
+    c.hold_stalls(&name, true);
     let result = lima::act(&name, action).await.map_err(err);
     c.refresh().await;
+    c.hold_stalls(&name, false);
     result
 }
 
@@ -251,5 +254,20 @@ pub fn oom_events(
 ) -> Result<Vec<OomRecord>, String> {
     c.store()
         .oom_events(vm.as_deref(), from, to, limit.unwrap_or(500).clamp(1, 5000))
+        .map_err(err)
+}
+
+/// VM stalls overlapping [from, to] (one going on included), newest first (at most `limit`,
+/// default 500); every VM's when `vm` is absent.
+#[tauri::command]
+pub fn stalls(
+    c: C<'_>,
+    vm: Option<String>,
+    from: i64,
+    to: i64,
+    limit: Option<usize>,
+) -> Result<Vec<StallRecord>, String> {
+    c.store()
+        .stalls(vm.as_deref(), from, to, limit.unwrap_or(500).clamp(1, 5000))
         .map_err(err)
 }

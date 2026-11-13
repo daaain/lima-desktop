@@ -32,8 +32,11 @@
     /** A horizontal reference line (e.g. the VM's allocation). */
     ceiling?: number;
     height?: number;
-    /** Moments to mark with a vertical line in --alert (e.g. OOM kills); `ts` in unix ms. */
-    markers?: { ts: number; label: string }[];
+    /**
+     * Moments to mark with a vertical line in --alert (e.g. OOM kills), and with an `until` a
+     * stretch of time shaded from the line on (e.g. a VM stalled); unix ms.
+     */
+    markers?: { ts: number; until?: number; label: string }[];
   } = $props();
 
   const SYNC_KEY = 'time';
@@ -53,7 +56,10 @@
     return `rgba(${n >> 16}, ${(n >> 8) & 255}, ${n & 255}, ${a})`;
   }
 
-  /** Draws `markers` as dashed vertical lines, each labelled unless it would overlap the last label. */
+  /**
+   * Draws `markers` as dashed vertical lines, each labelled unless it would overlap the last label;
+   * a marker with an `until` also shades its stretch, as far as it is on the plot.
+   */
   const markerPlugin: uPlot.Plugin = {
     hooks: {
       draw: [
@@ -62,6 +68,7 @@
           const { ctx, bbox } = u;
           const px = uPlot.pxRatio;
           const color = cssVar('--alert');
+          const [min, max] = [u.scales.x.min ?? -Infinity, u.scales.x.max ?? Infinity];
           ctx.save();
           ctx.strokeStyle = color;
           ctx.fillStyle = color;
@@ -71,7 +78,14 @@
           let labelEnd = -Infinity;
           for (const m of [...markers].sort((a, b) => a.ts - b.ts)) {
             const t = m.ts / 1000;
-            if (t < (u.scales.x.min ?? -Infinity) || t > (u.scales.x.max ?? Infinity)) continue;
+            if (m.until != null && t <= max && m.until / 1000 >= min) {
+              const from = u.valToPos(Math.max(t, min), 'x', true);
+              const to = u.valToPos(Math.min(m.until / 1000, max), 'x', true);
+              ctx.fillStyle = alpha(color, 0.12);
+              ctx.fillRect(from, bbox.top, Math.max(px, to - from), bbox.height);
+              ctx.fillStyle = color;
+            }
+            if (t < min || t > max) continue;
             const x = Math.round(u.valToPos(t, 'x', true));
             ctx.beginPath();
             ctx.moveTo(x, bbox.top);

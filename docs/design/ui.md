@@ -118,8 +118,12 @@ under the sentence, figures and bar it explains, with the allocation as a dashed
 - **Settings**: the headline says how often each running VM is measured; the choices (1, 2, 5,
   10 s) and what a slower one costs and saves; then the theme: System, Light or Dark.
 - **A VM**: the headline verdict; four figures (Memory, CPU, Pressure, Disk), each a verdict
-  sentence, three numbers, a bar and its chart; the resize sentence; out-of-memory kills when
-  there are any; its containers as lines.
+  sentence, three numbers, a bar and its chart; the resize sentence; "Out of memory" when there
+  is anything to list: OOM kills, and stalls, where the VM stopped responding without the kernel
+  killing anything. A stall is put down to memory only when the last reading had memory past 90 %
+  or work waiting on it over 10 % of the time; otherwise its cause is said to be unknown. Stalls are
+  shaded on the Memory chart from start to end. A stall still going on is said under the headline,
+  and as a "stalled" badge on the overview. Then its containers as lines.
 - **Containers**: the headline and a dot per container; filters; then the column heads (the
   overview's serif ones, `.column-heads`, as on a VM's page, Images and Volumes) and a group per VM ("atlas runs
   twelve, all in atlas, and one has exited."), each container a line with memory and CPU drawn.

@@ -58,6 +58,9 @@
   {@const i = vm.instance}
   {#if i.marker.state === 'active'}<span class="badge managed" title={i.marker.hint}>{i.marker.manager}</span>{/if}
   {#if i.marker.state === 'unreadable'}<span class="badge alert" title="Its managed-by marker can't be read; every change is locked">unreadable marker</span>{/if}
+  {#if vm.stalledSince}
+    <a class="badge alert" href={`${href(i)}#oom`} title="It has stopped responding, though Lima still says it's running — see what memory looked like before">stalled</a>
+  {/if}
   {#if (vm.latest.oom_kills ?? 0) > 0}
     <a class="badge alert" href={`${href(i)}#oom`} title="Processes killed for lack of memory since the VM booted — see which">{vm.latest.oom_kills} OOM</a>
   {/if}
