@@ -1,13 +1,17 @@
 # Release builds: on a version tag (v0.1.0, matching the version in tauri.conf.json, Cargo.toml and
 # package.json), the macOS app (universal: Apple silicon and Intel) as a .dmg and the Linux app as a
-# .deb and an AppImage, attached to a DRAFT GitHub Release to read over and publish by hand.
-# Run by hand (Actions → Release → Run workflow), it builds the same and keeps them as the run's
-# artifacts, releasing nothing.
+# .deb and an AppImage, attached to a GitHub Release published straight away (a dry run first is
+# the time to look them over).
+# Run by hand on any branch (Actions → Release → Run workflow, or `gh workflow run release.yml --ref
+# <branch>`), it's a dry run of all of that: the same checks and builds, the files kept as the run's
+# artifacts, and the release it would publish shown in the run's summary, releasing nothing.
 #
 # Unsigned: the macOS app is only ad-hoc signed (as every arm64 binary must be), so a downloaded copy
 # is quarantined and macOS refuses it until the quarantine is removed (the release notes and the
 # README say how). Signing and notarising need an Apple Developer ID; Tauri's bundler does both
 # when the APPLE_* variables are set (https://v2.tauri.app/distribute/sign/macos/).
+# No Rust cache: a cache saved by a run on a tag can only be read by runs on that same tag, and every
+# release is a new tag, so packing and uploading one at the end of each job bought nothing.
 # Actions are pinned to commit SHAs, as in ci.yml.
 name: Release
 
@@ -31,20 +35,28 @@ env:
 
 jobs:
   version:
-    name: tag matches the version
-    if: startsWith(github.ref, 'refs/tags/v')
+    name: the version agrees everywhere
     runs-on: ubuntu-26.04
     timeout-minutes: 5
+    outputs:
+      version: ${{ steps.check.outputs.version }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: tauri.conf.json, Cargo.toml and package.json all say ${{ github.ref_name }}
-        run: sh tools/check-release-version.sh HEAD "${GITHUB_REF_NAME#v}"
+      # On a tag, the tag's version; on a dry run, whatever tauri.conf.json says.
+      - name: tauri.conf.json, Cargo.toml and package.json all say the same version
+        id: check
+        run: |
+          if [ "$GITHUB_REF_TYPE" = tag ]; then want="${GITHUB_REF_NAME#v}"
+          else want=$(node -p 'require("./src-tauri/tauri.conf.json").version'); fi
+          sh tools/check-release-version.sh HEAD "$want"
+          echo "version=$want" >> "$GITHUB_OUTPUT"
 
+  # One runner compiles both arches (aarch64, then x86_64) and bundles the universal app. Splitting
+  # them across runners built faster, but each macOS job waits for a runner of its own, and those
+  # waits (5 and 10 minutes in the dry run of 12 November 2026) cost more than the split saved.
   macos:
     name: macOS (universal .dmg)
     needs: version
-    # On a tag, only once the version agrees; by hand there's no version job, and that's fine.
-    if: ${{ !failure() && !cancelled() }}
     runs-on: macos-15
     timeout-minutes: 45
     steps:
@@ -54,9 +66,6 @@ jobs:
         run: |
           rustup toolchain install "$RUST_VERSION" --profile minimal -t aarch64-apple-darwin,x86_64-apple-darwin
           rustup default "$RUST_VERSION"
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-        with:
-          workspaces: src-tauri
 
       - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
         with:
@@ -84,7 +93,6 @@ jobs:
   linux:
     name: Linux (.deb, AppImage)
     needs: version
-    if: ${{ !failure() && !cancelled() }}
     # The oldest Ubuntu with Tauri's WebKitGTK 4.1, not CI's 26.04: a binary runs on systems with
     # the glibc it was built against or newer, so building on 24.04 reaches more of them.
     runs-on: ubuntu-24.04
@@ -103,9 +111,6 @@ jobs:
         run: |
           rustup toolchain install "$RUST_VERSION" --profile minimal
           rustup default "$RUST_VERSION"
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-        with:
-          workspaces: src-tauri
 
       - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
         with:
@@ -128,9 +133,8 @@ jobs:
           if-no-files-found: error
 
   release:
-    name: draft the GitHub Release
-    if: startsWith(github.ref, 'refs/tags/v')
-    needs: [macos, linux]
+    name: publish the GitHub Release
+    needs: [version, macos, linux]
     runs-on: ubuntu-26.04
     timeout-minutes: 10
     permissions:
@@ -138,11 +142,14 @@ jobs:
     steps:
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
+          pattern: '{macos,linux}'
           path: dist
           merge-multiple: true
-      - name: Draft ${{ github.ref_name }}
+      # Only a pushed v* tag releases; anything run by hand is a dry run, even on a tag.
+      - name: Release v${{ needs.version.outputs.version }}${{ github.event_name != 'push' && ' (dry run)' || '' }}
         env:
           GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.version.outputs.version }}
         run: |
           # The files, wherever they landed: an artifact with more than one path (Linux's .deb and
           # .AppImage) keeps their folders under its common parent, so dist/* would hand gh two
@@ -168,7 +175,34 @@ jobs:
           executable and run it. Needs WebKitGTK 4.1 (Ubuntu 22.04+, Debian 12+, Fedora 39+).
 
           EOF
+          if [ "$GITHUB_EVENT_NAME" != push ]; then
+            # The changelog --generate-notes would add: from the latest release up to this commit. A
+            # tag that exists already would be described as it is, not this commit, so then the notes
+            # are for a name no tag has.
+            tag="v$VERSION" taken=""
+            if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag" >/dev/null 2>&1; then
+              taken=1 tag="v$VERSION-dry-run-$GITHUB_RUN_ID"
+            fi
+            changes=$(gh api "repos/$GITHUB_REPOSITORY/releases/generate-notes" \
+              -f tag_name="$tag" -f target_commitish="$GITHUB_SHA" --jq .body)
+            {
+              echo "# Dry run: Lima Desktop $VERSION, from $GITHUB_REF_NAME"
+              if [ -n "$taken" ]; then
+                echo "\`v$VERSION\` is tagged already: bump the version (\`just release patch\`) before releasing this."
+                echo
+              fi
+              echo "A run on the tag \`v$VERSION\` would publish this release with these files:"
+              echo
+              for f in "${files[@]}"; do echo "- \`${f##*/}\` ($(du -h "$f" | cut -f1))"; done
+              echo
+              echo "---"
+              cat notes.md
+              echo "$changes"
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "Dry run: nothing released. The release it would publish is in the run's summary."
+            exit 0
+          fi
           gh release create "$GITHUB_REF_NAME" "${files[@]}" \
-            --repo "$GITHUB_REPOSITORY" --draft --verify-tag \
-            --title "Lima Desktop ${GITHUB_REF_NAME#v}" \
+            --repo "$GITHUB_REPOSITORY" --verify-tag \
+            --title "Lima Desktop $VERSION" \
             --notes-file notes.md --generate-notes

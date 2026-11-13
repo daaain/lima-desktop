@@ -97,13 +97,45 @@ branch.
 Add to the fleet when a page gains a state worth seeing; nothing in it is recorded from a real
 machine, so it needs no anonymising. For real data in the real app, replay a snapshot (below).
 
+## Does the UI hold on to memory? `just ui-leak`
+
+The app's window polls the backend once a second for as long as it's open, so anything a poll leaves
+behind adds up over hours. `e2e-ui/leak.mjs` shows it in about a minute. It loads the built UI with
+the fake backend into headless WebKit (Tauri's engine) and runs the page's clock forward a second at
+a time, one poll per tick, pausing for a frame after each so the result is laid out and painted. It
+weighs the page's process every so often: its footprint on macOS, the figure Activity Monitor
+shows, and its resident size elsewhere. The verdict is the growth through the second half of the
+run, in MB per 1000 ticks (about 17 minutes of the app open), so caches filling up and levelling off
+don't count. `just ui-leak` fails above 25. Pages level off at 0–3 MB.
+
+    just ui-leak                   # the overview: 1500 ticks, about 75 s
+    just ui-leak /containers       # another page
+    node e2e-ui/leak.mjs --frozen  # the same pauses without ticks: the engine's own drift
+    node e2e-ui/leak.mjs --browser chromium
+    node e2e-ui/leak.mjs --max-growth 10 --csv leak.csv   # exit 1 above 10 MB per 1000 ticks
+
+A frame (40 ms, `--frame-ms`) is shorter than the bars' 0.4 s transition, so the rig cuts
+transitions short, which the app's polls, at least a second apart, never do. A rare "Page crashed"
+is WebKit itself; run it again.
+
+It found one leak, now fixed. WebKit before October 2026 never frees a computed `calc()`, `min()`,
+`max()` or `clamp()` length ([bug 325845][wk-calc]), and the bars' widths were `max(2px, n%)`, which
+were computed again on every poll and on every frame of their transition. Left open, the window grew
+about 13 MB a minute. macOS 27.0.1 and most Linux distributions still ship that WebKit, so
+`styles.test.ts` keeps those functions out of inline styles. A plain length with a `min-width` in the
+stylesheet does the same job. Playwright's own WebKit has had the fix since 1.65, so the rig no
+longer shows this leak, only ones the app makes itself.
+
+[wk-calc]: https://bugs.webkit.org/show_bug.cgi?id=325845
+
 ## Releasing
 
 The **Release** workflow (`.github/workflows/release.yml`) runs on a `v*` tag. It builds the macOS
 app as a universal `.dmg` on `macos-15`, and the Linux `.deb` and AppImage on `ubuntu-24.04`. Linux
 builds on 24.04, not CI's 26.04, because a binary needs the glibc it was built against or newer.
-The workflow then drafts a GitHub Release with the files attached and install notes above the
-generated changelog.
+The workflow then publishes a GitHub Release with the files attached and install notes above the
+generated changelog. It goes out as soon as the builds pass, with no draft to look over, so do a
+dry run (below) first when anything in the build has changed.
 
 1. On an up-to-date, clean main: **`just release patch`** (or `minor`, `major`, or `0.2.0`). It
    bumps the version in `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml` (and `Cargo.lock`) and
@@ -111,18 +143,21 @@ generated changelog.
    `Release v0.2.0` and tags it, all locally (`git tag -d v0.2.0 && git reset --hard HEAD~1` undoes
    it). Given the version already in the files, it only tags. It fetches first and refuses unless
    main is exactly `origin/main`.
-2. **`just release-push`**: pushes main and the tag together (`--atomic`), which starts the build.
+2. **`just release-push`**: pushes main and the tag together (`--atomic`), which starts the build
+   and the release.
    main has to take a direct push for this; where it only takes pull requests, merge the bump
    commit through one and push just the tag.
-3. Read the draft under Releases, then publish it.
 
 Don't tag by hand: a tag on a commit that still says the old version fails the workflow's first
 job, after the tag is public. The pre-push hook (`.githooks/pre-push`, switched on by `pnpm install`
 setting `core.hooksPath`) runs the same check, `tools/check-release-version.sh`, on any `v*` tag
 before it leaves. To take back a bad tag: `git push origin :refs/tags/vX.Y.Z && git tag -d vX.Y.Z`.
 
-Run by hand (Actions → Release → Run workflow), it builds any branch and keeps the bundles as the
-run's artifacts, releasing nothing.
+Run by hand on a branch, it's a dry run: Actions → Release → Run workflow, or
+`gh workflow run release.yml --ref <branch>`. It checks the version, builds everything and keeps the
+files as the run's artifacts, and instead of publishing a release it puts the one it would publish
+(files, notes and changelog) in the run's summary. Use it to try a workflow change, or to time a
+build, before tagging.
 
 The macOS app is only ad-hoc signed (`bundle.macOS.signingIdentity: "-"` in `tauri.conf.json`), so a
 downloaded copy needs its quarantine removed (`xattr -dr com.apple.quarantine`, as the README
