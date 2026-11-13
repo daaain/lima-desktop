@@ -448,13 +448,32 @@ test("Hovering one chart reads the same moment off every chart on the page", asy
   const charts = page.locator('.chart');
   await charts.nth(1).locator('.u-over').waitFor();
   const time = (n) => charts.nth(n).locator('.u-legend .u-series').first().locator('.u-value');
+  // Until a chart is hovered, each shows its latest measurement; hovering moves them all off it.
+  await page.waitForFunction((el) => el.textContent !== '–', await time(0).elementHandle());
+  const latest = await time(0).textContent();
   const over = await charts.first().locator('.u-over').boundingBox();
   await page.mouse.move(over.x + over.width * 0.6, over.y + over.height / 2);
-  await page.waitForFunction((el) => el.textContent !== '–', await time(0).elementHandle());
+  await page.waitForFunction(({ el, was }) => el.textContent !== was, { el: await time(0).elementHandle(), was: latest });
   const read = await time(0).textContent();
   const count = await charts.count();
   assert.ok(count >= 4, `${count} charts`);
   for (let n = 1; n < count; n++) assert.equal(await time(n).textContent(), read, `chart ${n} reads the same moment`);
+  assert.deepEqual(errors, []);
+  await close();
+});
+
+test("An open container's charts show their latest measurement, and keep up with time", async () => {
+  const { page, errors, close } = await open('/containers', { height: 1400 });
+  await page.locator('.line', { has: page.locator('.name', { hasText: /^frontend/ }) }).first().click();
+  const chart = page.locator('section.detail .chart').first();
+  await chart.locator('.u-over').waitFor();
+  const time = chart.locator('.u-legend .u-series').first().locator('.u-value');
+  // Not hovered, the legend reads the newest sample rather than a dash.
+  await page.waitForFunction((el) => el.textContent !== '–', await time.elementHandle());
+  const before = await time.textContent();
+  // Two minutes on, the open detail has fetched again and its newest sample is later.
+  await page.clock.setFixedTime(new Date(NOW.getTime() + 2 * 60_000));
+  await page.waitForFunction(({ el, was }) => el.textContent !== was && el.textContent !== '–', { el: await time.elementHandle(), was: before }, { timeout: 15_000 });
   assert.deepEqual(errors, []);
   await close();
 });

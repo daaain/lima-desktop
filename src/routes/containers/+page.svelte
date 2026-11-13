@@ -5,6 +5,7 @@
   import { bytes } from '$lib/format';
   import { containersHeadline, countWord, exitedSentence, runsSentence } from '$lib/almanac';
   import { History } from '$lib/history.svelte';
+  import { liveTo } from '$lib/liveTo.svelte';
   import { BY_MEMORY, CONTAINER_COLUMNS, CONTAINER_SORTS, containerRows, filterContainers, groupContainers, readContainerFilter, type ContainerSort } from '$lib/containers';
   import { podmanFailures, podmanScope } from '$lib/perVm';
   import { withParam } from '$lib/url';
@@ -22,7 +23,9 @@
   let query = $state('');
   let actionError = $state<string | null>(null);
   // Open details, any number, each under its own line: `vm/id` → when it was opened (its hour ends there).
-  let open = $state<Record<string, number>>({});
+  let open = $state<Record<string, true>>({});
+  // Open details show the last hour, following live: they share one clock, ticking only while open.
+  const clock = liveTo(() => Object.keys(open).length > 0);
 
   const urlFilter = $derived(readContainerFilter(page.url.searchParams));
   const scope = $derived(podmanScope(live.snapshot));
@@ -51,7 +54,7 @@
   const keyOf = (vm: string, id: string) => `${vm}/${id}`;
   function toggle(key: string) {
     if (key in open) close(key);
-    else open = { ...open, [key]: Date.now() };
+    else open = { ...open, [key]: true };
   }
   function close(key: string) {
     const { [key]: _, ...rest } = open;
@@ -109,7 +112,7 @@
               now={live.snapshot?.updated} selected={key in open} onselect={() => toggle(key)} onerror={(e) => (actionError = e)} />
             {#if open[key] != null}
               <div transition:unfold>
-                <ContainerDetail {vm} {c} from={open[key] - DETAIL_WINDOW_MS} to={open[key]} vmMemory={g.live?.instance.memory ?? 0} onclose={() => close(key)} />
+                <ContainerDetail {vm} {c} from={clock.to - DETAIL_WINDOW_MS} to={clock.to} vmMemory={g.live?.instance.memory ?? 0} onclose={() => close(key)} />
               </div>
             {/if}
           </div>

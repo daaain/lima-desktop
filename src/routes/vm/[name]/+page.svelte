@@ -8,6 +8,7 @@
   import { History } from '$lib/history.svelte';
   import type { Hint } from '$lib/rightsize';
   import { RANGES, rangeMs, type RangeKey } from '$lib/ranges';
+  import { liveTo } from '$lib/liveTo.svelte';
   import { OOM_LEVEL_LABEL, STALL_LABEL, oomCause, oomLevel, oomMarkers, oomWho, outOfMemoryNote, stallCause, stalledNow, stallMarkers } from '$lib/oom';
   import VmActions from '$lib/VmActions.svelte';
   import Sizing from '$lib/Sizing.svelte';
@@ -24,7 +25,9 @@
   const vm = $derived(live.vm(name));
 
   let range = $state<RangeKey>('1h');
-  let to = $state(Date.now());
+  // Short ranges follow live, a sample at a time; longer ones are fetched once per choice.
+  const clock = liveTo(() => rangeMs(range) <= 6 * 3_600_000);
+  const to = $derived(clock.to);
   const from = $derived(to - rangeMs(range));
   let series = $state<Series | null>(null);
   // Open container details, any number, each under its own line.
@@ -38,13 +41,6 @@
   // The memory bars' full width: the largest peak among this VM's containers.
   const memScale = $derived(Math.max(1, ...(vm?.containers ?? []).map((c) => Math.max(c.latest.mem ?? 0, c.latest.mem_peak ?? 0))));
 
-  // Short ranges follow live; longer ones are fetched once per choice.
-  $effect(() => {
-    to = Date.now();
-    if (rangeMs(range) > 6 * 3_600_000) return;
-    const t = setInterval(() => (to = Date.now()), 5000);
-    return () => clearInterval(t);
-  });
   $effect(() => {
     const entity = vm?.entity;
     if (entity == null) return;

@@ -102,6 +102,22 @@
     },
   };
 
+  /** The newest moment with a value on any line: what the legend reads while nothing is hovered. */
+  function latest(u: uPlot): number | null {
+    for (let i = u.data[0].length - 1; i >= 0; i--) {
+      if (u.data.some((col, s) => s > 0 && col[i] != null)) return i;
+    }
+    return null;
+  }
+
+  /** With the pointer off every chart, the legend shows the latest measurement, not dashes. */
+  const latestPlugin: uPlot.Plugin = {
+    hooks: {
+      ready: [(u) => u.setLegend({ idx: latest(u) ?? undefined })],
+      setCursor: [(u) => { if (u.cursor.idx == null) u.setLegend({ idx: latest(u) ?? undefined }); }],
+    },
+  };
+
   /** The moment under the cursor, short enough that the legend doesn't change width with it. */
   const when = (t: number) =>
     new Date(t * 1000).toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', second: '2-digit' });
@@ -152,7 +168,7 @@
       cursor: { drag: { x: false, y: false }, sync: { key: SYNC_KEY } },
       scales: { y: { range: (_u, _min, max) => [0, Math.max(max * 1.1, ceiling ?? 0) || 1] } },
       axes: [axis, { ...axis, size: 84, values: (_u, vals) => vals.map((v) => format(v)) }],
-      plugins: [markerPlugin],
+      plugins: [markerPlugin, latestPlugin],
     };
     plot?.destroy();
     plot = new uPlot(opts, cols as uPlot.AlignedData, host);
@@ -169,6 +185,7 @@
     const { left, top } = plot.cursor;
     plot.setData(cols as uPlot.AlignedData);
     if (left != null && left >= 0 && top != null) plot.setCursor({ left, top });
+    else plot.setLegend({ idx: latest(plot) ?? undefined });
   }
 
   // uPlot paints a canvas with colours read once from CSS, so it has to be rebuilt when the OS
