@@ -33,6 +33,9 @@ const { values: opt } = parseArgs({
   },
 });
 const TICKS = Number(opt.ticks), EVERY = Number(opt.every), FRAME_MS = Number(opt['frame-ms']);
+// The verdict is a slope through the samples in the second half: it needs two of them at least.
+const verdictSamples = Math.floor(TICKS / EVERY) - Math.ceil(TICKS / 2 / EVERY) + 1;
+if (!(verdictSamples >= 2)) throw new Error(`--ticks ${opt.ticks} weighed --every ${opt.every} leaves ${verdictSamples || 0} samples in the second half: the verdict needs 2 or more`);
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const base = `http://127.0.0.1:${opt.port}`;
 const NOW = new Date('2026-11-10T14:30:00Z');
@@ -101,16 +104,20 @@ async function preview() {
   server.stderr.on('data', (d) => (log += d));
   for (let i = 0; ; i++) {
     if (await fetch(base).then((r) => r.ok, () => false)) return server;
-    if (i > 100 || server.exitCode != null) throw new Error(`vite preview didn't come up (run pnpm build first):\n${log}`);
+    if (i > 100 || server.exitCode != null) {
+      server.kill();
+      throw new Error(`vite preview didn't come up (run pnpm build first):\n${log}`);
+    }
     await new Promise((r) => setTimeout(r, 200));
   }
 }
 
 const server = await preview();
-const browserServer = await engine.launchServer({ headless: true });
-installDir = installDirOf(browserServer.process().spawnfile);
-const browser = await engine.connect(browserServer.wsEndpoint());
+let browserServer, browser;
 try {
+  browserServer = await engine.launchServer({ headless: true });
+  installDir = installDirOf(browserServer.process().spawnfile);
+  browser = await engine.connect(browserServer.wsEndpoint());
   const context = await browser.newContext({ viewport: { width: 1320, height: 900 }, locale: 'en-GB', timezoneId: 'UTC' });
   const page = await context.newPage();
   const errors = [];
@@ -119,6 +126,9 @@ try {
   await page.addInitScript({ path: join(root, 'e2e-ui/fake-backend.js') });
   await page.goto(base + opt.path);
   await page.getByRole('heading', { level: 1 }).waitFor();
+  // An installed clock runs in real time until paused: paused, it moves only by runFor, a poll a
+  // tick, and not at all with --frozen.
+  await page.clock.pauseAt((await page.evaluate(() => Date.now())) + 1);
   await page.clock.runFor(5_000); // first poll, first histories
   await page.waitForTimeout(1_000);
 
@@ -143,6 +153,7 @@ try {
   // what counts is the slope through the second half. The first half's is shown for comparison.
   const per1000 = (key, from, to) => {
     const part = rows.filter((r) => r.tick >= from && r.tick <= to);
+    if (part.length < 2) throw new Error(`only ${part.length} sample between ticks ${from} and ${to}: no slope`);
     return (slope(part.map((r) => r.tick), part.map((r) => r[key])) * 1000) / MB;
   };
   const pageGrowth = per1000('page', TICKS / 2, TICKS);
@@ -158,7 +169,7 @@ try {
     process.exitCode = 1;
   }
 } finally {
-  await browser.close();
-  await browserServer.close();
+  await browser?.close();
+  await browserServer?.close();
   server.kill();
 }

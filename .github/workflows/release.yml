@@ -144,7 +144,8 @@ jobs:
           pattern: '{macos,linux}'
           path: dist
           merge-multiple: true
-      - name: Draft v${{ needs.version.outputs.version }}${{ github.ref_type != 'tag' && ' (dry run)' || '' }}
+      # Only a pushed v* tag releases; anything run by hand is a dry run, even on a tag.
+      - name: Draft v${{ needs.version.outputs.version }}${{ github.event_name != 'push' && ' (dry run)' || '' }}
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ needs.version.outputs.version }}
@@ -173,12 +174,22 @@ jobs:
           executable and run it. Needs WebKitGTK 4.1 (Ubuntu 22.04+, Debian 12+, Fedora 39+).
 
           EOF
-          if [ "$GITHUB_REF_TYPE" != tag ]; then
-            # The changelog --generate-notes would add: from the latest release up to this commit.
+          if [ "$GITHUB_EVENT_NAME" != push ]; then
+            # The changelog --generate-notes would add: from the latest release up to this commit. A
+            # tag that exists already would be described as it is, not this commit, so then the notes
+            # are for a name no tag has.
+            tag="v$VERSION" taken=""
+            if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag" >/dev/null 2>&1; then
+              taken=1 tag="v$VERSION-dry-run-$GITHUB_RUN_ID"
+            fi
             changes=$(gh api "repos/$GITHUB_REPOSITORY/releases/generate-notes" \
-              -f tag_name="v$VERSION" -f target_commitish="$GITHUB_SHA" --jq .body)
+              -f tag_name="$tag" -f target_commitish="$GITHUB_SHA" --jq .body)
             {
               echo "# Dry run: Lima Desktop $VERSION, from $GITHUB_REF_NAME"
+              if [ -n "$taken" ]; then
+                echo "\`v$VERSION\` is tagged already: bump the version (\`just release patch\`) before releasing this."
+                echo
+              fi
               echo "A run on the tag \`v$VERSION\` would draft this release with these files:"
               echo
               for f in "${files[@]}"; do echo "- \`${f##*/}\` ($(du -h "$f" | cut -f1))"; done
