@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { containersHeadline, containersSentence, countWord, exitedSentence, fullWindow, holdsSentence, intervalPhrase, runsSentence, fleetHeadline, hostBar, quarters, share, sketch, unusedHeadline, unusedLede, vmHeadline, vmSentence } from './almanac';
+import {
+  bandPeak, bandRise, containersHeadline, containersSentence, countWord, exitedSentence, fullWindow, holdsSentence, intervalPhrase, ownLimit, pressureSentence, rowMemory,
+  runsSentence, fleetHeadline, hostBar, quarters, selfMemory, share, shareChart, shareTip, sketch, unusedHeadline, unusedLede, vmHeadline, vmSentence,
+} from './almanac';
 import type { Hint } from './rightsize';
 import { container, vm } from './testing';
 
@@ -52,18 +55,54 @@ describe('fleetHeadline', () => {
   });
 });
 
-describe('vmSentence', () => {
-  it('leads with memory in quarters', () => {
-    expect(vmSentence(running('a', 1))).toBe('Less than a quarter of its memory is in use.');
+describe('fleetHeadline while a VM is stalled', () => {
+  const stalled = (name: string, memUsed: number) => ({ ...running(name, memUsed), stalledSince: 1_000 });
+  it("names a VM that isn't answering before anything else", () => {
+    expect(fleetHeadline([stalled('ember', 1), running('a', 7)])).toBe("ember isn't answering.");
+    expect(fleetHeadline([stalled('ember', 1), stalled('harbor', 2)])).toBe("Two VMs aren't answering.");
   });
-  it('adds a full disk, OOM kills and exited containers', () => {
-    const v = { ...running('a', 7, { store_used: 80, store_size: 100, oom_kills: 2 }), containers: [container({ state: 'exited' })] };
-    expect(vmSentence(v)).toBe(
-      'More than three quarters of its memory is in use. Its disk is past three quarters too. 2 processes were killed for lack of memory. One container has exited.',
+  it("doesn't count a stalled VM's last reading as room to spare", () => {
+    expect(fleetHeadline([stalled('ember', 1)])).toBe("ember isn't answering.");
+  });
+});
+
+describe('vmSentence', () => {
+  it("says a stalled VM isn't answering, and that its figures are from before", () => {
+    const v = { ...running('ember', 1), stalledSince: Date.UTC(2026, 10, 10, 14, 26) };
+    expect(vmSentence(v, '24h', 0, Date.UTC(2026, 10, 10, 14, 30))).toBe(
+      "It hasn't answered for 4 min, though Lima still says it's running. Its figures are from before.",
     );
   });
+
+  it('leads with memory in quarters', () => {
+    expect(vmSentence(running('a', 1), '24h')).toBe('Less than a quarter of its memory is in use.');
+  });
+  it('adds a full disk, OOM kills in the range and exited containers', () => {
+    const v = { ...running('a', 7, { store_used: 80, store_size: 100, oom_kills: 5 }), containers: [container({ state: 'exited' })] };
+    expect(vmSentence(v, '6h', 2)).toBe(
+      'More than three quarters of its memory is in use. Its disk is past three quarters too. Two processes were killed for lack of memory in the last 6 h. One container has exited.',
+    );
+    expect(vmSentence(running('a', 1), '1h', 1)).toBe('Less than a quarter of its memory is in use. One process was killed for lack of memory in the last hour.');
+  });
+  it('says nothing of kills before the range, or until its history says', () => {
+    const v = running('a', 1, { oom_kills: 3 });
+    expect(vmSentence(v, '15m', 0)).toBe('Less than a quarter of its memory is in use.');
+    expect(vmSentence(v, '15m')).toBe('Less than a quarter of its memory is in use.');
+  });
   it('says when there is no reading', () => {
-    expect(vmSentence(vm({ name: 'a' }))).toBe('No memory reading yet.');
+    expect(vmSentence(vm({ name: 'a' }), '24h')).toBe('No memory reading yet.');
+  });
+});
+
+describe('bandRise', () => {
+  const b = (min: (number | null)[], max: (number | null)[]) => ({ min, max, avg: max });
+  it("is how far a counter went up in the band: the range's OOM kills", () => {
+    expect(bandRise(b([3, 3, null, 4], [3, 4, null, 5]))).toBe(2);
+    expect(bandRise(b([3], [3]))).toBe(0);
+  });
+  it('is unknown without samples', () => {
+    expect(bandRise(b([null], [null]))).toBeUndefined();
+    expect(bandRise(undefined)).toBeUndefined();
   });
 });
 
@@ -132,17 +171,26 @@ describe('vmHeadline', () => {
   const hint = (dimension: Hint['dimension'], verdict: Hint['verdict']): Hint => ({ dimension, verdict, reason: '' });
   const ok = [hint('memory', 'ok'), hint('cpu', 'ok'), hint('disk', 'ok')];
   it('says a VM that is not running is just that', () => {
-    expect(vmHeadline(vm({ name: 'a', status: 'Stopped' }), [])).toBe('a is stopped.');
+    expect(vmHeadline(vm({ name: 'a', status: 'Stopped' }), [], '24h')).toBe('a is stopped.');
   });
   it('leads with what it needs more of', () => {
-    expect(vmHeadline(running('a', 7), [hint('memory', 'grow'), hint('cpu', 'grow'), hint('disk', 'ok')])).toBe('a needs more memory and CPU.');
+    expect(vmHeadline(running('a', 7), [hint('memory', 'grow'), hint('cpu', 'grow'), hint('disk', 'ok')], '6h')).toBe(
+      'a needs more memory and CPU, judging by the last 6 h.',
+    );
   });
   it('then what is past three quarters, then what is too much, then that it fits', () => {
-    expect(vmHeadline(running('a', 7), ok)).toBe('a fits, but its memory is past three quarters.');
-    expect(vmHeadline(running('a', 7, { store_used: 9, store_size: 10 }), ok)).toBe('a fits, but its memory and disk are past three quarters.');
-    expect(vmHeadline(running('a', 1), [hint('memory', 'shrink'), hint('cpu', 'ok')])).toBe('a has more memory than it uses.');
-    expect(vmHeadline(running('a', 1), ok)).toBe('a fits its allocation.');
-    expect(vmHeadline(running('a', 1), [])).toBe('a is running.');
+    expect(vmHeadline(running('a', 7), ok, '24h')).toBe('a fits, but its memory is past three quarters.');
+    expect(vmHeadline(running('a', 7, { store_used: 9, store_size: 10 }), ok, '24h')).toBe('a fits, but its memory and disk are past three quarters.');
+    expect(vmHeadline(running('a', 1), [hint('memory', 'shrink'), hint('cpu', 'ok')], '30d')).toBe('a has more memory than it uses, judging by the last 30 days.');
+    expect(vmHeadline(running('a', 1), ok, '1h')).toBe('a fits its allocation, judging by the last hour.');
+    expect(vmHeadline(running('a', 1), ok, '15m')).toBe('a fits its allocation, judging by the last 15 min.');
+    expect(vmHeadline(running('a', 1), [], '24h')).toBe('a is running.');
+  });
+  it('says first that a running VM has stopped answering, whatever else it needs', () => {
+    const stalled = { ...running('a', 7), stalledSince: 1_000 };
+    expect(vmHeadline(stalled, [hint('memory', 'grow')], '24h')).toBe("a isn't answering.");
+    expect(vmHeadline(stalled, [], '24h')).toBe("a isn't answering.");
+    expect(vmHeadline({ ...running('a', 1), stalledSince: null }, ok, '24h')).toBe('a fits its allocation, judging by the last 24 h.');
   });
 });
 
@@ -217,5 +265,162 @@ describe('images and volumes', () => {
     );
     expect(unusedLede({ hot: [], freeable: 1024 ** 2 })).toBe('Removing the unused ones would free 1.0 MiB.');
     expect(unusedLede({ hot: [], freeable: 0 })).toBe('');
+  });
+});
+
+describe("a container's memory", () => {
+  const MiB = 1024 ** 2;
+  const VM = 46.9 * GiB;
+  const NOW = 1_000_000_000_000;
+  const started = NOW / 1000 - 180; // 3 min ago
+  const b = (max: (number | null)[]) => ({ min: max, max, avg: max });
+
+  describe('ownLimit', () => {
+    it('is a limit only when below the VM: an unlimited container reports the VM as its limit', () => {
+      expect(ownLimit(GiB, VM)).toBe(GiB);
+      expect(ownLimit(0, VM)).toBeUndefined();
+      expect(ownLimit(undefined, VM)).toBeUndefined();
+      expect(ownLimit(46.5 * GiB, VM)).toBeUndefined();
+    });
+  });
+
+  describe('bandPeak', () => {
+    it('is the most a band reached, or nothing without samples', () => {
+      expect(bandPeak(b([1, null, 7, 3]))).toBe(7);
+      expect(bandPeak(b([null, null]))).toBeUndefined();
+      expect(bandPeak(undefined)).toBeUndefined();
+    });
+  });
+
+  describe('rowMemory', () => {
+    const restarted = { mem: 242.2 * MiB, mem_peak: 300.5 * MiB, mem_limit: VM };
+    it("is drawn against the VM, its 24 h peak from history even when the cgroup's peak has reset", () => {
+      const m = rowMemory(restarted, { vmMemory: VM, over: '24h', history: b([null, 30.3 * GiB, 18 * GiB, null, 240 * MiB]), startedAt: started, now: NOW });
+      expect(m.scale).toBe(VM);
+      expect(m.limit).toBeUndefined();
+      expect(m.peak).toBe(30.3 * GiB);
+      expect(m.pct).toBeCloseTo(0.504, 2);
+      expect(m.behind).toBeCloseTo(0.626, 2);
+      expect(m.tick).toBeCloseTo(64.6, 1);
+      expect(m.hot).toBe(false);
+      expect(m.of).toBe('of VM');
+      expect(m.peakSaid).toBe('peak 30.3 GiB in 24 h');
+      expect(m.label).toBe(
+        "Memory 242.2 MiB now; peak 30.3 GiB in the last 24 h, 300.5 MiB since it started 3 min ago; full width is the VM's 46.9 GiB",
+      );
+    });
+    it('is drawn against its own limit when it has one, in the warning colour past three quarters of it', () => {
+      const m = rowMemory({ mem: 900 * MiB, mem_peak: 1000 * MiB, mem_limit: GiB }, { vmMemory: VM, over: '24h', history: b([950 * MiB]), startedAt: started, now: NOW });
+      expect(m.scale).toBe(GiB);
+      expect(m.limit).toBe(GiB);
+      expect(m.hot).toBe(true);
+      expect(m.of).toBe('of 1.0 GiB limit');
+      expect(m.label).toMatch(/; full width is its 1\.0 GiB limit$/);
+      expect(rowMemory({ mem: 500 * MiB, mem_limit: GiB }, { vmMemory: VM, over: '24h', startedAt: started, now: NOW }).hot).toBe(false);
+    });
+    it('falls back to the peak since it started until there is history, without claiming 24 h', () => {
+      const m = rowMemory(restarted, { vmMemory: VM, over: '24h', history: b([null, null]), startedAt: started, now: NOW });
+      expect(m.peak).toBe(300.5 * MiB);
+      expect(m.peakSaid).toBe('peak 300.5 MiB');
+      expect(m.label).toBe("Memory 242.2 MiB now; peak 300.5 MiB since it started 3 min ago; full width is the VM's 46.9 GiB");
+    });
+    it('never says a 24 h peak below what it uses now (history lags the live reading)', () => {
+      expect(rowMemory(restarted, { vmMemory: VM, over: '24h', history: b([100 * MiB]), startedAt: started, now: NOW }).peak).toBe(242.2 * MiB);
+    });
+    it('leaves out when it started if that is unknown', () => {
+      expect(rowMemory(restarted, { vmMemory: VM, over: '24h', history: b([GiB]), startedAt: null, now: NOW }).label).toMatch(/300\.5 MiB since it started;/);
+    });
+    it('says the range its peak is from', () => {
+      const m = rowMemory(restarted, { vmMemory: VM, over: '6h', history: b([GiB]), startedAt: started, now: NOW });
+      expect(m.peakSaid).toBe('peak 1.0 GiB in 6 h');
+      expect(m.label).toMatch(/; peak 1\.0 GiB in the last 6 h, /);
+      expect(rowMemory(restarted, { vmMemory: VM, over: '30d', history: b([GiB]), startedAt: started, now: NOW }).peakSaid).toBe('peak 1.0 GiB in 30 days');
+    });
+  });
+
+  describe('shareChart', () => {
+    it('is nothing without the VM memory or any samples', () => {
+      expect(shareChart(b([1]), b([2]), 0)).toBeNull();
+      expect(shareChart(undefined, undefined, 100)).toBeNull();
+      expect(shareChart(b([null]), b([null]), 100)).toBeNull();
+    });
+    it("draws the VM in use and this container in front as stepped areas on the VM's scale, gaps left open", () => {
+      // Four columns, 25 wide; the scale keeps 8 % headroom over the VM's memory for its dashed line.
+      const s = shareChart(b([null, 25, 50, null]), b([50, 50, 100, null]), 100)!;
+      expect(s.ceiling).toBe(8);
+      expect(s.columns).toBe(4);
+      expect(s.vm).toBe('M0,100V54H25V54H50V8H75V100Z');
+      expect(s.me).toBe('M25,100V77H50V54H75V100Z');
+    });
+    it('keeps a gap in the middle as a gap', () => {
+      const s = shareChart(b([50, null, 50, 50]), b([50, null, 50, 50]), 100)!;
+      expect(s.me).toBe('M0,100V54H25V100ZM50,100V54H75V54H100V100Z');
+    });
+    it('clamps what goes past the VM', () => {
+      expect(shareChart(b([200]), b([200]), 100)!.me).toBe('M0,100V8H100V100Z');
+    });
+  });
+
+  describe('shareTip', () => {
+    it("says the moment: this container, its share of the VM, the VM's use", () => {
+      expect(shareTip('14:10', 242.2 * MiB, 5.3 * GiB, VM)).toBe('14:10 · this container 242.2 MiB (0.5 % of the VM) · VM 5.3 GiB of 46.9 GiB in use');
+      expect(shareTip('14:10', 30.3 * GiB, 40 * GiB, VM)).toBe('14:10 · this container 30.3 GiB (65 % of the VM) · VM 40.0 GiB of 46.9 GiB in use');
+    });
+    it('says what was not measured', () => {
+      expect(shareTip('14:10', null, 5.3 * GiB, VM)).toBe('14:10 · nothing from this container · VM 5.3 GiB of 46.9 GiB in use');
+      expect(shareTip('14:10', null, null, VM)).toBe('14:10 · no readings');
+    });
+  });
+
+  describe('selfMemory', () => {
+    const now = { mem: 242.2 * MiB, mem_peak: 300.5 * MiB };
+    it('is drawn against its own peak in the range: now, and the peak since it started', () => {
+      const m = selfMemory(now, { over: '24h', range: b([30.3 * GiB, 240 * MiB]), startedAt: started, now: NOW })!;
+      expect(m.sentence).toBe('It uses less than a quarter of its peak in the last 24 h.');
+      expect(m.figures).toBe('242.2 MiB now · peak 30.3 GiB in the last 24 h, 300.5 MiB since it started 3 min ago');
+      expect(m.pct).toBeCloseTo(0.78, 2);
+      expect(m.behind).toBeCloseTo(0.97, 2);
+      expect(m.tick).toBeUndefined();
+      expect(m.hot).toBe(false);
+      expect(m.label).toBe(`${m.figures}; full width is its peak in the last 24 h`);
+    });
+    it('is drawn against its limit when that is higher, marked, and warns past three quarters of it', () => {
+      const m = selfMemory({ mem: 900 * MiB, mem_peak: 1000 * MiB }, { over: '24h', range: b([950 * MiB]), limit: GiB, startedAt: started, now: NOW })!;
+      expect(m.sentence).toBe('It uses more than three quarters of its 1.0 GiB limit.');
+      expect(m.tick).toBe(100);
+      expect(m.hot).toBe(true);
+      expect(m.label).toMatch(/; full width is its 1\.0 GiB limit$/);
+    });
+    it('says when it is at its peak', () => {
+      expect(selfMemory({ mem: GiB, mem_peak: GiB }, { over: '24h', range: b([GiB]), startedAt: started, now: NOW })!.sentence).toBe('It is at its peak for the last 24 h.');
+    });
+    it('has only the peak since it started without history in the range, and nothing without a reading', () => {
+      const m = selfMemory(now, { over: '24h', range: b([null]), startedAt: started, now: NOW })!;
+      expect(m.sentence).toBe('No history in the last 24 h yet.');
+      expect(m.figures).toBe('242.2 MiB now · peak 300.5 MiB since it started 3 min ago');
+      expect(m.behind).toBe(100);
+      expect(selfMemory({}, { over: '24h', range: b([GiB]), startedAt: started, now: NOW })).toBeNull();
+    });
+    it('says the range it is measured over', () => {
+      const m = selfMemory(now, { over: '1h', range: b([30.3 * GiB]), startedAt: started, now: NOW })!;
+      expect(m.sentence).toBe('It uses less than a quarter of its peak in the last hour.');
+      expect(m.figures).toMatch(/^242\.2 MiB now · peak 30\.3 GiB in the last hour, /);
+      expect(selfMemory(now, { over: '7d', range: b([null]), startedAt: started, now: NOW })!.sentence).toBe('No history in the last 7 days yet.');
+    });
+  });
+});
+
+describe('pressureSentence', () => {
+  const sum = (cpu: number, mem: number) => ({ psi_cpu_some: { max: cpu, samples: 1 }, psi_mem_some: { max: mem, samples: 1 } });
+  it('waits for the history', () => {
+    expect(pressureSentence(null, '6h')).toBe('Collecting history…');
+  });
+  it('says nothing waited, over the range', () => {
+    expect(pressureSentence(sum(5, 0), '6h')).toBe('Nothing waited long for CPU or memory in the last 6 h.');
+    expect(pressureSentence({}, '1h')).toBe('Nothing waited long for CPU or memory in the last hour.');
+  });
+  it('says what waited, and the worst of it, over the range', () => {
+    expect(pressureSentence(sum(30, 250), '24h')).toBe('In the last 24 h, work waited on CPU up to 3.0 % of the time, and on memory up to 25.0 %.');
+    expect(pressureSentence(sum(0, 250), '7d')).toBe('In the last 7 days, work waited on memory up to 25.0 % of the time.');
   });
 });

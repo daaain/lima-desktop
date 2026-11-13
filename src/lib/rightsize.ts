@@ -1,8 +1,10 @@
-// Right-sizing hints from a window of history. Advice, never applied automatically: the numbers
-// and the reasoning are shown so the person can disagree.
-import type { Instance, OomEvent, Summary } from './api';
+// Right-sizing hints from a window of history: the range chosen (ranges.ts), which every reason
+// names. Advice, never applied automatically: the numbers and the reasoning are shown so the
+// person can disagree.
+import type { Instance, OomEvent, Summary, VmStall } from './api';
 import { GiB, bytes } from './format';
-import { oomLevel, type OomLevel } from './oom';
+import { oomLevel, stallFromMemory, type OomLevel } from './oom';
+import { rangeMs, theLast, type RangeKey } from './ranges';
 
 export type Verdict = 'grow' | 'shrink' | 'ok' | 'unknown';
 export interface Hint {
@@ -14,6 +16,7 @@ export interface Hint {
 }
 
 const DAY_SAMPLES = 20 * 3600; // ~a day at 1 Hz, allowing for gaps; or ~14 days of minute rollups
+const DAY_MS = 86_400_000;
 const roundUpGiB = (n: number) => Math.max(1, Math.ceil(n / GiB)) * GiB;
 
 function enoughHistory(s: Summary | undefined): boolean {
@@ -50,30 +53,63 @@ const ownLimitNote = (n: number) =>
     : `${n} OOM kills were containers hitting their own memory limits`;
 
 /**
- * Memory advice. Only a kill where the whole VM ran out argues for a bigger VM: a container
- * hitting its own limit is fixed by raising that limit, so it's noted, never a reason to grow.
+ * Memory advice. Only the whole VM running out argues for a bigger VM: a kill of the whole VM, or
+ * a stall whose last reading says memory ran out (the VM thrashed instead of killing anything,
+ * which is no lesser sign). A container hitting its own limit is fixed by raising that limit, so
+ * it's noted, never a reason to grow; nor is a stall of unknown cause.
  */
-export function memoryHint(inst: Instance, s: Record<string, Summary>, events?: OomEvent[] | null): Hint {
+export function memoryHint(
+  inst: Instance, s: Record<string, Summary>, over: RangeKey, events?: OomEvent[] | null, stalls?: VmStall[] | null,
+): Hint {
   const kills = killsByLevel(s, events);
-  const hint = vmMemoryHint(inst, s, kills);
-  if (kills.ownLimit === 0 || kills.vm > 0) return hint;
+  const stalled = (stalls ?? []).filter(stallFromMemory).length;
+  const hint = vmMemoryHint(inst, s, over, kills, stalled);
+  if (kills.ownLimit === 0 || kills.vm + stalled > 0) return hint;
   return { ...hint, reason: `${hint.reason} ${ownLimitNote(kills.ownLimit)} — raise those, not the VM's.` };
 }
 
-function vmMemoryHint(inst: Instance, s: Record<string, Summary>, kills: Kills): Hint {
+const times = (n: number) => (n === 1 ? 'once' : `${n} times`);
+
+/** "The VM ran out of memory …": how often, and how when it both killed and stalled. */
+function ranOut(killed: number, stalled: number, over: RangeKey): string {
+  const when = `in ${theLast(over)}`;
+  if (stalled === 0) return `The VM ran out of memory ${times(killed)} ${when}.`;
+  if (killed === 0) return `The VM ran out of memory and stalled ${times(stalled)} ${when}.`;
+  return `The VM ran out of memory ${times(killed + stalled)} ${when}: it killed a process ${times(killed)} and stalled ${times(stalled)}.`;
+}
+
+/**
+ * Why a peak isn't (yet) a reason to give the VM less: a range shorter than a day can't show a
+ * day's rhythm, so it never says "less" — said only where it otherwise would; and a longer one
+ * that holds less than a day of samples (a new VM, or one rarely running) is said to, always.
+ */
+function caveat(used: Summary, over: RangeKey, couldShrink: boolean): string {
+  if (rangeMs(over) < DAY_MS) return couldShrink ? ' — too short a time to tell whether it could do with less' : '';
+  return enoughHistory(used) ? '' : ' — less than a day of history so far';
+}
+
+function vmMemoryHint(inst: Instance, s: Record<string, Summary>, over: RangeKey, kills: Kills, stalled: number): Hint {
   const used = s.mem_used;
   const full = s.psi_mem_full;
   const total = inst.memory;
-  if (!used?.max) return { dimension: 'memory', verdict: 'unknown', reason: 'No memory history yet.' };
-  if (kills.vm > 0) {
-    const others = [
-      kills.ownLimit && `${plural(kills.ownLimit, 'other kill was a container hitting its own limit', 'other kills were containers hitting their own limits')}.`,
-      kills.unknown && `${plural(kills.unknown, 'more has', 'more have')} no detail.`,
-    ].filter(Boolean);
+  const last = theLast(over);
+  // Running out needs no history to be told: a kill or a stall carries its own evidence (a stall
+  // can outlast the samples around it, or come before any). Only advice from a peak waits for one.
+  if (kills.vm + stalled > 0) {
+    // "other" and "more" follow kills of the whole VM; after stalls alone they'd have nothing to follow.
+    const others = kills.vm
+      ? [
+          kills.ownLimit && `${plural(kills.ownLimit, 'other kill was a container hitting its own limit', 'other kills were containers hitting their own limits')}.`,
+          kills.unknown && `${plural(kills.unknown, 'more has', 'more have')} no detail.`,
+        ]
+      : [
+          kills.ownLimit && `${ownLimitNote(kills.ownLimit)}.`,
+          kills.unknown && `${plural(kills.unknown, 'kill has', 'kills have')} no detail.`,
+        ];
     return {
       dimension: 'memory',
       verdict: 'grow',
-      reason: [`The VM ran out of memory ${kills.vm === 1 ? 'once' : `${kills.vm} times`} in this window.`, ...others].join(' '),
+      reason: [ranOut(kills.vm, stalled, over), ...others.filter(Boolean)].join(' '),
       suggest: roundUpGiB(total * 1.5),
     };
   }
@@ -81,16 +117,17 @@ function vmMemoryHint(inst: Instance, s: Record<string, Summary>, kills: Kills):
     return {
       dimension: 'memory',
       verdict: 'grow',
-      reason: `${plural(kills.unknown, 'process was', 'processes were')} killed for lack of memory; without the kernel's detail it's unknown whether the VM or a container's own limit ran out.`,
+      reason: `${plural(kills.unknown, 'process was', 'processes were')} killed for lack of memory in ${last}; without the kernel's detail it's unknown whether the VM or a container's own limit ran out.`,
       suggest: roundUpGiB(total * 1.5),
     };
   }
+  if (!used?.max) return { dimension: 'memory', verdict: 'unknown', reason: 'No memory history yet.' };
   const stall = full?.p95 ?? full?.avg;
   if (stall != null && stall >= 10) {
     return {
       dimension: 'memory',
       verdict: 'grow',
-      reason: `Every task was stalled on memory ${(stall / 10).toFixed(1)} % of the time (PSI full, p95): the VM is reclaiming hard.`,
+      reason: `Every task waited on memory ${(stall / 10).toFixed(1)} % of the time in ${last} (PSI full, p95): the VM is reclaiming hard.`,
       suggest: roundUpGiB(total * 1.5),
     };
   }
@@ -98,30 +135,32 @@ function vmMemoryHint(inst: Instance, s: Record<string, Summary>, kills: Kills):
     return {
       dimension: 'memory',
       verdict: 'grow',
-      reason: `Peak use ${bytes(used.max)} is over 90 % of ${bytes(total)}.`,
+      reason: `Peak use ${bytes(used.max)} in ${last} is over 90 % of ${bytes(total)}.`,
       suggest: roundUpGiB(used.max * 1.3),
     };
   }
-  if (enoughHistory(used) && used.max < total * 0.5 && total > 2 * GiB) {
+  const couldShrink = used.max < total * 0.5 && total > 2 * GiB;
+  if (enoughHistory(used) && couldShrink) {
     const suggest = Math.max(2 * GiB, roundUpGiB(used.max * 1.3));
     return {
       dimension: 'memory',
       verdict: 'shrink',
-      reason: `Peak use ${bytes(used.max)} is under half of ${bytes(total)}${used.p95 != null ? ` (p95 ${bytes(used.p95)})` : ''}.`,
+      reason: `Peak use ${bytes(used.max)} in ${last} is under half of ${bytes(total)}${used.p95 != null ? ` (p95 ${bytes(used.p95)})` : ''}.`,
       suggest,
     };
   }
   return {
     dimension: 'memory',
     verdict: 'ok',
-    reason: `Peak ${bytes(used.max)} of ${bytes(total)}${enoughHistory(used) ? '' : ' — less than a day of history so far'}.`,
+    reason: `Peak ${bytes(used.max)} of ${bytes(total)} in ${last}${caveat(used, over, couldShrink)}.`,
   };
 }
 
-export function cpuHint(inst: Instance, s: Record<string, Summary>): Hint {
+export function cpuHint(inst: Instance, s: Record<string, Summary>, over: RangeKey): Hint {
   const cpu = s.cpu_mc;
   const psi = s.psi_cpu_some;
   const cap = inst.cpus * 1000;
+  const last = theLast(over);
   if (!cpu?.max) return { dimension: 'cpu', verdict: 'unknown', reason: 'No CPU history yet.' };
   const busy = cpu.p95 ?? cpu.avg ?? 0;
   if (busy > cap * 0.8 || (psi?.p95 ?? 0) >= 200) {
@@ -130,8 +169,8 @@ export function cpuHint(inst: Instance, s: Record<string, Summary>): Hint {
       verdict: 'grow',
       reason:
         busy > cap * 0.8
-          ? `Busy ${(busy / 1000).toFixed(1)} of ${inst.cpus} cores most of the time (p95).`
-          : `Runnable tasks waited for a CPU ${((psi?.p95 ?? 0) / 10).toFixed(0)} % of the time (PSI, p95).`,
+          ? `Busy ${(busy / 1000).toFixed(1)} of ${inst.cpus} cores most of ${last} (p95).`
+          : `Runnable tasks waited for a CPU ${((psi?.p95 ?? 0) / 10).toFixed(0)} % of the time in ${last} (PSI, p95).`,
       suggest: Math.max(inst.cpus + 1, Math.ceil(busy / 1000 / 0.7)),
     };
   }
@@ -139,11 +178,11 @@ export function cpuHint(inst: Instance, s: Record<string, Summary>): Hint {
     return {
       dimension: 'cpu',
       verdict: 'shrink',
-      reason: `Never above ${(cpu.max / 1000).toFixed(1)} of ${inst.cpus} cores in this window.`,
+      reason: `Never above ${(cpu.max / 1000).toFixed(1)} of ${inst.cpus} cores in ${last}.`,
       suggest: Math.max(2, Math.ceil((cpu.max / 1000) * 1.5)),
     };
   }
-  return { dimension: 'cpu', verdict: 'ok', reason: `p95 ${(busy / 1000).toFixed(2)} of ${inst.cpus} cores.` };
+  return { dimension: 'cpu', verdict: 'ok', reason: `p95 ${(busy / 1000).toFixed(2)} of ${inst.cpus} cores in ${last}.` };
 }
 
 export function diskHint(inst: Instance, latest: Record<string, number>): Hint {

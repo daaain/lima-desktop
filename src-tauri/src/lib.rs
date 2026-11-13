@@ -8,6 +8,7 @@ pub mod oom;
 pub mod podman;
 pub mod probe;
 pub mod settings;
+pub mod stall;
 pub mod store;
 
 use std::path::PathBuf;
@@ -101,6 +102,7 @@ pub fn run() {
             commands::summary,
             commands::entities,
             commands::oom_events,
+            commands::stalls,
         ])
         .run(ctx)
         .expect("error while running tauri application");

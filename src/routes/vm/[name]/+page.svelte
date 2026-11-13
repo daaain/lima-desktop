@@ -2,13 +2,15 @@
   import { tick } from 'svelte';
   import { page } from '$app/state';
   import { live } from '$lib/live.svelte';
-  import { api, type ContainerLive, type OomEvent, type Series } from '$lib/api';
+  import { api, type ContainerLive, type OomEvent, type Series, type VmStall } from '$lib/api';
   import { bytes } from '$lib/format';
   import { containersSentence, vmHeadline } from '$lib/almanac';
   import { History } from '$lib/history.svelte';
   import type { Hint } from '$lib/rightsize';
-  import { RANGES, rangeMs, type RangeKey } from '$lib/ranges';
-  import { OOM_LEVEL_LABEL, oomCause, oomLevel, oomMarkers, oomWho } from '$lib/oom';
+  import { rangeReaching, theLast, type RangeKey } from '$lib/ranges';
+  import { inOrder } from '$lib/inOrder';
+  import { range, rangeWindow } from '$lib/range.svelte';
+  import { OOM_LEVEL_LABEL, STALL_LABEL, oomCause, oomLevel, oomMarkers, oomWho, outOfMemoryNote, stallCause, stalledNow, stallMarkers } from '$lib/oom';
   import VmActions from '$lib/VmActions.svelte';
   import Sizing from '$lib/Sizing.svelte';
   import ContainerLine from '$lib/ContainerLine.svelte';
@@ -23,10 +25,14 @@
   const name = $derived(decodeURIComponent(page.params.name ?? ''));
   const vm = $derived(live.vm(name));
 
-  let range = $state<RangeKey>('1h');
-  let to = $state(Date.now());
-  const from = $derived(to - rangeMs(range));
+  // The app's range, chosen in the masthead: short ones follow live, longer ones are fetched once.
+  const span = rangeWindow();
+  const to = $derived(span.to);
+  const from = $derived(span.from);
   let series = $state<Series | null>(null);
+  // The VM the charts are of: another's never stand in, even for a moment after going to this one.
+  let seriesFor = $state<string | null>(null);
+  const seriesShown = $derived(seriesFor === name ? series : null);
   // Open container details, any number, each under its own line.
   let open = $state<string[]>([]);
   let actionError = $state<string | null>(null);
@@ -34,59 +40,112 @@
   let hints = $state<Hint[]>([]);
 
   const history = new History();
-  history.follow(() => (vm?.containers ?? []).filter((c) => c.state === 'running').map((c) => c.entity));
-  // The memory bars' full width: the largest peak among this VM's containers.
-  const memScale = $derived(Math.max(1, ...(vm?.containers ?? []).map((c) => Math.max(c.latest.mem ?? 0, c.latest.mem_peak ?? 0))));
+  // Each running container's range, and the VM's: a line draws its memory as its part of the VM's.
+  history.follow(() => [vm?.entity, ...(vm?.containers ?? []).filter((c) => c.state === 'running').map((c) => c.entity)]);
 
-  // Short ranges follow live; longer ones are fetched once per choice.
+  // Derived on its own: `vm` is a new object at every snapshot, and the series would otherwise be
+  // fetched again every second whatever the range.
+  const entity = $derived(vm?.entity);
+  // A live range's refreshes overlap: inOrder() keeps a late one from replacing a newer one. And an
+  // answer for a range (or VM) no longer on screen is dropped, or a week's charts could land
+  // after, and stay under, the day chosen since.
+  const seriesInOrder = inOrder();
   $effect(() => {
-    to = Date.now();
-    if (rangeMs(range) > 6 * 3_600_000) return;
-    const t = setInterval(() => (to = Date.now()), 5000);
-    return () => clearInterval(t);
-  });
-  $effect(() => {
-    const entity = vm?.entity;
     if (entity == null) return;
-    api.series(entity, from, to).then((s) => (series = s));
-  });
-
-  // OOM kills in the range; when there are none, the latest one ever (to offer a range that has it).
-  let oom = $state<OomEvent[]>([]);
-  let latestOom = $state<OomEvent | null>(null);
-  let oomError = $state<string | null>(null);
-  let oomLoaded = $state(false);
-  $effect(() => {
-    const [vmName, f, t] = [name, from, to];
-    api.oomEvents(vmName, f, t).then(
-      async (events) => {
-        oom = events;
-        latestOom = events.length ? null : ((await api.oomEvents(vmName, 0, Date.now(), 1))[0] ?? null);
-        oomError = null;
-        oomLoaded = true;
+    const asked = { vm: name, over: range.key };
+    const current = () => asked.vm === name && asked.over === range.key;
+    seriesInOrder(api.series(entity, from, to)).then(
+      (s) => {
+        if (current()) (series = s), (seriesFor = asked.vm);
       },
-      (e) => (oomError = String(e)),
+      // Failed for what's on screen: no charts, rather than another range's beside this one's figures.
+      () => {
+        if (current()) (series = null), (seriesFor = asked.vm);
+      },
     );
   });
-  const oomByLevel = $derived({
-    own: oom.filter((e) => ['container', 'cgroup'].includes(oomLevel(e))).length,
-    vm: oom.filter((e) => oomLevel(e) === 'vm').length,
-  });
-  const arrivedForOom = $derived(page.url.hash === '#oom');
 
-  /** The shortest range that reaches back to `ts`. */
-  function showRangeFor(ts: number) {
-    const age = Date.now() - ts;
-    range = (RANGES.find((r) => r.ms >= age) ?? RANGES[RANGES.length - 1]).key;
+  // OOM kills and stalls in the range; when there are none, when the latest was (to offer a range
+  // that has it). A stall beginning or ending fetches them again.
+  let oom = $state<OomEvent[]>([]);
+  let stalls = $state<VmStall[]>([]);
+  let latestTs = $state<number | null>(null);
+  let oomError = $state<string | null>(null);
+  // The VM and range the kills and stalls are for, and the error: apart, so a failed lookup for a
+  // range just chosen never makes the previous range's kills look like its own. What's shown, and
+  // what Sizing judges alongside a summary of the same, is only what's for the selection on screen.
+  type Selection = { vm: string; over: RangeKey };
+  let dataFor = $state<Selection | null>(null);
+  let errorFor = $state<Selection | null>(null);
+
+  /** The kills and stalls in [f, t]; when there are none, also when the latest was. */
+  async function outOfMemory(vmName: string, f: number, t: number) {
+    const [events, found] = await Promise.all([api.oomEvents(vmName, f, t), api.stalls(vmName, f, t)]);
+    let latest: number | null = null;
+    if (!events.length && !found.length) {
+      const [kill, stall] = await Promise.all([api.oomEvents(vmName, 0, Date.now(), 1), api.stalls(vmName, 0, Date.now(), 1)]);
+      const times = [kill[0]?.ts, stall[0]?.start].filter((t): t is number => t != null);
+      latest = times.length ? Math.max(...times) : null;
+    }
+    return { events, found, latest };
   }
 
-  // Arriving from an OOM badge (/vm/<name>#oom): widen the range to the latest kill if need be,
-  // then scroll to the panel once it exists.
+  // A range chosen, or a stall begun or ended, while an earlier fetch is on its way: that one's
+  // answer, or failure, mustn't replace the newer one's when it lands after it.
+  const oomInOrder = inOrder();
+  $effect(() => {
+    const [vmName, f, t] = [name, from, to];
+    const asked = { vm: vmName, over: range.key };
+    void vm?.stalledSince;
+    oomInOrder(outOfMemory(vmName, f, t)).then(
+      ({ events, found, latest }) => {
+        oom = events;
+        stalls = found;
+        latestTs = latest;
+        dataFor = asked;
+        oomError = null;
+        errorFor = null;
+      },
+      // Either step failing ends the loading as an error, so nothing waits on it for ever.
+      (e) => {
+        oomError = String(e);
+        errorFor = asked;
+      },
+    );
+  });
+  // Whether what has landed is for the VM and range on screen. inOrder() keeps one selection's
+  // overlapping refreshes in order, but a range just chosen can have the previous range's answer
+  // (or failure) land before its own: until its own does, nothing is listed under its name.
+  const onScreen = (s: Selection | null) => s?.vm === name && s?.over === range.key;
+  const oomCurrent = $derived(onScreen(dataFor));
+  const errorShown = $derived(onScreen(errorFor) ? oomError : null);
+  // For Sizing: this selection's kills and stalls; null when they couldn't be had; undefined until then.
+  const eventsShown = $derived(errorShown ? null : oomCurrent ? { oom, stalls } : undefined);
+  // Kills and stalls in one list, newest first.
+  type OomRow = { ts: number; kill: OomEvent; stall?: never } | { ts: number; stall: VmStall; kill?: never };
+  const oomRows: OomRow[] = $derived(
+    !oomCurrent ? [] : [...oom.map((kill) => ({ ts: kill.ts, kill })), ...stalls.map((stall) => ({ ts: stall.start, stall }))].sort((a, b) => b.ts - a.ts),
+  );
+  const now = $derived(live.snapshot?.updated ?? to);
+  // Only a stall going on follows the clock, so the chart isn't redrawn every poll for nothing.
+  const memoryMarkers = $derived(
+    !oomCurrent ? [] : [...oomMarkers(oom), ...stallMarkers(stalls, stalls.some((s) => s.endReason == null) ? now : to)],
+  );
+  const latestShown = $derived(oomCurrent ? latestTs : null);
+  const arrivedForOom = $derived(page.url.hash === '#oom');
+
+  /** The shortest range that reaches back to `ts`: the app's, so every page then shows it too. */
+  function showRangeFor(ts: number) {
+    range.choose(rangeReaching(Date.now() - ts));
+  }
+
+  // Arriving from an OOM or stalled badge (/vm/<name>#oom): widen the app's range to the latest
+  // kill or stall if need be — that is what was asked to be seen — then scroll to the panel once it exists.
   let arrivedHandled = false;
   $effect(() => {
-    if (!arrivedForOom || !oomLoaded || arrivedHandled) return;
+    if (!arrivedForOom || !(oomCurrent || errorShown) || arrivedHandled) return;
     arrivedHandled = true;
-    if (!oom.length && latestOom) showRangeFor(latestOom.ts);
+    if (!oomRows.length && latestShown != null) showRangeFor(latestShown);
     tick().then(() => document.getElementById('oom')?.scrollIntoView({ block: 'start' }));
   });
 
@@ -142,15 +201,10 @@
   {@const l = vm.latest}
   <div class="crumbs">
     <span class="muted"><a href="/">All VMs</a> · {i.status.toLowerCase()} · {i.vmType} · {i.arch} · Lima {i.limaVersion}</span>
-    <div class="ranges" role="group" aria-label="Range">
-      {#each RANGES as r}
-        <button class="range" class:active={range === r.key} aria-pressed={range === r.key} onclick={() => (range = r.key)}>{r.label}</button>
-      {/each}
-    </div>
   </div>
 
   <div class="title">
-    <h1 class="headline">{vmHeadline(vm, hints)}</h1>
+    <h1 class="headline">{vmHeadline(vm, hints, range.key)}</h1>
     <VmActions inst={i} />
   </div>
 
@@ -165,53 +219,68 @@
   {:else if i.marker.state === 'unreadable'}
     <p class="error">Its managed-by marker can't be read, so every change is locked here. Use <code>limactl</code> directly, or fix <code>{i.dir}/managed-by.json</code>.</p>
   {/if}
+  {#if vm.stalledSince}<p class="error">{stalledNow(name, vm.stalledSince, now)}</p>{/if}
   {#if vm.probeError}<p class="error">metrics: {vm.probeError}</p>{/if}
   {#if vm.podmanError}<p class="error">podman: {vm.podmanError}</p>{/if}
 
-  <Sizing inst={i} entity={vm.entity} latest={l} {from} {to} {series} markers={oomMarkers(oom)} oomEvents={oomError ? null : oomLoaded ? oom : undefined} bind:hints />
+  <Sizing inst={i} entity={vm.entity} latest={l} {from} {to} over={range.key} series={seriesShown} markers={memoryMarkers}
+    oomEvents={eventsShown === undefined ? undefined : eventsShown && eventsShown.oom} stalls={eventsShown === undefined ? undefined : eventsShown && eventsShown.stalls}
+    eventsFor={eventsShown === undefined ? null : { vm: name, over: range.key }} bind:hints />
 
-  {#if oom.length || latestOom || oomError || arrivedForOom}
+  {#if oomRows.length || latestShown != null || errorShown || arrivedForOom || vm.stalledSince}
     <section class="panel" id="oom">
-      <h2 class="head">Out-of-memory kills</h2>
-      {#if oom.length}
-        <p class="note">
-          {oom.length} in this range, newest first ·
-          {oomByLevel.own} hit a container's (or cgroup's) own limit ·
-          {oomByLevel.vm} because the whole VM ran out
-        </p>
-      {/if}
-      {#if oomError}<p class="error">{oomError}</p>{/if}
+      <h2 class="head">Out of memory</h2>
+      {#if oomRows.length}<p class="note">{outOfMemoryNote(oom, stalls, range.key)}</p>{/if}
+      {#if errorShown}<p class="error">{errorShown}</p>{/if}
       {#if vm.oomDetailError}
         <p class="note">No kernel detail: {vm.oomDetailError}. Kills are still counted, but not always which container, or why.</p>
       {/if}
-      {#if !oom.length}
+      {#if !oomCurrent}
+        {#if !errorShown}<p class="note">…</p>{/if}
+      {:else if !oomRows.length}
         <p class="note">
-          {#if latestOom}
-            None in this range; the latest was {when(latestOom.ts)}.
-            <button class="link" onclick={() => latestOom && showRangeFor(latestOom.ts)}>Show it</button>
+          {#if latestShown != null}
+            None in {theLast(range.key)}; the latest was {when(latestShown)}.
+            <button class="link" onclick={() => latestShown != null && showRangeFor(latestShown)}>Show it</button>
           {:else}
-            No OOM kills recorded in this VM.
+            No OOM kills or stalls recorded in this VM.
           {/if}
         </p>
       {:else}
         <table class="list">
           <thead><tr><th>time</th><th>container</th><th>process</th><th>level</th><th>cause</th></tr></thead>
           <tbody>
-            {#each oom as e}
-              {@const who = oomWho(e, vm.containers)}
-              {@const level = oomLevel(e)}
-              <tr class:clickable={!who.removed && e.containerId} onclick={() => { if (!who.removed && e.containerId) show(e.containerId); }}>
-                <td class="when num">{when(e.ts)}</td>
+            {#each oomRows as row}
+              {@const ref = row.kill ?? row.stall}
+              {@const who = ref.containerId ? oomWho(ref, vm.containers) : null}
+              {@const shown = who && !who.removed ? ref.containerId : null}
+              <tr class:clickable={!!shown} onclick={() => { if (shown) show(shown); }}>
+                <td class="when num">{when(row.ts)}</td>
                 <td>
-                  <span class="cname">{who.name}</span>{#if who.context}<span class="muted cid">{who.context}</span>{/if}
-                  {#if who.removed}<span class="badge" title="This container no longer exists; its name comes from the history.">removed</span>{/if}
+                  {#if who}
+                    <span class="cname">{who.name}</span>{#if who.context}<span class="muted cid">{who.context}</span>{/if}
+                    {#if who.removed}<span class="badge" title="This container no longer exists; its name comes from the history.">removed</span>{/if}
+                  {:else if row.kill}
+                    <span class="cname">not in a container</span>
+                  {:else}<span class="none">–</span>{/if}
+                  {#if row.stall && who}
+                    <span class="muted cid" title="The container using the most memory at the last reading before the VM stopped responding: the first place to look, not necessarily the cause.">largest, {bytes(row.stall.containerMem)}</span>
+                  {/if}
                 </td>
-                <td>
-                  {e.process ?? '–'}{#if e.pid != null}<span class="muted cid">pid {e.pid}</span>{/if}
-                  {#if e.anonRss != null}<span class="muted cid" title="anon-rss: the killed process's own memory">{bytes(e.anonRss)}</span>{/if}
-                </td>
-                <td><span class="badge" class:alert={level === 'vm'}>{OOM_LEVEL_LABEL[level]}</span></td>
-                <td class="cause">{oomCause(e, i.memory)}</td>
+                {#if row.kill}
+                  {@const e = row.kill}
+                  {@const level = oomLevel(e)}
+                  <td>
+                    {e.process ?? '–'}{#if e.pid != null}<span class="muted cid">pid {e.pid}</span>{/if}
+                    {#if e.anonRss != null}<span class="muted cid" title="anon-rss: the killed process's own memory">{bytes(e.anonRss)}</span>{/if}
+                  </td>
+                  <td><span class="badge" class:alert={level === 'vm'}>{OOM_LEVEL_LABEL[level]}</span></td>
+                  <td class="cause">{oomCause(e, i.memory)}</td>
+                {:else}
+                  <td class="none">–</td>
+                  <td><span class="badge alert">{STALL_LABEL}</span></td>
+                  <td class="cause">{stallCause(row.stall, i.memory, now)}</td>
+                {/if}
               </tr>
             {/each}
           </tbody>
@@ -231,8 +300,8 @@
     {#if actionError}<p class="error">{actionError}</p>{/if}
     {#if vm.containers.length}
       <p class="note">
-        Memory: dark is now, pale the peak since it started, full width the largest peak here ({bytes(memScale)}). CPU: full width is this VM's {i.cpus} cores.
-        Above each, the last 24 hours. Compose projects are read-only groups. <a href={`/containers?vm=${encodeURIComponent(name)}`}>Filter and search them in Containers.</a>
+        Memory: full width is the container's own limit, else this VM's {bytes(i.memory)}; dark is now, pale the peak since it started, the tick the peak in {theLast(range.key)}.
+        Above it, the VM over {theLast(range.key)}: its memory in use, soft, and this container's part in front. CPU: full width is this VM's {i.cpus} cores, with {theLast(range.key)} above. Compose projects are read-only groups. <a href={`/containers?vm=${encodeURIComponent(name)}`}>Filter and search them in Containers.</a>
       </p>
       <div class="lines">
         <div class="narrow-order"><OrderPicker columns={CONTAINER_COLUMNS} {ordering} /></div>
@@ -247,11 +316,11 @@
           {#if groups.length > 1 || g.project}<h3 class="group serif">{g.project ?? 'Not in a compose project'}</h3>{/if}
           {#each g.containers as c (c.id)}
             <div class="row" animate:glide>
-              <ContainerLine vm={name} {c} history={history.get(c.entity)} {memScale} vmCpus={i.cpus} vmMemory={i.memory} second="activity" now={live.snapshot?.updated}
+              <ContainerLine vm={name} {c} history={history.get(c.entity)} vmHistory={history.get(vm.entity)} vmCpus={i.cpus} vmMemory={i.memory} second="activity" now={live.snapshot?.updated}
                 selected={open.includes(c.id)} onselect={() => toggle(c.id)} onerror={(e) => (actionError = e)} />
               {#if open.includes(c.id)}
                 <div id={`detail-${c.id}`} transition:unfold>
-                  <ContainerDetail vm={name} {c} {from} {to} vmMemory={i.memory} oomMarkers={oomMarkers(oom, c.id)} onclose={() => toggle(c.id)} />
+                  <ContainerDetail vm={name} {c} {from} {to} over={range.key} vmMemory={i.memory} oomMarkers={oomCurrent ? oomMarkers(oom, c.id) : []} onclose={() => toggle(c.id)} />
                 </div>
               {/if}
             </div>
@@ -265,14 +334,12 @@
 
 <style>
   .crumbs { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0.6rem 1.5rem; font-size: 0.9rem; }
-  .ranges { display: flex; gap: 0.3rem; flex-wrap: wrap; }
-  .range { height: 1.9rem; padding: 0 0.8rem; font-size: 0.82rem; }
   .title { display: flex; align-items: flex-end; justify-content: space-between; gap: 1rem 2rem; flex-wrap: wrap; }
   .title .headline { flex: 1 1 30rem; }
   .title.small { align-items: baseline; }
   .title.small .head { flex: 1 1 20rem; }
   .panel { display: grid; gap: 0.7rem; margin-top: 1.4rem; }
-  .lines { --container-columns: minmax(13rem, 1.3fr) minmax(9rem, 1fr) 8.5rem minmax(7rem, 0.6fr) 5.5rem 6.5rem 10rem; border-bottom: 1px solid var(--border); }
+  .lines { --container-columns: minmax(13rem, 1.3fr) minmax(9rem, 1fr) 9.5rem minmax(7rem, 0.6fr) 5.5rem 6.5rem 10rem; border-bottom: 1px solid var(--border); }
   .column-heads { grid-template-columns: var(--container-columns); column-gap: 1.4rem; margin-top: 0.1rem; } /* 0.3rem less: SortHead's min-height */
   .column-heads + .group, .column-heads + .row > :global(.line) { border-top: 0; }
   .group { margin: 0; padding: 1rem 0 0.4rem; font-size: 1.05rem; font-weight: 500; color: var(--muted); border-top: 1px solid var(--border); }
@@ -287,5 +354,18 @@
   @media (max-width: 860px) {
     .column-heads { display: none; }
     .narrow-order { display: block; padding-bottom: 0.5rem; }
+  }
+  /* Five columns don't fit a phone: the time, the badges and a process with its pid and size are
+     as narrow as they get, and together wider than the page (which would then scroll sideways).
+     Each kill or stall wraps instead: its time, who, process and level on as few lines as fit, why
+     on lines of its own; a dash for what a stall has none of goes. */
+  @media (max-width: 640px) {
+    #oom table, #oom tbody, #oom tr { display: block; }
+    #oom thead { display: none; }
+    #oom tr { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.25rem 0.6rem; padding: 0.6rem 0; border-bottom: 1px solid var(--border); }
+    #oom td { display: block; padding: 0; border: 0; }
+    #oom td.cause { flex-basis: 100%; }
+    #oom .none { display: none; }
+    #oom .badge { margin-left: 0; }
   }
 </style>

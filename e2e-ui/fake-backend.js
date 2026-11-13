@@ -1,13 +1,14 @@
 // A stand-in for the Rust backend, loaded into the page before the app: it answers the commands
 // in src/lib/api.ts with an invented fleet. Nothing here is recorded from a real machine. The fleet is
-// made to exercise the UI: a VM past three quarters of its memory (a leak), a CPU-bound one with
-// an OOM kill, one with a nearly full disk and a managed-by marker, one whose podman is too old,
-// an idle one, and stopped and broken ones; image stores with superseded tags, dangling images and
+// made to exercise the UI: a VM past three quarters of its memory (a leak) with a container restarted after growing for hours, a CPU-bound one with
+// an OOM kill and a stall from memory, one with a nearly full disk and a managed-by marker, one whose podman is
+// too old and that has stopped responding, an idle one, and stopped and broken ones; image stores with superseded tags, dangling images and
 // an image with two tags, and volumes some no container uses (anonymous ones among them). Every value is a function of the entity and the time,
 // so two runs at the same (fixed) time draw the same picture.
 (() => {
   const GiB = 1024 ** 3;
   const MiB = 1024 ** 2;
+  const KiB = 1024;
   const HOUR = 3_600_000;
   const NOW = Date.now();
 
@@ -41,11 +42,34 @@
     },
     // Grows steadily across the last week: a disk filling.
     filling: (from, to, now) => (t) => from + (to - from) * Math.max(0, 1 - (now - t) / (7 * 24 * HOUR)),
+    // `base`, but between `from` and `to` climbing ever faster to `peak`: memory running out.
+    climb: (base, from, to, peak) => (t, id) => {
+      const level = base(t, id);
+      if (t < from || t > to) return level;
+      return level + (peak - level) * ((t - from) / (to - from)) ** 2;
+    },
+    // One shape until `at`, another after: a container restarted.
+    restarted: (before, at, after) => (t, id) => (t < at ? before(t, id) : after(t, id)),
   };
+
+  // atlas's warehouse emulator grew to about 18 GiB over five hours and was restarted three minutes
+  // ago: its cgroup's peak (mem_peak) started again, at 300 MiB, while its history keeps the 18 GiB.
+  const WAREHOUSE_RESTART = NOW - 3 * 60_000;
+
+  // harbor ran out of memory two hours ago: its devbox grew for 45 minutes until the VM stopped
+  // answering, and nothing was measured until it answered again 17 minutes later, the devbox
+  // back to its usual size. No process was killed, so its OOM counters and uptimes carry on.
+  const HARBOR_STALL = NOW - 2 * HOUR;
+  const HARBOR_CLIMB = HARBOR_STALL - 45 * 60_000;
+  const HARBOR_SILENT = [HARBOR_STALL, HARBOR_STALL + 17 * 60_000];
+  // An hour before that, its app hit its own 1 GiB limit and node was killed: the VM's OOM counter
+  // steps up then, so a range that reaches back to it counts the kill.
+  const HARBOR_KILL = NOW - 3 * HOUR;
 
   const START = NOW - 5 * 24 * HOUR; // how far back the invented history goes
   let nextEntity = 1;
   const metricsOf = new Map(); // entity → { metric: (t) => value }
+  const silentOf = new Map(); // entity → [from, to]: when nothing was measured
 
   const marker = (o = {}) => ({ state: 'none', locked: [], ...o });
   const instance = (name, status, cpus, memGiB, diskGiB, o = {}) => ({
@@ -54,11 +78,16 @@
     marker: marker(), ...o,
   });
 
-  function entity(metrics) {
+  function entity(metrics, silent) {
     const id = nextEntity++;
     metricsOf.set(id, Object.fromEntries(Object.entries(metrics).map(([k, f]) => [k, typeof f === 'function' ? (t) => f(t, id) : () => f])));
+    if (silent) silentOf.set(id, silent);
     return id;
   }
+  const isSilent = (id, t) => {
+    const s = silentOf.get(id);
+    return !!s && t > s[0] && t < s[1];
+  };
   const latest = (id, t) => Object.fromEntries(Object.entries(metricsOf.get(id)).map(([k, f]) => [k, Math.round(f(t))]));
   const scaled = (shape, scale) => (t, id) => Math.max(0, shape(t, id)) * scale;
 
@@ -86,6 +115,7 @@
             net_tx_bps: scaled(shapes.bursty(0.02, 1, 0.2), (o.net ?? 4000) * 0.7),
           }
         : {},
+      o.silent,
     );
     return {
       id: (n.toString(16).padStart(4, '0') + 'c0ffee').repeat(7).slice(0, 64), name, image, imageId: hexOf(image),
@@ -117,8 +147,11 @@
       host_rss: scaled(shape.hostRss ?? shape.mem, mem * 0.9),
       host_cpu_mc: scaled(shape.cpu, inst.cpus * 1100),
       host_disk_alloc: scaled(shape.disk, inst.disk * 1.05),
-    });
-    return { instance: inst, entity: id, latest: {}, containers, probeError: o.probeError, podmanError: o.podmanError, oomDetailError: null };
+    }, o.silent);
+    return {
+      instance: inst, entity: id, latest: {}, containers, probeError: o.probeError, podmanError: o.podmanError, oomDetailError: null,
+      stalledSince: o.stalledSince ?? null,
+    };
   }
 
   const local = (name) => `localhost/${name}:latest`;
@@ -129,7 +162,10 @@
       [
         service('atlas', 'frontend', local('atlas_frontend'), { memMiB: 690, peak: 1.9, pids: 70, cpu: shapes.daily(0.01, 0.4) }),
         service('atlas', 'graph-api', local('atlas_graph-api'), { memMiB: 514, cpu: shapes.daily(0.02, 0.9) }),
-        service('atlas', 'warehouse', 'ghcr.io/example/warehouse-emulator:0.6.6', { memMiB: 2600, mem: shapes.leak(0.3, 1.9, 0.8), peak: 2.1, upHours: 7 }),
+        service('atlas', 'warehouse', 'ghcr.io/example/warehouse-emulator:0.6.6', {
+          memMiB: 240, peak: 1.25, upHours: 0.05,
+          mem: shapes.restarted(shapes.climb(shapes.flat(1, 0.06), WAREHOUSE_RESTART - 5 * HOUR, WAREHOUSE_RESTART, 76), WAREHOUSE_RESTART, shapes.flat(1, 0.06)),
+        }),
         service('atlas', 'scraper', local('atlas_scraper'), { memMiB: 448 }),
         service('atlas', 'research', local('atlas_research'), { memMiB: 370 }),
         service('atlas', 'integrations', local('atlas_integrations'), { memMiB: 309 }),
@@ -144,13 +180,26 @@
     ),
     vm(
       instance('harbor', 'Running', 4, 8, 60),
-      { cpu: shapes.bursty(0.25, 0.97, 0.45), mem: shapes.daily(0.42, 0.62), disk: shapes.flat(0.44, 0), psiCpu: shapes.bursty(0.05, 0.6, 0.4), psiMem: shapes.bursty(0, 0.08, 0.05) },
+      {
+        cpu: shapes.bursty(0.25, 0.97, 0.45),
+        // To the stall's last reading: 7.4 GiB of 7.75 GiB, memory pressure 25 %, all of it 4 %.
+        mem: shapes.climb(shapes.daily(0.42, 0.62), HARBOR_CLIMB, HARBOR_STALL, 0.955),
+        disk: shapes.flat(0.44, 0),
+        psiCpu: shapes.bursty(0.05, 0.6, 0.4),
+        psiMem: shapes.climb(shapes.bursty(0, 0.08, 0.05), HARBOR_CLIMB, HARBOR_STALL, 0.25),
+        psiMemFull: shapes.climb(shapes.flat(0, 0), HARBOR_CLIMB, HARBOR_STALL, 0.04),
+      },
       [
-        container('harbor-devbox', local('harbor-devbox'), { memMiB: 2500, cpu: shapes.bursty(0.4, 2.6, 0.45), upHours: 38 }),
-        service('harbor', 'app', 'docker.io/library/node:24-trixie-slim', { memMiB: 900, limitMiB: 1024, peak: 1.13, oomKills: 1, cpu: shapes.bursty(0.2, 1.1, 0.4), upHours: 3 }),
-        service('harbor', 'cache', 'docker.io/library/valkey:8', { memMiB: 64 }),
+        container('harbor-devbox', local('harbor-devbox'), {
+          memMiB: 2500, mem: shapes.climb(shapes.flat(1, 0.06), HARBOR_CLIMB, HARBOR_STALL, 2.4), peak: 2.4,
+          cpu: shapes.bursty(0.4, 2.6, 0.45), upHours: 38, silent: HARBOR_SILENT,
+        }),
+        service('harbor', 'app', 'docker.io/library/node:24-trixie-slim', {
+          memMiB: 900, limitMiB: 1024, peak: 1.13, oomKills: 1, cpu: shapes.bursty(0.2, 1.1, 0.4), upHours: 3, silent: HARBOR_SILENT,
+        }),
+        service('harbor', 'cache', 'docker.io/library/valkey:8', { memMiB: 64, silent: HARBOR_SILENT }),
       ],
-      { oomKills: 1 },
+      { oomKills: (t) => (t >= HARBOR_KILL ? 1 : 0), silent: HARBOR_SILENT },
     ),
     vm(
       instance('quill', 'Running', 4, 8, 60, {
@@ -164,6 +213,7 @@
     ]),
     vm(instance('ember', 'Running', 2, 4, 20), { cpu: shapes.flat(0.02, 0.01), mem: shapes.flat(0.21, 0.01), disk: shapes.flat(0.36, 0) }, [], {
       podmanError: 'podman 4.3.1 in this VM is too old: Lima Desktop needs podman 5 or newer',
+      stalledSince: NOW - 4 * 60_000,
     }),
     vm(instance('foundry', 'Stopped', 12, 80, 100), null, [], { imageGiB: 61 }),
     vm(instance('kiln', 'Stopped', 8, 16, 60), null, [], { imageGiB: 22 }),
@@ -198,7 +248,8 @@
     return { ...settings };
   }
 
-  // Each point's band: `per` sub-samples spread across the point's span.
+  // Each point's band: five sub-samples spread across the point's span, leaving out those taken
+  // while the entity was silent; a point with none left is a gap (null), as the backend gives it.
   function series({ entity: id, from, to, points = 600 }) {
     const metrics = metricsOf.get(id) ?? {};
     const lo = Math.max(from, START);
@@ -209,10 +260,11 @@
     for (const [key, f] of Object.entries(metrics)) {
       const band = { min: [], max: [], avg: [] };
       for (const t of ts) {
-        const samples = [0, 1, 2, 3, 4].map((i) => f(t - (step * i) / 5));
-        band.min.push(Math.round(Math.min(...samples)));
-        band.max.push(Math.round(Math.max(...samples)));
-        band.avg.push(Math.round(samples.reduce((a, b) => a + b, 0) / samples.length));
+        const samples = [0, 1, 2, 3, 4].map((i) => t - (step * i) / 5).filter((at) => !isSilent(id, at)).map(f);
+        const none = samples.length === 0;
+        band.min.push(none ? null : Math.round(Math.min(...samples)));
+        band.max.push(none ? null : Math.round(Math.max(...samples)));
+        band.avg.push(none ? null : Math.round(samples.reduce((a, b) => a + b, 0) / samples.length));
       }
       out[key] = band;
     }
@@ -222,11 +274,12 @@
   function summary({ entity: id, from, to }) {
     const s = series({ entity: id, from, to, points: 300 });
     const seconds = Math.floor((to - Math.max(from, START)) / 1000);
+    const known = (xs) => xs.filter((x) => x != null);
     return Object.fromEntries(
       Object.entries(s.metrics).map(([key, band]) => {
-        const sorted = [...band.avg].sort((a, b) => a - b);
+        const sorted = known(band.avg).sort((a, b) => a - b);
         return [key, {
-          min: Math.min(...band.min), max: Math.max(...band.max), avg: sorted.reduce((a, b) => a + b, 0) / sorted.length,
+          min: Math.min(...known(band.min)), max: Math.max(...known(band.max)), avg: sorted.reduce((a, b) => a + b, 0) / sorted.length,
           p95: sorted[Math.floor(sorted.length * 0.95)], samples: seconds,
         }];
       }),
@@ -235,21 +288,43 @@
 
   const harborApp = fleet[1].containers[1];
   const oom = [{
-    ts: NOW - 3 * HOUR, vm: 'harbor', source: 'kernel', constraint: 'CONSTRAINT_MEMCG', containerId: harborApp.id,
+    ts: HARBOR_KILL, vm: 'harbor', source: 'kernel', constraint: 'CONSTRAINT_MEMCG', containerId: harborApp.id,
     cgroup: `/machine.slice/libpod-${harborApp.id}.scope`, process: 'node', pid: 4211, memLimit: 1024 * MiB, anonRss: 1003 * MiB,
     detail: null, containerName: harborApp.name, composeProject: 'harbor', composeService: 'app',
   }];
 
+  // VMs that stopped responding: harbor two hours ago, its memory nearly full and its devbox the
+  // largest, until it answered again (HARBOR_STALL, above); ember right now.
+  const harborDevbox = fleet[1].containers[0];
+  const stall = (vm, start, o) => ({
+    vm, start, end: null, endReason: null, memUsed: null, memTotal: null, psiMemSome: null, psiMemFull: null,
+    containerId: null, containerMem: null, containerName: null, composeProject: null, composeService: null, ...o,
+  });
+  const stalls = [
+    stall('harbor', HARBOR_SILENT[0], {
+      end: HARBOR_SILENT[1], endReason: 'resumed', memUsed: 7.4 * GiB, memTotal: 7.75 * GiB, psiMemSome: 250, psiMemFull: 40,
+      containerId: harborDevbox.id, containerMem: 2.4 * 2500 * MiB, containerName: harborDevbox.name,
+    }),
+    stall('ember', fleet[4].stalledSince, { memUsed: 3.7 * GiB, memTotal: 3.75 * GiB, psiMemSome: 310, psiMemFull: 120 }),
+  ];
+  const overlaps = (s, from, to) => s.start <= to && (s.endReason == null || (s.end ?? s.start) >= from);
+
   // Each VM's image store: the images its containers run (any state), and what they left behind —
   // a superseded tag, dangling images from rebuilds, a base no container runs. `own` is what
   // `system df` says an image holds alone; the rest of its size is layers shared with others.
+  // `key` names an image others give as their `parent`; an `intermediate` one is a build step
+  // `podman images` hides. In atlas, the ledger was built on postgres in two steps; the first step
+  // also made the newer dangling build: the ledger holds next to nothing alone, yet removing it
+  // takes its second step, and what that added, with it.
   const DAY = 24 * HOUR;
   const extraImages = {
     atlas: [
-      { tags: ['docker.io/library/postgres:16'], size: 438 * MiB, own: 12 * MiB, days: 140 },
-      { tags: ['localhost/atlas_ledger:2026-10-28'], size: 1.1 * GiB, own: 96 * MiB, days: 13 },
-      { tags: [], size: 1.4 * GiB, own: 310 * MiB, days: 2 },
+      { key: 'postgres', tags: ['docker.io/library/postgres:16'], size: 438 * MiB, own: 12 * MiB, days: 140 },
+      { tags: ['localhost/atlas_ledger:2026-10-28'], parent: 'ledger-step-2', size: 1.1 * GiB, own: 6 * KiB, days: 13 },
+      { tags: [], parent: 'ledger-step-1', size: 1.4 * GiB, own: 1.4 * GiB - 738 * MiB, days: 2 },
       { tags: [], size: 1.3 * GiB, own: 280 * MiB, days: 6 },
+      { key: 'ledger-step-1', tags: [], parent: 'postgres', intermediate: true, size: 738 * MiB, own: 4 * KiB, days: 13 },
+      { key: 'ledger-step-2', tags: [], parent: 'ledger-step-1', intermediate: true, size: 1.1 * GiB - 2 * KiB, own: 5 * KiB, days: 13 },
     ],
     harbor: [{ tags: ['docker.io/library/node:22-trixie-slim'], size: 1.9 * GiB, own: 1.1 * GiB, days: 70 }],
     quill: [
@@ -266,11 +341,13 @@
       const size = (90 + noise(i, vm.length, 3) * 2300) * MiB;
       return { id: hexOf(tag), tags: [tag], created: Math.floor((NOW - (i + 2) * 9 * DAY) / 1000), size, containers, own: size * (0.05 + 0.3 * noise(i, 7)) };
     });
+    const idOf = (key) => hexOf(`${vm}/${key}`);
     const extra = (extraImages[vm] ?? []).map((x, i) => ({
-      id: hexOf(`${vm}/${x.tags[0] ?? `dangling-${i}`}`), tags: x.tags, created: Math.floor((NOW - x.days * DAY) / 1000),
+      id: idOf(x.key ?? x.tags[0] ?? `dangling-${i}`), tags: x.tags, created: Math.floor((NOW - x.days * DAY) / 1000),
       size: x.size, containers: x.containers ?? 0, own: x.own,
+      parent: x.parent ? idOf(x.parent) : null, intermediate: x.intermediate ?? false,
     }));
-    return [...used, ...extra];
+    return [...used.map((u) => ({ ...u, parent: null, intermediate: false })), ...extra];
   }
   const images = (vm) => imageStore(vm).map(({ own, ...image }) => image);
 
@@ -376,9 +453,25 @@
     snapshot,
     settings: () => ({ ...settings }),
     set_settings: (args) => later(setSettings(args)),
-    series,
-    summary,
-    oom_events: ({ vm, from, to, limit = 500 }) => oom.filter((e) => (vm == null || e.vm === vm) && e.ts >= from && e.ts <= to).slice(0, limit),
+    // A test can set __fakeSeries to stand between the app and an answer: to change it, or have it
+    // land late (a promise), so answers arrive out of order.
+    series: (args) => (window.__fakeSeries ? window.__fakeSeries(args, series(args)) : series(args)),
+    // Likewise __fakeSummary for a summary (throw from it to have one fail).
+    summary: (args) => (window.__fakeSummary ? window.__fakeSummary(args, summary(args)) : summary(args)),
+    oom_events: ({ vm, from, to, limit = 500 }) => {
+      // A test can set this before the app loads to have the lookup of a VM's latest kill (the one
+      // asked for with a limit of 1) fail, as a store that can't be read would.
+      if (limit === 1 && window.__fakeLatestKillFails) throw new Error('the store could not be read');
+      // Or to have some lookups (by the asked window) fail.
+      if (window.__fakeOomFails?.({ vm, from, to, limit })) throw new Error('the store could not be read');
+      const found = oom.filter((e) => (vm == null || e.vm === vm) && e.ts >= from && e.ts <= to).slice(0, limit);
+      // A test can set this to answer some lookups late (ms, from the asked window), as a busy
+      // store would, to have answers land out of order.
+      const delay = window.__fakeOomDelay?.({ vm, from, to, limit });
+      return delay ? new Promise((resolve) => setTimeout(() => resolve(found), delay)) : found;
+    },
+    stalls: ({ vm, from, to, limit = 500 }) =>
+      stalls.filter((s) => (vm == null || s.vm === vm) && overlaps(s, from, to)).sort((a, b) => b.start - a.start).slice(0, limit),
     images: ({ vm }) => images(vm),
     volumes: ({ vm }) => volumes(vm),
     system_df: ({ vm }) => later(systemDf(vm)),

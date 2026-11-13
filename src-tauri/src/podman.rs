@@ -250,6 +250,12 @@ pub struct Image {
     pub size: u64,
     /// How many containers use it, in any state: the engine's own count.
     pub containers: u64,
+    /// The image it was built on, as libpod links them (one layer down); none for a base.
+    pub parent: Option<String>,
+    /// A build step `podman images` hides (`podman images --all` shows it): an untagged parent of
+    /// other images that no container runs. Not a row of its own, but podman removes it along
+    /// with the last image built on it, so it says what a removal frees.
+    pub intermediate: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -269,22 +275,26 @@ struct RawImage {
     containers: Option<u64>,
 }
 
-/// The images worth a row, from `images/json?all=true`: what `podman images` shows (no
-/// intermediate build steps, i.e. untagged parents of other images), plus any image a container
-/// uses — a container can run an image that lost its tag to a newer pull and is also the base of
-/// a local build; `podman images` hides it, and with it what the container keeps on disk.
-fn listed(raw: Vec<RawImage>) -> Vec<Image> {
+/// Every image from `images/json?all=true`, the intermediate ones flagged: what `podman images`
+/// hides (build steps, i.e. untagged parents of other images), unless a container uses it — a
+/// container can run an image that lost its tag to a newer pull and is also the base of a local
+/// build; `podman images` hides it, and with it what the container keeps on disk.
+fn classified(raw: Vec<RawImage>) -> Vec<Image> {
     let parents: std::collections::HashSet<String> =
         raw.iter().map(|r| r.parent_id.clone()).collect();
     raw.into_iter()
-        .filter(|r| {
+        .map(|r| {
             let tagged = r
                 .repo_tags
                 .as_ref()
                 .is_some_and(|t| t.iter().any(|t| t != "<none>:<none>"));
-            tagged || r.containers.unwrap_or(0) > 0 || !parents.contains(&r.id)
+            let intermediate =
+                !tagged && r.containers.unwrap_or(0) == 0 && parents.contains(&r.id);
+            Image {
+                intermediate,
+                ..Image::from(r)
+            }
         })
-        .map(Image::from)
         .collect()
 }
 
@@ -302,6 +312,8 @@ impl From<RawImage> for Image {
             created: r.created.unwrap_or(0),
             size: r.size.unwrap_or(0),
             containers: r.containers.unwrap_or(0),
+            parent: Some(r.parent_id).filter(|p| !p.is_empty()),
+            intermediate: false,
         }
     }
 }
@@ -698,10 +710,10 @@ pub fn parse_stats(body: &[u8]) -> Result<Vec<RawStat>, PodmanError> {
     Ok(report.stats.unwrap_or_default())
 }
 
-/// The body of `IMAGES`, decoded into the rows worth listing.
+/// The body of `IMAGES`, decoded: every image, the intermediate ones flagged.
 pub fn parse_images(body: &[u8]) -> Result<Vec<Image>, PodmanError> {
     let raw: Option<Vec<RawImage>> = serde_json::from_slice(body)?;
-    Ok(listed(raw.unwrap_or_default()))
+    Ok(classified(raw.unwrap_or_default()))
 }
 
 /// The body of `VOLUMES`, decoded.
@@ -881,8 +893,9 @@ mod tests {
     }
 
     #[test]
-    fn intermediate_images_are_hidden_unless_a_container_runs_one() {
-        // From `images/json?all=true`: build steps are untagged parents of other images.
+    fn intermediate_images_are_flagged_unless_a_container_runs_one() {
+        // From `images/json?all=true`: build steps are untagged parents of other images. They come
+        // back too, flagged, so the Images view can tell what a removal takes with it.
         let rows = serde_json::json!([
             {"Id": "base", "RepoTags": ["docker.io/library/debian:trixie-slim"], "ParentId": ""},
             {"Id": "step", "RepoTags": null, "ParentId": "base", "Containers": 0},
@@ -892,21 +905,35 @@ mod tests {
             {"Id": "step-in-use", "RepoTags": null, "ParentId": "", "Containers": 1},
             {"Id": "child", "RepoTags": ["localhost/x:1"], "ParentId": "step-in-use"}
         ]);
-        let ids: Vec<String> = listed(serde_json::from_value(rows).unwrap())
+        let flags: Vec<(String, bool)> = classified(serde_json::from_value(rows).unwrap())
             .into_iter()
-            .map(|i| i.id)
+            .map(|i| (i.id, i.intermediate))
             .collect();
-        assert_eq!(
-            ids,
-            [
-                "base",
-                "built",
-                "old-build",
-                "retagged-away",
-                "step-in-use",
-                "child"
-            ]
-        );
+        let expected = [
+            ("base", false),
+            ("step", true),
+            ("built", false),
+            ("old-build", false),
+            ("retagged-away", false),
+            ("step-in-use", false),
+            ("child", false),
+        ];
+        assert_eq!(flags, expected.map(|(id, f)| (id.to_string(), f)));
+    }
+
+    #[test]
+    fn an_image_keeps_its_parent_and_a_base_has_none() {
+        let rows = serde_json::json!([
+            {"Id": "base", "RepoTags": ["docker.io/library/debian:trixie-slim"], "ParentId": ""},
+            {"Id": "built", "RepoTags": ["localhost/app:latest"], "ParentId": "base"},
+            {"Id": "pulled", "RepoTags": ["docker.io/library/alpine:latest"]}
+        ]);
+        let parents: Vec<Option<String>> = parse_images(rows.to_string().as_bytes())
+            .unwrap()
+            .into_iter()
+            .map(|i| i.parent)
+            .collect();
+        assert_eq!(parents, [None, Some("base".to_string()), None]);
     }
 
     #[test]

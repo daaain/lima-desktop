@@ -5,6 +5,7 @@
   import type { Series } from './api';
   import { theme } from './theme.svelte';
   import { intervalPhrase } from './almanac';
+  import { latestMeasured } from './chart';
 
   interface Line {
     key: string;
@@ -32,9 +33,14 @@
     /** A horizontal reference line (e.g. the VM's allocation). */
     ceiling?: number;
     height?: number;
-    /** Moments to mark with a vertical line in --alert (e.g. OOM kills); `ts` in unix ms. */
-    markers?: { ts: number; label: string }[];
+    /**
+     * Moments to mark with a vertical line in --alert (e.g. OOM kills), and with an `until` a
+     * stretch of time shaded from the line on (e.g. a VM stalled); unix ms.
+     */
+    markers?: { ts: number; until?: number; label: string }[];
   } = $props();
+
+  const SYNC_KEY = 'time';
 
   let host: HTMLDivElement;
   let plot: uPlot | null = null;
@@ -51,7 +57,10 @@
     return `rgba(${n >> 16}, ${(n >> 8) & 255}, ${n & 255}, ${a})`;
   }
 
-  /** Draws `markers` as dashed vertical lines, each labelled unless it would overlap the last label. */
+  /**
+   * Draws `markers` as dashed vertical lines, each labelled unless it would overlap the last label;
+   * a marker with an `until` also shades its stretch, as far as it is on the plot.
+   */
   const markerPlugin: uPlot.Plugin = {
     hooks: {
       draw: [
@@ -60,6 +69,7 @@
           const { ctx, bbox } = u;
           const px = uPlot.pxRatio;
           const color = cssVar('--alert');
+          const [min, max] = [u.scales.x.min ?? -Infinity, u.scales.x.max ?? Infinity];
           ctx.save();
           ctx.strokeStyle = color;
           ctx.fillStyle = color;
@@ -69,7 +79,14 @@
           let labelEnd = -Infinity;
           for (const m of [...markers].sort((a, b) => a.ts - b.ts)) {
             const t = m.ts / 1000;
-            if (t < (u.scales.x.min ?? -Infinity) || t > (u.scales.x.max ?? Infinity)) continue;
+            if (m.until != null && t <= max && m.until / 1000 >= min) {
+              const from = u.valToPos(Math.max(t, min), 'x', true);
+              const to = u.valToPos(Math.min(m.until / 1000, max), 'x', true);
+              ctx.fillStyle = alpha(color, 0.12);
+              ctx.fillRect(from, bbox.top, Math.max(px, to - from), bbox.height);
+              ctx.fillStyle = color;
+            }
+            if (t < min || t > max) continue;
             const x = Math.round(u.valToPos(t, 'x', true));
             ctx.beginPath();
             ctx.moveTo(x, bbox.top);
@@ -86,6 +103,20 @@
     },
   };
 
+  // The columns of measurements (not the allocation's line), as `shape` last laid them out.
+  let measured: number[] = [];
+
+  /** The newest moment with a measurement on any line: what the legend reads while nothing is hovered. */
+  const latest = (u: uPlot) => latestMeasured(u.data, measured);
+
+  /** With the pointer off every chart, the legend shows the latest measurement, not dashes. */
+  const latestPlugin: uPlot.Plugin = {
+    hooks: {
+      ready: [(u) => u.setLegend({ idx: latest(u) ?? undefined })],
+      setCursor: [(u) => { if (u.cursor.idx == null) u.setLegend({ idx: latest(u) ?? undefined }); }],
+    },
+  };
+
   /** The moment under the cursor, short enough that the legend doesn't change width with it. */
   const when = (t: number) =>
     new Date(t * 1000).toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', second: '2-digit' });
@@ -96,6 +127,7 @@
     const cols: (number | null)[][] = [xs];
     const series: uPlot.Series[] = [{ value: (_u, v) => (v == null ? '–' : when(v)) }];
     const bands: uPlot.Band[] = [];
+    const measuredCols: number[] = [];
     for (const line of lines) {
       const band = d.metrics[line.key];
       if (!band) continue;
@@ -104,6 +136,7 @@
       const c = cssVar(line.color);
       const base = cols.length;
       cols.push(band.max.map(scale), band.min.map(scale), band.avg.map(scale));
+      measuredCols.push(base, base + 1, base + 2);
       series.push(
         { label: `${line.label} max`, stroke: 'transparent', points: { show: false }, value: (_u, v) => (v == null ? '–' : format(v)) },
         { label: `${line.label} min`, stroke: 'transparent', points: { show: false }, value: (_u, v) => (v == null ? '–' : format(v)) },
@@ -115,15 +148,16 @@
       cols.push(xs.map(() => ceiling));
       series.push({ label: 'allocated', stroke: cssVar('--muted'), dash: [4, 4], width: 1, points: { show: false }, value: () => format(ceiling) });
     }
-    return { cols, series, bands, key: series.map((s) => s.label ?? '').join('|') };
+    return { cols, series, bands, measuredCols, key: series.map((s) => s.label ?? '').join('|') };
   }
 
   // What the plot was built with: new data of the same shape only replaces the columns.
   let builtKey = '';
 
   function build(d: Series) {
-    const { cols, series, bands, key } = shape(d);
+    const { cols, series, bands, measuredCols, key } = shape(d);
     builtKey = `${key}|${scheme}|${theme.choice}`;
+    measured = measuredCols;
     const axis = { stroke: cssVar('--muted'), grid: { stroke: cssVar('--grid'), width: 1 }, ticks: { stroke: cssVar('--grid') } };
     const opts: uPlot.Options = {
       width,
@@ -131,10 +165,12 @@
       series,
       bands,
       legend: { show: true, live: true },
-      cursor: { drag: { x: false, y: false } },
+      // Every chart on screen shares one time axis: hovering one reads the same moment off them all
+      // (matched by time, not position, so charts of different ranges still agree).
+      cursor: { drag: { x: false, y: false }, sync: { key: SYNC_KEY } },
       scales: { y: { range: (_u, _min, max) => [0, Math.max(max * 1.1, ceiling ?? 0) || 1] } },
       axes: [axis, { ...axis, size: 84, values: (_u, vals) => vals.map((v) => format(v)) }],
-      plugins: [markerPlugin],
+      plugins: [markerPlugin, latestPlugin],
     };
     plot?.destroy();
     plot = new uPlot(opts, cols as uPlot.AlignedData, host);
@@ -146,11 +182,13 @@
    * and forgetting it.
    */
   function update(d: Series) {
-    const { cols, key } = shape(d);
+    const { cols, measuredCols, key } = shape(d);
     if (!plot || `${key}|${scheme}|${theme.choice}` !== builtKey) return build(d);
+    measured = measuredCols;
     const { left, top } = plot.cursor;
     plot.setData(cols as uPlot.AlignedData);
     if (left != null && left >= 0 && top != null) plot.setCursor({ left, top });
+    else plot.setLegend({ idx: latest(plot) ?? undefined });
   }
 
   // uPlot paints a canvas with colours read once from CSS, so it has to be rebuilt when the OS
@@ -181,7 +219,9 @@
   onDestroy(() => plot?.destroy());
 </script>
 
-<section class="chart">
+<!-- How many moments are marked, and how long the data spans: drawn on the canvas, so said here
+     too for anything reading the page. -->
+<section class="chart" data-markers={markers.length} data-span={data?.ts.length ? data.ts[data.ts.length - 1] - data.ts[0] : 0}>
   {#if title}<h3>{title}{#if data?.sampleSecs}<span class="res">{intervalPhrase(data.sampleSecs)}</span>{/if}</h3>{/if}
   <div bind:this={host} bind:clientWidth={width}></div>
   {#if data && data.ts.length === 0}<p class="empty">No samples in this range.</p>{/if}

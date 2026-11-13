@@ -40,7 +40,8 @@ after(async () => {
   server?.kill();
 });
 
-async function open(path, { dark = false, width = 1320, height = 900 } = {}) {
+/** `init`, if given, runs in the page before the app does (after the fake backend is set up). */
+async function open(path, { dark = false, width = 1320, height = 900, init } = {}) {
   const context = await browser.newContext({
     viewport: { width, height }, deviceScaleFactor: 1.5, colorScheme: dark ? 'dark' : 'light', locale: 'en-GB', timezoneId: 'UTC',
   });
@@ -50,6 +51,7 @@ async function open(path, { dark = false, width = 1320, height = 900 } = {}) {
   page.on('console', (m) => m.type() === 'error' && errors.push(m.text()));
   await page.clock.setFixedTime(NOW);
   await page.addInitScript({ path: join(root, 'e2e-ui/fake-backend.js') });
+  if (init) await page.addInitScript(init);
   await page.goto(base + path);
   return { page, errors, close: () => context.close() };
 }
@@ -65,11 +67,18 @@ for (const dark of [false, true]) {
   test(`VM overview${suffix}`, async () => {
     const { page, errors, close } = await open('/', { dark });
     await page.getByRole('heading', { level: 1 }).waitFor();
-    assert.equal(await page.getByRole('heading', { level: 1 }).innerText(), 'Two VMs are past three quarters of their memory or disk.');
+    // ember has stopped answering, which outranks the two VMs past three quarters.
+    assert.equal(await page.getByRole('heading', { level: 1 }).innerText(), "ember isn't answering.");
     const atlas = page.locator('article', { hasText: 'atlas' }).first();
+    // Pressure is work waiting: "stalled" is kept for a VM that has stopped answering.
+    assert.match(await atlas.innerText(), /\d+ % · waiting \d+\.\d %/);
+    assert.doesNotMatch(await atlas.innerText(), /· stalled/);
     assert.match(await atlas.innerText(), /More than three quarters of its memory is in use\. One container has exited\./);
     assert.match(await page.locator('article', { hasText: 'quill' }).innerText(), /Its disk is past three quarters too\./);
-    assert.match(await page.locator('article', { hasText: 'harbor' }).innerText(), /1 OOM/);
+    const harbor = page.locator('article', { hasText: 'harbor' });
+    assert.match(await harbor.innerText(), /1 OOM/);
+    // The kill three hours ago is in the range the app opens on, 24 h, and said so once its history is here.
+    await harbor.getByText('One process was killed for lack of memory in the last 24 h.').waitFor();
     assert.match(await page.locator('article', { hasText: 'ember' }).innerText(), /podman 4\.3\.1 in this VM is too old/);
     assert.match(await page.locator('.stopped').innerText(), /Five are not running\./);
     // Listed by name, and the first one's history has arrived.
@@ -89,12 +98,25 @@ for (const dark of [false, true]) {
   test(`VM detail${suffix}`, async () => {
     const { page, errors, close } = await open('/vm/harbor', { dark });
     await page.getByRole('heading', { level: 1 }).waitFor();
-    // The kill was three hours ago: widen the range to see it and what it did to the verdicts.
-    await page.getByRole('button', { name: '6 h' }).click();
+    // The kill was three hours ago: narrow the app's range (in the masthead) to the 6 h that hold it.
+    await page.getByRole('group', { name: 'Time range' }).getByRole('button', { name: '6 h' }).click();
+    await page.getByText('in the last 6 h, newest first').waitFor();
     await page.getByText('hit its own 1 GiB limit').waitFor();
-    assert.equal(await page.getByRole('heading', { level: 1 }).innerText(), 'harbor needs more CPU.');
-    assert.match(await page.locator('figure', { hasText: 'Memory' }).first().innerText(), /raise those, not the VM's/);
-    assert.match(await page.locator('#oom').innerText(), /hit its own 1 GiB limit/);
+    // Two hours ago it also stalled, with memory nearly full and nothing killed: that, not the
+    // container's own limit, is why it needs more memory.
+    await page.getByRole('heading', { level: 1, name: 'harbor needs more memory and CPU, judging by the last 6 h.' }).waitFor();
+    assert.match(
+      await page.locator('figure', { hasText: 'Memory' }).first().innerText(),
+      /The VM ran out of memory and stalled once in the last 6 h\. 1 OOM kill was a container hitting its own memory limit\./,
+    );
+    const oom = await page.locator('#oom').innerText();
+    assert.match(oom, /hit its own 1 GiB limit/);
+    assert.match(oom, /^Out of memory\n/);
+    assert.match(oom, /1 kill and 1 stall in the last 6 h, newest first · 1 kill hit a container's own limit · 1 stall because the whole VM ran out of memory\n/);
+    assert.match(oom, /VM stalled/);
+    assert.match(oom, /The VM ran out of memory and stalled instead of killing anything \(7\.4 GiB of 7\.8 GiB in use, memory pressure up to 25\.0 %\)/);
+    assert.match(oom, /It answered again after 17 min\./);
+    assert.match(oom, /harbor-devbox\s+largest, 5\.9 GiB/);
     await page.locator('.u-over').first().waitFor();
     await shoot(page, `vm${suffix}`);
     assert.deepEqual(errors, []);
@@ -107,6 +129,7 @@ for (const dark of [false, true]) {
     assert.equal(await page.getByRole('heading', { level: 1 }).innerText(), '17 of 19 containers are running.');
     assert.match(await page.locator('main').innerText(), /ember: podman 4\.3\.1 in this VM is too old/);
     await page.locator('.sketch:not(.empty)').first().waitFor();
+    await page.locator('.share:not(.empty)').first().waitFor();
     await shoot(page, `containers${suffix}`);
     assert.deepEqual(errors, []);
     await close();
@@ -125,8 +148,8 @@ for (const dark of [false, true]) {
     assert.match(await page.locator('section', { hasText: 'ember' }).innerText(), /ember holds one image, in use\./);
     // Measured as the app starts, it says what removing the unused would free.
     await page.getByText('would free at least').waitFor();
-    assert.match(await page.locator('p.lede').innerText(), /Removing the unused ones would free at least 5\.7 GiB\./);
-    assert.match(await quill.locator('.line').first().innerText(), /2\.2 GiB its own/);
+    assert.match(await page.locator('p.lede').innerText(), /Removing the unused ones would free at least 6\.3 GiB\./);
+    assert.match(await quill.locator('.line').first().innerText(), /frees 2\.2 GiB/);
     await shoot(page, `images${suffix}`);
     assert.deepEqual(errors, []);
     await close();
@@ -165,6 +188,23 @@ for (const dark of [false, true]) {
     await close();
   });
 }
+
+test('A VM that has stopped responding says so on the overview and on its page', async () => {
+  const { page, errors, close } = await open('/');
+  const ember = page.locator('article', { hasText: 'ember' }).first();
+  await ember.waitFor();
+  // The overview leads with it, and doesn't describe it from its last reading.
+  assert.equal(await page.getByRole('heading', { level: 1 }).innerText(), "ember isn't answering.");
+  assert.match(await ember.locator('.sentence').innerText(), /^It hasn't answered for 4 min, though Lima still says it's running\. Its figures are from before\.$/);
+  await ember.getByRole('link', { name: 'stalled' }).click();
+  await page.getByText("ember hasn't answered for 4 min, though Lima still says it's running.").waitFor();
+  assert.equal(await page.getByRole('heading', { level: 1 }).innerText(), "ember isn't answering.");
+  const oom = await page.locator('#oom').innerText();
+  assert.match(oom, /VM stalled/);
+  assert.match(oom, /It has not answered for 4 min so far\./);
+  assert.deepEqual(errors, []);
+  await close();
+});
 
 test('The theme is the computer\'s, or the one chosen in Settings, on every page', async () => {
   const LIGHT = 'rgb(255, 255, 255)';
@@ -271,6 +311,8 @@ test('On a narrow window the order is chosen from a word, as the heads are gone'
 
 test('Container details open inline, several at once, and hold a value being read', async () => {
   const { page, errors, close } = await open('/containers', { height: 1400 });
+  // A range answered from every sample, not minute rollups.
+  await page.getByRole('group', { name: 'Time range' }).getByRole('button', { name: '1 h' }).click();
   const line = (name) => page.locator('.line', { has: page.locator('.name', { hasText: new RegExp(`^${name}`) }) }).first();
   // Each unfolds (Svelte's transitions are Web Animations): click and measure once it's still.
   const still = () => page.waitForFunction(() => document.getAnimations().length === 0);
@@ -336,12 +378,16 @@ test("An image's layers open under its line, config steps folded away, each laye
   const detail = page.locator('section.detail').first();
   await detail.locator('ol.steps li').first().waitFor();
   assert.equal(await line.getAttribute('aria-expanded'), 'true');
-  // Four layers; the three config steps only when asked for, their wrapper taken off.
-  assert.equal(await detail.locator('ol.steps li').count(), 4);
-  assert.match(await detail.locator('ol.steps li').first().innerText(), /COPY \. \/app/);
+  // Four layers in Dockerfile order, the base first; the three config steps only when asked for,
+  // their wrapper taken off.
+  const steps = detail.locator('ol.steps li');
+  assert.equal(await steps.count(), 4);
+  assert.match(await steps.first().innerText(), /debian\.sh --arch arm64/);
+  assert.match(await steps.last().innerText(), /COPY \. \/app/);
   await detail.getByRole('button', { name: 'Show 3 config steps' }).click();
-  assert.equal(await detail.locator('ol.steps li').count(), 7);
-  assert.match(await detail.locator('ol.steps li').first().innerText(), /^config\s+CMD \["node", "server\.js"\]/);
+  assert.equal(await steps.count(), 7);
+  assert.match(await steps.first().innerText(), /debian\.sh --arch arm64/);
+  assert.match(await steps.last().innerText(), /^config\s+CMD \["node", "server\.js"\]/);
   // A layer opens what it added, under its step; a deletion is said as one.
   await detail.locator('.step', { hasText: 'npm ci' }).click();
   const files = detail.locator('.files section.detail');
@@ -353,6 +399,45 @@ test("An image's layers open under its line, config steps folded away, each laye
   assert.match(await files.locator('nav.path').innerText(), /layer 3\s*\/\s*var\s*\/\s*lib\s*\/\s*apt/);
   await detail.getByRole('button', { name: 'Close' }).click();
   await page.waitForFunction(() => document.querySelectorAll('section.detail').length === 0);
+  assert.deepEqual(errors, []);
+  await close();
+});
+
+test('An image says what removing it frees, what goes with it and what keeps the rest', async () => {
+  const { page, errors, close } = await open('/images');
+  const lineOf = (name) => page.locator('.line', { has: page.locator('.name', { hasText: name }) }).first();
+  const ledger = lineOf('atlas_ledger');
+  await ledger.getByText(/^frees /).waitFor();
+  // The ledger holds next to nothing alone, but its last build step, which podman hides, goes with it.
+  assert.match(await ledger.innerText(), /1\.1 GiB\s+frees 388\.4 MiB/);
+  const dangling = await page.evaluate(() => window.__TAURI_INTERNALS__.invoke('images', { vm: 'atlas' }));
+  const newer = dangling.find((i) => !i.intermediate && i.tags.length === 0 && i.parent).id.slice(0, 12);
+  assert.equal(await ledger.locator('.said').getAttribute('title'),
+    "Removing it frees 388.4 MiB, with the build-cache image left from building it, which podman doesn't list and removes with it.\n" +
+    `The other 738.0 MiB is in layers it shares with untagged ${newer} and docker.io/library/postgres:16.`);
+  // The steps podman hides aren't lines of their own.
+  assert.equal(await page.locator('section', { hasText: 'atlas holds' }).locator('.line').count(), dangling.filter((i) => !i.intermediate).length);
+  // postgres: what was built on it keeps its layers.
+  const postgres = lineOf('postgres:16');
+  assert.match(await postgres.innerText(), /438\.0 MiB\s+frees 12\.0 MiB/);
+  assert.equal(await postgres.locator('.said').getAttribute('title'),
+    `Removing it frees 12.0 MiB.\nThe other 426.0 MiB is in layers it shares with localhost/atlas_ledger:2026-10-28 and untagged ${newer}.`);
+  // One of two tags: removing it only untags.
+  const rust = lineOf('rust:latest');
+  assert.match(await rust.innerText(), /frees nothing/);
+  assert.match(await rust.locator('.said').getAttribute('title'), /^It has another tag, docker\.io\/library\/rust:1\.91-trixie: removing this one only untags it\. Removing the last would free 1\.7 GiB\./);
+  // Nothing shares alpine.
+  assert.match(await lineOf('alpine:3.20').innerText(), /frees all of it/);
+  // The label fits its column, and the tooltip shows on resting over it.
+  const label = ledger.locator('.said .label');
+  const fit = await label.evaluate((e) => [e.scrollWidth, e.clientWidth]);
+  assert.ok(fit[0] <= fit[1], `the label is cut short: ${fit}`);
+  // Scrolled to first: scrolling hides a tooltip.
+  await ledger.scrollIntoViewIfNeeded();
+  await page.waitForTimeout(100);
+  await ledger.locator('.said').hover();
+  await page.locator('[role=tooltip]').waitFor({ timeout: 1000 });
+  assert.match(await page.locator('[role=tooltip]').textContent(), /^Removing it frees 388\.4 MiB, with the build-cache image/);
   assert.deepEqual(errors, []);
   await close();
 });
@@ -406,7 +491,9 @@ test('Images and Volumes open on what was already fetched', async () => {
   await close();
 });
 
-for (const [path, ready] of [['/', 'article'], ['/containers', '.line'], ['/images', '.line'], ['/volumes', '.line']]) {
+// A VM's page is checked once its out-of-memory list is there (harbor's kill and stall are in the
+// 24 h the app opens on): a table's columns are what would push it wider.
+for (const [path, ready] of [['/', 'article'], ['/containers', '.line'], ['/images', '.line'], ['/volumes', '.line'], ['/vm/harbor', '#oom tbody tr']]) {
   test(`${path} stacks on a narrow window`, async () => {
     const { page, errors, close } = await open(path, { width: 420, height: 900 });
     await page.locator(ready).first().waitFor();
@@ -416,3 +503,299 @@ for (const [path, ready] of [['/', 'article'], ['/containers', '.line'], ['/imag
     await close();
   });
 }
+
+test("Hovering one chart reads the same moment off every chart on the page", async () => {
+  const { page, errors, close } = await open('/vm/harbor', { height: 1400 });
+  const charts = page.locator('.chart');
+  await charts.nth(1).locator('.u-over').waitFor();
+  const time = (n) => charts.nth(n).locator('.u-legend .u-series').first().locator('.u-value');
+  // Until a chart is hovered, each shows its latest measurement; hovering moves them all off it.
+  await page.waitForFunction((el) => el.textContent !== '–', await time(0).elementHandle());
+  const latest = await time(0).textContent();
+  const over = await charts.first().locator('.u-over').boundingBox();
+  await page.mouse.move(over.x + over.width * 0.6, over.y + over.height / 2);
+  await page.waitForFunction(({ el, was }) => el.textContent !== was, { el: await time(0).elementHandle(), was: latest });
+  const read = await time(0).textContent();
+  const count = await charts.count();
+  assert.ok(count >= 4, `${count} charts`);
+  for (let n = 1; n < count; n++) assert.equal(await time(n).textContent(), read, `chart ${n} reads the same moment`);
+  assert.deepEqual(errors, []);
+  await close();
+});
+
+test("A container's memory is drawn against its VM or its own limit, its peak from the last 24 hours", async () => {
+  const { page, errors, close } = await open('/containers', { height: 1400 });
+  const line = (name) => page.locator('.line', { has: page.locator('.name', { hasText: new RegExp(`^${name}`) }) }).first();
+  const memory = (name) => line(name).locator('.said').first();
+  // warehouse was restarted three minutes ago after growing to about 18 GiB: its cgroup's peak
+  // started again, but the line says the peak of its last 24 hours, from the history.
+  await line('warehouse').locator('.share:not(.empty)').waitFor();
+  await page.waitForFunction(() => /in 24 h/.test(document.body.innerText));
+  assert.match(await memory('warehouse').innerText(), /^\d+\.\d MiB of VM\npeak 1[78]\.\d GiB in 24 h$/);
+  const bar = await line('warehouse').locator('.bar').first().getAttribute('aria-label');
+  assert.match(bar, /^Memory \d+\.\d MiB now; peak 1[78]\.\d GiB in the last 24 h, 300\.0 MiB since it started 3 min ago; full width is the VM's 48\.0 GiB$/);
+  // harbor's app has a limit of its own: its bar is that wide, and it's past three quarters of it.
+  assert.match(await memory('app').innerText(), /^\d+\.\d MiB of 1\.0 GiB limit\npeak \d+\.\d MiB in 24 h$/);
+  assert.match(await line('app').locator('.bar').first().getAttribute('aria-label'), /full width is its 1\.0 GiB limit$/);
+  assert.equal(await memory('app').locator('strong').evaluate((el) => el.classList.contains('hot')), true);
+  // Hovering the chart above the bar reads one moment of the VM.
+  const chart = await line('warehouse').locator('.share').boundingBox();
+  await page.mouse.move(chart.x + chart.width * 0.97, chart.y + chart.height / 2);
+  assert.match(await page.getByRole('tooltip').innerText(), /^\d\d:\d\d · this container 1\d\.\d GiB \(\d+ % of the VM\) · VM \d+\.\d GiB of 48\.0 GiB in use$/);
+  await page.mouse.move(0, 0);
+  assert.equal(await page.getByRole('tooltip').count(), 0);
+  // Its detail measures it against itself over the app's range.
+  await line('warehouse').click();
+  const self = page.locator('section.detail .self');
+  await self.waitFor();
+  assert.match(await self.innerText(), /^It uses less than a quarter of its peak in the last 24 h\.\n+\d+\.\d MiB now · peak 1[78]\.\d GiB in the last 24 h, 300\.0 MiB since it started 3 min ago$/);
+  assert.deepEqual(errors, []);
+  await close();
+});
+
+test("An open container's charts show their latest measurement, and keep up with time", async () => {
+  const { page, errors, close } = await open('/containers', { height: 1400 });
+  // A range up to 6 h follows live; a longer one is fetched once, as it's chosen.
+  await page.getByRole('group', { name: 'Time range' }).getByRole('button', { name: '1 h' }).click();
+  await page.locator('.line', { has: page.locator('.name', { hasText: /^frontend/ }) }).first().click();
+  const chart = page.locator('section.detail .chart').first();
+  await chart.locator('.u-over').waitFor();
+  const time = chart.locator('.u-legend .u-series').first().locator('.u-value');
+  // Not hovered, the legend reads the newest sample rather than a dash.
+  await page.waitForFunction((el) => el.textContent !== '–', await time.elementHandle());
+  const before = await time.textContent();
+  // Two minutes on, the open detail has fetched again and its newest sample is later.
+  await page.clock.setFixedTime(new Date(NOW.getTime() + 2 * 60_000));
+  await page.waitForFunction(({ el, was }) => el.textContent !== was && el.textContent !== '–', { el: await time.elementHandle(), was: before }, { timeout: 15_000 });
+  assert.deepEqual(errors, []);
+  await close();
+});
+
+test("Tooltips show after a short rest, not the browser's slow ones, and screen readers keep them", async () => {
+  const { page, errors, close } = await open('/');
+  const history = page.locator('.status span', { hasText: 'history' });
+  await history.waitFor();
+  const box = await history.boundingBox();
+  await page.mouse.move(box.x + 5, box.y + box.height / 2);
+  await page.waitForTimeout(100);
+  assert.equal(await page.locator('[role=tooltip]').count(), 0, 'not while the pointer only passes');
+  const tip = page.locator('[role=tooltip]');
+  await tip.waitFor({ timeout: 1000 });
+  assert.match(await tip.textContent(), /Metrics history on disk/);
+  // The browser's own would show too, a second later: its title is gone, kept for screen readers.
+  assert.equal(await history.getAttribute('title'), null);
+  assert.match(await history.getAttribute('aria-description'), /Metrics history on disk/);
+  // Off it, the tooltip goes.
+  await page.mouse.move(2, 2);
+  await tip.waitFor({ state: 'detached', timeout: 1000 });
+  assert.deepEqual(errors, []);
+  await close();
+});
+
+test('One time range for the whole app, chosen in the masthead and kept for next time', async () => {
+  const { page, errors, close } = await open('/containers', { height: 1400 });
+  const ranges = page.getByRole('group', { name: 'Time range' });
+  // allInnerTexts doesn't wait: on a slow machine the picker may not be drawn yet.
+  const chosen = async () => {
+    await ranges.locator('button[aria-pressed="true"]').first().waitFor();
+    return ranges.locator('button[aria-pressed="true"]').allInnerTexts();
+  };
+  // 24 h on first run.
+  assert.deepEqual(await chosen(), ['24 h']);
+  await page.waitForFunction(() => /peak [^\n]+ in 24 h/.test(document.body.innerText));
+  await ranges.getByRole('button', { name: '6 h' }).click();
+  assert.deepEqual(await chosen(), ['6 h']);
+  await page.waitForFunction(() => /peak [^\n]+ in 6 h/.test(document.body.innerText) && !/ in 24 h/.test(document.body.innerText));
+  assert.match(await page.locator('main > .note').last().innerText(), /the tick the peak in the last 6 h\./);
+  // A VM's page follows it: its lines, charts and verdicts.
+  await page.locator('header nav').getByRole('link', { name: 'VMs' }).click();
+  await page.locator('article .name', { hasText: 'harbor' }).click();
+  await page.getByRole('heading', { level: 1, name: /judging by the last 6 h\.$/ }).waitFor();
+  assert.deepEqual(await chosen(), ['6 h']);
+  await page.waitForFunction(() => /peak [^\n]+ in 6 h/.test(document.querySelector('.containers')?.innerText ?? ''));
+  assert.match(await page.locator('figure', { hasText: 'CPU' }).first().innerText(), /the last 6 h/);
+  // Kept across a reload, as across a restart.
+  await page.reload();
+  await page.getByRole('heading', { level: 1, name: /judging by the last 6 h\.$/ }).waitFor();
+  assert.deepEqual(await chosen(), ['6 h']);
+  // Only where there is history to range over.
+  for (const tab of ['Images', 'Volumes', 'Settings']) {
+    await page.locator('header nav').getByRole('link', { name: tab }).click();
+    await page.waitForURL(`**/${tab.toLowerCase()}`);
+    await page.getByRole('heading', { level: 1 }).waitFor();
+    assert.equal(await ranges.count(), 0, `no range on ${tab}`);
+  }
+  await page.locator('header nav').getByRole('link', { name: 'VMs' }).click();
+  await page.locator('article').first().waitFor();
+  assert.deepEqual(await chosen(), ['6 h']);
+  assert.match(await page.locator('.fleet > .note').innerText(), /^Above each bar: the last 6 h,/);
+  assert.deepEqual(errors, []);
+  await close();
+});
+
+test("Arriving from an OOM badge widens the app's range to reach the latest kill", async () => {
+  const { page, errors, close } = await open('/containers');
+  const ranges = page.getByRole('group', { name: 'Time range' });
+  await ranges.getByRole('button', { name: '1 h' }).click();
+  await page.locator('header nav').getByRole('link', { name: 'VMs' }).click();
+  await page.locator('article', { hasText: 'harbor' }).getByRole('link', { name: '1 OOM' }).click();
+  // The kill three hours ago, the stall two: the shortest range holding both is 6 h.
+  await page.getByText('in the last 6 h, newest first').waitFor();
+  assert.deepEqual(await ranges.locator('button[aria-pressed="true"]').allInnerTexts(), ['6 h']);
+  assert.deepEqual(errors, []);
+  await close();
+});
+
+test("A failed lookup of the latest kill is said, and the verdicts don't wait on it", async () => {
+  // In the last hour harbor neither killed nor stalled, so its page asks when it last did; that fails.
+  const { page, errors, close } = await open('/vm/harbor', {
+    init: () => {
+      localStorage.setItem('range', '1h');
+      window.__fakeLatestKillFails = true;
+    },
+  });
+  await page.locator('#oom .error', { hasText: 'the store could not be read' }).waitFor();
+  const memory = page.locator('figure', { hasText: 'Memory' }).first().locator('.verdict');
+  await page.waitForFunction((el) => !/Collecting history/.test(el.textContent), await memory.elementHandle());
+  assert.deepEqual(errors, []);
+  await close();
+});
+
+test("An earlier range's kills and stalls aren't shown under the range chosen since", async () => {
+  // The 24 h answer is slow, the 1 h answers slower: choosing 1 h while 24 h is on its way has
+  // the 24 h answer land first, after the range has changed.
+  const { page, errors, close } = await open('/vm/harbor', {
+    height: 1400,
+    init: () => {
+      localStorage.setItem('range', '24h');
+      window.__fakeOomDelay = ({ from, to, limit }) => (limit === 1 ? 0 : to - from > 12 * 3_600_000 ? 1500 : 3000);
+    },
+  });
+  await page.getByRole('group', { name: 'Time range' }).getByRole('button', { name: '1 h' }).click();
+  // Past the 24 h answer, before the 1 h one: harbor's kill (3 h ago) and stall (2 h ago) are
+  // outside the last hour, so nothing may be listed as in it.
+  await page.waitForTimeout(2200);
+  assert.equal(await page.locator('#oom tbody tr').count(), 0, "the 24 h answer's rows under 1 h");
+  assert.doesNotMatch(await page.locator('main').innerText(), /in the last hour, newest first/);
+  // Once the 1 h answer lands: none in it, and when the latest was.
+  await page.getByText(/None in the last hour; the latest was/).waitFor({ timeout: 10_000 });
+  assert.deepEqual(errors, []);
+  await close();
+});
+
+test("A range whose lookup fails says so, without listing the previous range's kills as its own", async () => {
+  const { page, errors, close } = await open('/vm/harbor', {
+    height: 1400,
+    init: () => {
+      localStorage.setItem('range', '24h');
+      // Every lookup of an hour's kills fails; 24 h's work.
+      window.__fakeOomFails = ({ from, to, limit }) => limit !== 1 && to - from < 2 * 3_600_000;
+    },
+  });
+  await page.locator('#oom tbody tr').first().waitFor();
+  await page.getByRole('group', { name: 'Time range' }).getByRole('button', { name: '1 h' }).click();
+  await page.locator('#oom .error', { hasText: 'the store could not be read' }).waitFor();
+  assert.equal(await page.locator('#oom tbody tr').count(), 0, "the 24 h rows listed under 1 h");
+  assert.doesNotMatch(await page.locator('main').innerText(), /in the last hour, newest first/);
+  assert.deepEqual(errors, []);
+  await close();
+});
+
+test("The kill count waits for the range just chosen rather than count the previous one's", async () => {
+  const { page, errors, close } = await open('/vm/harbor', {
+    height: 1400,
+    init: () => {
+      localStorage.setItem('range', '24h');
+      // The hour's answers come late; the day's at once.
+      window.__fakeOomDelay = ({ from, to, limit }) => (limit !== 1 && to - from < 2 * 3_600_000 ? 3000 : 0);
+    },
+  });
+  const pressure = page.locator('figure', { hasText: 'Pressure' }).first().locator('.stats');
+  await page.waitForFunction((el) => /\b1\s*OOM kill in/.test(el.innerText), await pressure.elementHandle());
+  await page.getByRole('group', { name: 'Time range' }).getByRole('button', { name: '1 h' }).click();
+  await page.waitForTimeout(800);
+  assert.doesNotMatch(await pressure.innerText(), /\b1\s*OOM kill in/, "the day's kill counted as the hour's");
+  await page.waitForFunction((el) => /\b0\s*OOM kills in/.test(el.innerText), await pressure.elementHandle(), { timeout: 10_000 });
+  assert.deepEqual(errors, []);
+  await close();
+});
+
+test("An open container's kill markers are only the range's own", async () => {
+  const { page, errors, close } = await open('/vm/harbor', {
+    height: 1600,
+    init: () => {
+      localStorage.setItem('range', '24h');
+      // A week's lookups fail; a day's work.
+      window.__fakeOomFails = ({ from, to, limit }) => limit !== 1 && to - from > 2 * 24 * 3_600_000;
+    },
+  });
+  await page.locator('#oom tbody tr').first().waitFor();
+  // app's kill, three hours ago, is marked on its memory chart.
+  await page.locator('.line', { has: page.locator('.name', { hasText: /^app/ }) }).first().click();
+  const memory = page.locator('section.detail .chart').first();
+  await page.waitForFunction((el) => el.dataset.markers === '1', await memory.elementHandle());
+  // Over a week whose lookup failed, it isn't kept as if it were all the week held.
+  await page.getByRole('group', { name: 'Time range' }).getByRole('button', { name: '7 days' }).click();
+  await page.locator('#oom .error', { hasText: 'the store could not be read' }).waitFor();
+  assert.equal(await memory.getAttribute('data-markers'), '0');
+  assert.deepEqual(errors, []);
+  await close();
+});
+
+test("A VM's charts show the range chosen last, however late an earlier range's answer lands", async () => {
+  const { page, errors, close } = await open('/vm/harbor', { height: 1400, init: () => localStorage.setItem('range', '24h') });
+  const memory = page.locator('figure', { hasText: 'Memory' }).first().locator('.chart');
+  const DAY = 24 * 3_600_000;
+  const span = async () => Number(await memory.getAttribute('data-span'));
+  await page.waitForFunction((el) => Number(el.dataset.span) > 20 * 3_600_000, await memory.elementHandle());
+  // A week's answer comes late, and spans the week (the invented history is shorter); choosing a
+  // week, then a day again, has it land after the day's.
+  await page.evaluate(() => {
+    window.__fakeSeries = ({ from, to }, answer) => {
+      if (to - from <= 2 * 24 * 3_600_000) return answer;
+      const step = (to - from) / Math.max(1, answer.ts.length - 1);
+      const week = { ...answer, ts: answer.ts.map((_, i) => Math.round(from + i * step)) };
+      return new Promise((resolve) => setTimeout(() => resolve(week), 1500));
+    };
+  });
+  const ranges = page.getByRole('group', { name: 'Time range' });
+  await ranges.getByRole('button', { name: '7 days' }).click();
+  await ranges.getByRole('button', { name: '24 h' }).click();
+  await page.waitForTimeout(2500);
+  assert.ok((await span()) < 2 * DAY, `the memory chart spans ${((await span()) / DAY).toFixed(1)} days under 24 h`);
+  assert.deepEqual(errors, []);
+  await close();
+});
+
+test("A VM's page never shows the previous VM's summary, even when its own fails", async () => {
+  const { page, errors, close } = await open('/vm/harbor', { height: 1400, init: () => localStorage.setItem('range', '24h') });
+  const memoryStats = page.locator('figure', { hasText: 'Memory' }).first().locator('.stats');
+  await page.waitForFunction((el) => /7\.4 GiB\s*peak in 24 h/.test(el.innerText), await memoryStats.elementHandle());
+  // Every summary from now on fails; go to another VM on the same page.
+  await page.evaluate(() => (window.__fakeSummary = () => { throw new Error('the store could not be read'); }));
+  await page.getByRole('link', { name: 'All VMs' }).click();
+  await page.locator('article .name', { hasText: 'atlas' }).click();
+  await page.getByRole('heading', { level: 1, name: /^atlas/ }).waitFor();
+  await page.waitForTimeout(800);
+  assert.doesNotMatch(await memoryStats.innerText(), /7\.4 GiB/, "harbor's peak shown on atlas's page");
+  assert.match(await memoryStats.innerText(), /–\s*peak in 24 h/);
+  assert.deepEqual(errors, []);
+  await close();
+});
+
+test("A range whose charts fail to load shows none, not the previous range's", async () => {
+  const { page, errors, close } = await open('/vm/harbor', { height: 1400, init: () => localStorage.setItem('range', '24h') });
+  const memory = page.locator('figure', { hasText: 'Memory' }).first().locator('.chart');
+  await page.waitForFunction((el) => Number(el.dataset.span) > 0, await memory.elementHandle());
+  // A week's series fails.
+  await page.evaluate(() => {
+    window.__fakeSeries = ({ from, to }, answer) => {
+      if (to - from > 2 * 24 * 3_600_000) throw new Error('the store could not be read');
+      return answer;
+    };
+  });
+  await page.getByRole('group', { name: 'Time range' }).getByRole('button', { name: '7 days' }).click();
+  await page.waitForFunction((el) => el.dataset.span === '0', await memory.elementHandle(), { timeout: 5000 });
+  assert.deepEqual(errors, []);
+  await close();
+});

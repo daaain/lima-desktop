@@ -43,7 +43,7 @@ over the socket Lima already forwards.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="https://daaain.github.io/lima-desktop/images-dark.png">
-  <img src="https://daaain.github.io/lima-desktop/images.png" alt="The Images view: how many images no container uses and what removing them would free, then each VM's images, fullest disk first, with what each holds alone" width="760">
+  <img src="https://daaain.github.io/lima-desktop/images.png" alt="The Images view: how many images no container uses and what removing them would free, then each VM's images, fullest disk first, with what removing each would free" width="760">
 </picture>
 
 **Volumes**, with their sizes and who uses them.

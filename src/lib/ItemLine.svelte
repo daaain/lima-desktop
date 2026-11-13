@@ -7,18 +7,21 @@
   import { bytes } from './format';
   import Bar from './Bar.svelte';
 
-  let { name, title, second, secondTitle, size, own, scale, sizeLabel, used, usedText, usedTitle, removable, removeTitle, onremove, selected = false, onselect }: {
+  let { name, title, second, secondTitle, size, frees, scale, sizeLabel, sizeTitle, used, usedText, usedTitle, removable, removeTitle, onremove, selected = false, onselect }: {
     name: Snippet;
     /** The whole name, for the tooltip of one cut short. */
     title: string;
     second: string; secondTitle?: string;
     /** Bytes; undefined until measured. */
     size?: number;
-    /** Of `size`, what it holds alone (drawn solid, the rest pale); undefined draws all of it solid. */
-    own?: number;
+    /** Of `size`, what removing it frees (drawn solid, the rest pale); undefined draws all of it solid. */
+    frees?: number;
     /** Bytes at the full width of the bar: the largest listed. */
     scale: number;
+    /** Said under the size, and by the bar when it draws `frees`. */
     sizeLabel: string;
+    /** More on the size, for its tooltip. */
+    sizeTitle?: string;
     /** Undefined: not known until measured. */
     used?: boolean;
     usedText: string; usedTitle?: string;
@@ -42,10 +45,10 @@
   </div>
   {#if size != null}
     <div class="drawn">
-      <Bar pct={share(own ?? size, scale)} behind={own != null ? share(size, scale) : undefined} plain
-        label={`${title}: ${bytes(size)}${own != null ? `, ${bytes(own)} of it its own` : ''}; full width ${bytes(scale)}`} />
+      <Bar pct={share(frees ?? size, scale)} behind={frees != null ? share(size, scale) : undefined} plain
+        label={`${title}: ${bytes(size)}${frees != null ? `, ${sizeLabel}` : ''}; full width ${bytes(scale)}`} />
     </div>
-    <div class="said">
+    <div class="said" title={sizeTitle}>
       <strong>{bytes(size)}</strong>
       <span class="label">{sizeLabel}</span>
     </div>

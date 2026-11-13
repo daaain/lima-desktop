@@ -2,9 +2,10 @@
   import { goto } from '$app/navigation';
   import { page } from '$app/state';
   import { live } from '$lib/live.svelte';
-  import { bytes } from '$lib/format';
   import { containersHeadline, countWord, exitedSentence, runsSentence } from '$lib/almanac';
   import { History } from '$lib/history.svelte';
+  import { range, rangeWindow } from '$lib/range.svelte';
+  import { theLast } from '$lib/ranges';
   import { BY_MEMORY, CONTAINER_COLUMNS, CONTAINER_SORTS, containerRows, filterContainers, groupContainers, readContainerFilter, type ContainerSort } from '$lib/containers';
   import { podmanFailures, podmanScope } from '$lib/perVm';
   import { withParam } from '$lib/url';
@@ -17,12 +18,13 @@
   import { glide, unfold } from '$lib/motion';
   import { Ordering } from '$lib/ordering.svelte';
 
-  const DETAIL_WINDOW_MS = 3_600_000;
-
   let query = $state('');
   let actionError = $state<string | null>(null);
-  // Open details, any number, each under its own line: `vm/id` → when it was opened (its hour ends there).
-  let open = $state<Record<string, number>>({});
+  // Open details, any number, each under its own line, keyed `vm/id`.
+  let open = $state<Record<string, true>>({});
+  // Open details show the app's range, as a VM's page does: they share one clock, ticking (for a
+  // range short enough to follow live) only while one is open.
+  const span = rangeWindow(() => Object.keys(open).length > 0);
 
   const urlFilter = $derived(readContainerFilter(page.url.searchParams));
   const scope = $derived(podmanScope(live.snapshot));
@@ -30,10 +32,11 @@
   const rows = $derived(filterContainers(all, { ...urlFilter, query }));
 
   const history = new History();
-  history.follow(() => rows.filter((r) => r.c.state === 'running').map((r) => r.c.entity));
-  // Every memory bar shares one scale: the largest container listed.
-  const largest = $derived(rows.reduce<typeof rows[number] | null>((top, r) => ((r.c.latest.mem ?? 0) > (top?.c.latest.mem ?? 0) ? r : top), null));
-  const memScale = $derived(Math.max(1, largest?.c.latest.mem ?? 0));
+  // Each running container's range, and its VM's: a line draws its memory as its part of the VM's.
+  history.follow(() => {
+    const up = rows.filter((r) => r.c.state === 'running');
+    return [...up.map((r) => r.c.entity), ...new Set(up.map((r) => live.vm(r.vm)?.entity))];
+  });
   // One group per VM. By default the VM using the most memory first, and within it the largest
   // container first; a column head orders both by its column (containers.ts).
   const ordering = new Ordering('containers', CONTAINER_SORTS, BY_MEMORY);
@@ -51,7 +54,7 @@
   const keyOf = (vm: string, id: string) => `${vm}/${id}`;
   function toggle(key: string) {
     if (key in open) close(key);
-    else open = { ...open, [key]: Date.now() };
+    else open = { ...open, [key]: true };
   }
   function close(key: string) {
     const { [key]: _, ...rest } = open;
@@ -105,11 +108,11 @@
         {#each g.rows as { vm, c } (c.id)}
           {@const key = keyOf(vm, c.id)}
           <div animate:glide>
-            <ContainerLine {vm} {c} history={history.get(c.entity)} {memScale} vmCpus={g.live?.instance.cpus ?? 1} vmMemory={g.live?.instance.memory ?? 0} second="image"
+            <ContainerLine {vm} {c} history={history.get(c.entity)} vmHistory={history.get(g.live?.entity)} vmCpus={g.live?.instance.cpus ?? 1} vmMemory={g.live?.instance.memory ?? 0} second="image"
               now={live.snapshot?.updated} selected={key in open} onselect={() => toggle(key)} onerror={(e) => (actionError = e)} />
             {#if open[key] != null}
               <div transition:unfold>
-                <ContainerDetail {vm} {c} from={open[key] - DETAIL_WINDOW_MS} to={open[key]} vmMemory={g.live?.instance.memory ?? 0} onclose={() => close(key)} />
+                <ContainerDetail {vm} {c} from={span.from} to={span.to} over={range.key} vmMemory={g.live?.instance.memory ?? 0} onclose={() => close(key)} />
               </div>
             {/if}
           </div>
@@ -118,8 +121,9 @@
     {/each}
   </div>
   <p class="note">
-    Memory bars share one scale: full width is the largest container listed{#if largest}, {largest.c.composeService ?? largest.c.name} at {bytes(memScale)}{/if}; the pale stretch is each one's peak.
-    CPU bars are scaled to the cores of the container's VM. Above each, the last 24 hours; hover for how long was spent at each level.
+    Memory: full width is the container's own limit, else its VM's memory; dark is now, pale the peak since it started, the tick the peak in {theLast(range.key)}.
+    Above it, its VM over {theLast(range.key)}: the VM's memory in use, soft, and this container's part of it in front; hover to read a moment.
+    CPU bars are scaled to the cores of the container's VM, with {theLast(range.key)} above; hover for how long was spent at each level.
   </p>
 {/if}
 
@@ -130,7 +134,7 @@
   .dot { width: 12px; height: 12px; border-radius: 50%; background: var(--bar); box-sizing: border-box; }
   .dot.off { background: none; border: 2px solid var(--warn); }
   .check { display: flex; align-items: center; gap: 0.3rem; font-size: 0.9rem; }
-  .lines, .containers-grid { --container-columns: minmax(13rem, 1.3fr) minmax(9rem, 1fr) 8.5rem minmax(7rem, 0.6fr) 5.5rem 6.5rem 10rem; }
+  .lines, .containers-grid { --container-columns: minmax(13rem, 1.3fr) minmax(9rem, 1fr) 9.5rem minmax(7rem, 0.6fr) 5.5rem 6.5rem 10rem; }
   .containers-grid { grid-template-columns: var(--container-columns); column-gap: 1.4rem; margin-top: 0.3rem; } /* 0.3rem less: SortHead's min-height */
   .lines { display: grid; gap: 2.2rem; }
   section { border-top: 1px solid var(--fg); padding-top: 0.8rem; border-bottom: 1px solid var(--border); }

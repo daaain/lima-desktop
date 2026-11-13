@@ -1,5 +1,6 @@
 <script lang="ts">
-  // An image's history under its line: the steps that built it, newest first, each layer's size
+  // An image's history under its line: the steps that built it in Dockerfile order (the base first,
+  // as the file reads; libpod lists them newest first, like `podman history`), each layer's size
   // drawn against the largest. Steps that only changed the config (ENV, CMD, …) add nothing to the
   // disk, so they're folded away until asked for. A layer opens what it added, under its step.
   import { onMount } from 'svelte';
@@ -28,10 +29,11 @@
     api.imageHistory(vm, id).then((h) => (layers = h), (e) => (error = String(e)));
   });
 
-  // Each step with its layer's number: the n-th with a size is the n-th layer, newest first.
+  // Each step with its layer's number: the n-th with a size is the n-th layer, newest first, as
+  // the backend counts them to find one. Then turned round to read as the Dockerfile does.
   const steps = $derived.by(() => {
     let n = 0;
-    return (layers ?? []).map((l, at) => ({ l, at, layer: l.size > 0 ? n++ : null }));
+    return (layers ?? []).map((l, at) => ({ l, at, layer: l.size > 0 ? n++ : null })).reverse();
   });
   const sized = $derived((layers ?? []).filter((l) => l.size > 0));
   const shown = $derived(configToo ? steps : steps.filter((s) => s.layer != null));
