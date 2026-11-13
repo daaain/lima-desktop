@@ -185,6 +185,13 @@ export interface Image {
   size: number;
   /** How many containers use it, in any state: the VM's engine's own count. */
   containers: number;
+  /** The image it was built on, as libpod links them; null for a base. */
+  parent: string | null;
+  /**
+   * A build step `podman images` hides: an untagged parent of other images no container runs.
+   * Not listed, but podman removes it with the last image built on it.
+   */
+  intermediate: boolean;
 }
 
 /** One step of an image's history, newest first (podman.rs `Layer`). */

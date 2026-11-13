@@ -142,8 +142,8 @@ for (const dark of [false, true]) {
     assert.match(await page.locator('section', { hasText: 'ember' }).innerText(), /ember holds one image, in use\./);
     // Measured as the app starts, it says what removing the unused would free.
     await page.getByText('would free at least').waitFor();
-    assert.match(await page.locator('p.lede').innerText(), /Removing the unused ones would free at least 5\.7 GiB\./);
-    assert.match(await quill.locator('.line').first().innerText(), /2\.2 GiB its own/);
+    assert.match(await page.locator('p.lede').innerText(), /Removing the unused ones would free at least 6\.3 GiB\./);
+    assert.match(await quill.locator('.line').first().innerText(), /frees 2\.2 GiB/);
     await shoot(page, `images${suffix}`);
     assert.deepEqual(errors, []);
     await close();
@@ -386,6 +386,45 @@ test("An image's layers open under its line, config steps folded away, each laye
   assert.match(await files.locator('nav.path').innerText(), /layer 3\s*\/\s*var\s*\/\s*lib\s*\/\s*apt/);
   await detail.getByRole('button', { name: 'Close' }).click();
   await page.waitForFunction(() => document.querySelectorAll('section.detail').length === 0);
+  assert.deepEqual(errors, []);
+  await close();
+});
+
+test('An image says what removing it frees, what goes with it and what keeps the rest', async () => {
+  const { page, errors, close } = await open('/images');
+  const lineOf = (name) => page.locator('.line', { has: page.locator('.name', { hasText: name }) }).first();
+  const ledger = lineOf('atlas_ledger');
+  await ledger.getByText(/^frees /).waitFor();
+  // The ledger holds next to nothing alone, but its last build step, which podman hides, goes with it.
+  assert.match(await ledger.innerText(), /1\.1 GiB\s+frees 388\.4 MiB/);
+  const dangling = await page.evaluate(() => window.__TAURI_INTERNALS__.invoke('images', { vm: 'atlas' }));
+  const newer = dangling.find((i) => !i.intermediate && i.tags.length === 0 && i.parent).id.slice(0, 12);
+  assert.equal(await ledger.locator('.said').getAttribute('title'),
+    "Removing it frees 388.4 MiB, with the build-cache image left from building it, which podman doesn't list and removes with it.\n" +
+    `The other 738.0 MiB is in layers it shares with untagged ${newer} and docker.io/library/postgres:16.`);
+  // The steps podman hides aren't lines of their own.
+  assert.equal(await page.locator('section', { hasText: 'atlas holds' }).locator('.line').count(), dangling.filter((i) => !i.intermediate).length);
+  // postgres: what was built on it keeps its layers.
+  const postgres = lineOf('postgres:16');
+  assert.match(await postgres.innerText(), /438\.0 MiB\s+frees 12\.0 MiB/);
+  assert.equal(await postgres.locator('.said').getAttribute('title'),
+    `Removing it frees 12.0 MiB.\nThe other 426.0 MiB is in layers it shares with localhost/atlas_ledger:2026-10-28 and untagged ${newer}.`);
+  // One of two tags: removing it only untags.
+  const rust = lineOf('rust:latest');
+  assert.match(await rust.innerText(), /frees nothing/);
+  assert.match(await rust.locator('.said').getAttribute('title'), /^It has another tag, docker\.io\/library\/rust:1\.91-trixie: removing this one only untags it\. Removing the last would free 1\.7 GiB\./);
+  // Nothing shares alpine.
+  assert.match(await lineOf('alpine:3.20').innerText(), /frees all of it/);
+  // The label fits its column, and the tooltip shows on resting over it.
+  const label = ledger.locator('.said .label');
+  const fit = await label.evaluate((e) => [e.scrollWidth, e.clientWidth]);
+  assert.ok(fit[0] <= fit[1], `the label is cut short: ${fit}`);
+  // Scrolled to first: scrolling hides a tooltip.
+  await ledger.scrollIntoViewIfNeeded();
+  await page.waitForTimeout(100);
+  await ledger.locator('.said').hover();
+  await page.locator('[role=tooltip]').waitFor({ timeout: 1000 });
+  assert.match(await page.locator('[role=tooltip]').textContent(), /^Removing it frees 388\.4 MiB, with the build-cache image/);
   assert.deepEqual(errors, []);
   await close();
 });

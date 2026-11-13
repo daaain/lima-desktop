@@ -8,6 +8,7 @@
 (() => {
   const GiB = 1024 ** 3;
   const MiB = 1024 ** 2;
+  const KiB = 1024;
   const HOUR = 3_600_000;
   const NOW = Date.now();
 
@@ -311,13 +312,19 @@
   // Each VM's image store: the images its containers run (any state), and what they left behind —
   // a superseded tag, dangling images from rebuilds, a base no container runs. `own` is what
   // `system df` says an image holds alone; the rest of its size is layers shared with others.
+  // `key` names an image others give as their `parent`; an `intermediate` one is a build step
+  // `podman images` hides. In atlas, the ledger was built on postgres in two steps; the first step
+  // also made the newer dangling build: the ledger holds next to nothing alone, yet removing it
+  // takes its second step, and what that added, with it.
   const DAY = 24 * HOUR;
   const extraImages = {
     atlas: [
-      { tags: ['docker.io/library/postgres:16'], size: 438 * MiB, own: 12 * MiB, days: 140 },
-      { tags: ['localhost/atlas_ledger:2026-10-28'], size: 1.1 * GiB, own: 96 * MiB, days: 13 },
-      { tags: [], size: 1.4 * GiB, own: 310 * MiB, days: 2 },
+      { key: 'postgres', tags: ['docker.io/library/postgres:16'], size: 438 * MiB, own: 12 * MiB, days: 140 },
+      { tags: ['localhost/atlas_ledger:2026-10-28'], parent: 'ledger-step-2', size: 1.1 * GiB, own: 6 * KiB, days: 13 },
+      { tags: [], parent: 'ledger-step-1', size: 1.4 * GiB, own: 1.4 * GiB - 738 * MiB, days: 2 },
       { tags: [], size: 1.3 * GiB, own: 280 * MiB, days: 6 },
+      { key: 'ledger-step-1', tags: [], parent: 'postgres', intermediate: true, size: 738 * MiB, own: 4 * KiB, days: 13 },
+      { key: 'ledger-step-2', tags: [], parent: 'ledger-step-1', intermediate: true, size: 1.1 * GiB - 2 * KiB, own: 5 * KiB, days: 13 },
     ],
     harbor: [{ tags: ['docker.io/library/node:22-trixie-slim'], size: 1.9 * GiB, own: 1.1 * GiB, days: 70 }],
     quill: [
@@ -334,11 +341,13 @@
       const size = (90 + noise(i, vm.length, 3) * 2300) * MiB;
       return { id: hexOf(tag), tags: [tag], created: Math.floor((NOW - (i + 2) * 9 * DAY) / 1000), size, containers, own: size * (0.05 + 0.3 * noise(i, 7)) };
     });
+    const idOf = (key) => hexOf(`${vm}/${key}`);
     const extra = (extraImages[vm] ?? []).map((x, i) => ({
-      id: hexOf(`${vm}/${x.tags[0] ?? `dangling-${i}`}`), tags: x.tags, created: Math.floor((NOW - x.days * DAY) / 1000),
+      id: idOf(x.key ?? x.tags[0] ?? `dangling-${i}`), tags: x.tags, created: Math.floor((NOW - x.days * DAY) / 1000),
       size: x.size, containers: x.containers ?? 0, own: x.own,
+      parent: x.parent ? idOf(x.parent) : null, intermediate: x.intermediate ?? false,
     }));
-    return [...used, ...extra];
+    return [...used.map((u) => ({ ...u, parent: null, intermediate: false })), ...extra];
   }
   const images = (vm) => imageStore(vm).map(({ own, ...image }) => image);
 

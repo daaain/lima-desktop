@@ -192,8 +192,13 @@ under the sentence, figures and bar it explains, with the allocation as a dashed
   drawn and who uses it. An image's size counts layers it shares with other images, so image sizes
   are never added up: what removing images would free comes only from `system df`, which walks
   every volume, so it runs once per VM as the app first sees it running, then on **Measure again**.
-  It gives each image's own share, drawn solid inside its size, and each volume's size and users,
-  which until then are a dash. One measurement serves both pages, and a VM's is taken again after
+  It gives what each image holds alone, and each volume's size and users, which until then are a
+  dash. What removing an image frees is drawn solid inside its size and said under it ("frees
+  404.4 MiB", "frees all of it", "frees nothing" for one of several tags, which only untags): what
+  it holds alone, and, as podman removes the build steps `podman images` hides along with the last
+  image built on them, what those steps added (`images.ts` `removal`, from libpod's parent links).
+  Its tooltip says what goes with it and names a few of the listed images that keep the rest. One
+  measurement serves both pages, and a VM's is taken again after
   something is removed from it. Both lists are fetched from the start and kept, so neither page
   opens blank. A line opens a detail under it, as a container's does: an image's layers (the
   config-only steps folded away; a layer opens what it added, what it deletes struck through), or a volume's files, a folder at a time, with the start of a file

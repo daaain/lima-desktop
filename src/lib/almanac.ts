@@ -351,7 +351,8 @@ export function selfMemory(
 }
 
 const WHAT = { memory: 'memory', cpu: 'CPU', disk: 'disk' } as const;
-const list = (words: string[]) => (words.length <= 1 ? words.join('') : `${words.slice(0, -1).join(', ')} and ${words[words.length - 1]}`);
+/** Words as a sentence lists them: "a, b and c". */
+export const list = (words: string[]) => (words.length <= 1 ? words.join('') : `${words.slice(0, -1).join(', ')} and ${words[words.length - 1]}`);
 
 /**
  * A VM's page in one sentence, worst news first: that it has stopped answering, else what it needs
