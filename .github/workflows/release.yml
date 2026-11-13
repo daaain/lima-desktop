@@ -50,23 +50,20 @@ jobs:
           sh tools/check-release-version.sh HEAD "$want"
           echo "version=$want" >> "$GITHUB_OUTPUT"
 
-  # tauri build --target universal-apple-darwin compiles one arch and then the other on the same
-  # runner. Here each arch builds on its own runner at once, and macos joins them with lipo and
-  # bundles the universal app: the same .dmg, in about half the time.
-  macos-arch:
-    name: macOS (${{ matrix.target }})
+  # One runner compiles both arches (aarch64, then x86_64) and bundles the universal app. Splitting
+  # them across runners built faster, but each macOS job waits for a runner of its own, and those
+  # waits (5 and 10 minutes in the dry run of 12 November 2026) cost more than the split saved.
+  macos:
+    name: macOS (universal .dmg)
     needs: version
-    strategy:
-      matrix:
-        target: [aarch64-apple-darwin, x86_64-apple-darwin]
-    runs-on: macos-15   # Apple silicon; x86_64 is cross-compiled, as tauri's universal build does
+    runs-on: macos-15
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Rust ${{ env.RUST_VERSION }}, ${{ matrix.target }}
+      - name: Rust ${{ env.RUST_VERSION }}, both Mac targets
         run: |
-          rustup toolchain install "$RUST_VERSION" --profile minimal -t "${{ matrix.target }}"
+          rustup toolchain install "$RUST_VERSION" --profile minimal -t aarch64-apple-darwin,x86_64-apple-darwin
           rustup default "$RUST_VERSION"
 
       - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
@@ -78,43 +75,7 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
 
-      - run: pnpm tauri build --target "${{ matrix.target }}" --no-bundle
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: macos-${{ matrix.target }}
-          path: src-tauri/target/${{ matrix.target }}/release/lima-desktop
-          if-no-files-found: error
-          retention-days: 1   # only for the macos job below
-
-  macos:
-    name: macOS (universal .dmg)
-    needs: macos-arch
-    runs-on: macos-15
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
-        with:
-          version: ${{ env.PNPM_VERSION }}
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile   # for the tauri CLI; nothing is compiled here
-
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          pattern: macos-*-apple-darwin
-          path: arch
-      # Where tauri build --target universal-apple-darwin would have put it, for tauri bundle to find.
-      - name: One binary for both arches
-        run: |
-          out=src-tauri/target/universal-apple-darwin/release
-          mkdir -p "$out"
-          lipo -create -output "$out/lima-desktop" \
-            arch/macos-aarch64-apple-darwin/lima-desktop arch/macos-x86_64-apple-darwin/lima-desktop
-          chmod +x "$out/lima-desktop"
-      - run: pnpm tauri bundle --target universal-apple-darwin --bundles app,dmg
+      - run: pnpm tauri build --target universal-apple-darwin --bundles app,dmg
       - name: What was built
         run: |
           app="src-tauri/target/universal-apple-darwin/release/bundle/macos/Lima Desktop.app"
@@ -180,7 +141,7 @@ jobs:
     steps:
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          pattern: '{macos,linux}'   # not the per-arch binaries
+          pattern: '{macos,linux}'
           path: dist
           merge-multiple: true
       - name: Draft v${{ needs.version.outputs.version }}${{ github.ref_type != 'tag' && ' (dry run)' || '' }}
