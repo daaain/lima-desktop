@@ -456,7 +456,8 @@
     // A test can set __fakeSeries to stand between the app and an answer: to change it, or have it
     // land late (a promise), so answers arrive out of order.
     series: (args) => (window.__fakeSeries ? window.__fakeSeries(args, series(args)) : series(args)),
-    summary,
+    // Likewise __fakeSummary for a summary (throw from it to have one fail).
+    summary: (args) => (window.__fakeSummary ? window.__fakeSummary(args, summary(args)) : summary(args)),
     oom_events: ({ vm, from, to, limit = 500 }) => {
       // A test can set this before the app loads to have the lookup of a VM's latest kill (the one
       // asked for with a limit of 1) fail, as a store that can't be read would.

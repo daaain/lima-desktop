@@ -766,3 +766,36 @@ test("A VM's charts show the range chosen last, however late an earlier range's 
   assert.deepEqual(errors, []);
   await close();
 });
+
+test("A VM's page never shows the previous VM's summary, even when its own fails", async () => {
+  const { page, errors, close } = await open('/vm/harbor', { height: 1400, init: () => localStorage.setItem('range', '24h') });
+  const memoryStats = page.locator('figure', { hasText: 'Memory' }).first().locator('.stats');
+  await page.waitForFunction((el) => /7\.4 GiB\s*peak in 24 h/.test(el.innerText), await memoryStats.elementHandle());
+  // Every summary from now on fails; go to another VM on the same page.
+  await page.evaluate(() => (window.__fakeSummary = () => { throw new Error('the store could not be read'); }));
+  await page.getByRole('link', { name: 'All VMs' }).click();
+  await page.locator('article .name', { hasText: 'atlas' }).click();
+  await page.getByRole('heading', { level: 1, name: /^atlas/ }).waitFor();
+  await page.waitForTimeout(800);
+  assert.doesNotMatch(await memoryStats.innerText(), /7\.4 GiB/, "harbor's peak shown on atlas's page");
+  assert.match(await memoryStats.innerText(), /–\s*peak in 24 h/);
+  assert.deepEqual(errors, []);
+  await close();
+});
+
+test("A range whose charts fail to load shows none, not the previous range's", async () => {
+  const { page, errors, close } = await open('/vm/harbor', { height: 1400, init: () => localStorage.setItem('range', '24h') });
+  const memory = page.locator('figure', { hasText: 'Memory' }).first().locator('.chart');
+  await page.waitForFunction((el) => Number(el.dataset.span) > 0, await memory.elementHandle());
+  // A week's series fails.
+  await page.evaluate(() => {
+    window.__fakeSeries = ({ from, to }, answer) => {
+      if (to - from > 2 * 24 * 3_600_000) throw new Error('the store could not be read');
+      return answer;
+    };
+  });
+  await page.getByRole('group', { name: 'Time range' }).getByRole('button', { name: '7 days' }).click();
+  await page.waitForFunction((el) => el.dataset.span === '0', await memory.elementHandle(), { timeout: 5000 });
+  assert.deepEqual(errors, []);
+  await close();
+});

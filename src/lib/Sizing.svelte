@@ -27,12 +27,15 @@
     /** The verdicts, for the page's headline; empty until the history has arrived. */
     hints?: Hint[];
   } = $props();
-  let summary = $state<Record<string, Summary> | null>(null);
+  let fetched = $state<Record<string, Summary> | null>(null);
   // The VM and range the summary was fetched for: the words say its range, not the one just chosen,
   // until it lands.
   let summaryFor = $state<{ vm: string; over: RangeKey } | null>(null);
   const summaryOver = $derived(summaryFor?.over ?? over);
   const vmName = $derived(inst.name);
+  // Only ever this VM's: another's figures must never stand in for it. A range just chosen still
+  // shows the last summary, worded with its own range, until the new one lands.
+  const summary = $derived(summaryFor?.vm === vmName ? fetched : null);
   let cpus = $state(0);
   let memGiB = $state(0);
   let diskGiB = $state(0);
@@ -45,7 +48,10 @@
   $effect(() => {
     if (entity == null) return;
     const asked = { vm: vmName, over };
-    summaryInOrder(api.summary(entity, from, to)).then((s) => ((summary = s), (summaryFor = asked)), (e) => (error = String(e)));
+    summaryInOrder(api.summary(entity, from, to)).then(
+      (s) => ((fetched = s), (summaryFor = asked), (error = null)),
+      (e) => (error = String(e)),
+    );
   });
   $effect(() => {
     cpus = inst.cpus;

@@ -30,6 +30,9 @@
   const to = $derived(span.to);
   const from = $derived(span.from);
   let series = $state<Series | null>(null);
+  // The VM the charts are of: another's never stand in, even for a moment after going to this one.
+  let seriesFor = $state<string | null>(null);
+  const seriesShown = $derived(seriesFor === name ? series : null);
   // Open container details, any number, each under its own line.
   let open = $state<string[]>([]);
   let actionError = $state<string | null>(null);
@@ -50,9 +53,16 @@
   $effect(() => {
     if (entity == null) return;
     const asked = { vm: name, over: range.key };
-    seriesInOrder(api.series(entity, from, to)).then((s) => {
-      if (asked.vm === name && asked.over === range.key) series = s;
-    });
+    const current = () => asked.vm === name && asked.over === range.key;
+    seriesInOrder(api.series(entity, from, to)).then(
+      (s) => {
+        if (current()) (series = s), (seriesFor = asked.vm);
+      },
+      // Failed for what's on screen: no charts, rather than another range's beside this one's figures.
+      () => {
+        if (current()) (series = null), (seriesFor = asked.vm);
+      },
+    );
   });
 
   // OOM kills and stalls in the range; when there are none, when the latest was (to offer a range
@@ -213,7 +223,7 @@
   {#if vm.probeError}<p class="error">metrics: {vm.probeError}</p>{/if}
   {#if vm.podmanError}<p class="error">podman: {vm.podmanError}</p>{/if}
 
-  <Sizing inst={i} entity={vm.entity} latest={l} {from} {to} over={range.key} {series} markers={memoryMarkers}
+  <Sizing inst={i} entity={vm.entity} latest={l} {from} {to} over={range.key} series={seriesShown} markers={memoryMarkers}
     oomEvents={eventsShown === undefined ? undefined : eventsShown && eventsShown.oom} stalls={eventsShown === undefined ? undefined : eventsShown && eventsShown.stalls}
     eventsFor={eventsShown === undefined ? null : { vm: name, over: range.key }} bind:hints />
 
