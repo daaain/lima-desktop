@@ -37,8 +37,8 @@
   <div class="bar" role="img" aria-label={text} onmouseleave={() => (over = null)}>
     {#each bar.blocks as b (b.name)}
       <span class="block" class:hot={hot.includes(b.name)} class:off={b.allocated == null} class:over={over === b.name}
-        style:left={`${b.x}%`} style:width={`max(2px, calc(${b.w}% - 1.5px))`} title={said(b)} onmouseenter={() => (over = b.name)} role="presentation">
-        <span class="fill" style:width={b.used > 0 ? `max(1px, ${b.fill}%)` : '0'}></span>
+        style:left={`${b.x}%`} style:right={`${Math.max(0, 100 - b.x - b.w)}%`} title={said(b)} onmouseenter={() => (over = b.name)} role="presentation">
+        <span class="fill" class:some={b.used > 0} style:width={`${b.fill}%`}></span>
       </span>
     {/each}
   </div>
@@ -49,8 +49,12 @@
   p { margin: 0; font-size: 0.9rem; line-height: 1.3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .name { font-size: 1.2rem; font-weight: 500; margin-right: 0.2rem; }
   .bar { position: relative; height: 12px; background: var(--track); }
-  .block { position: absolute; top: 0; bottom: 0; background: color-mix(in srgb, var(--soft) 60%, var(--track)); }
+  /* A block's left and right edges where its share starts and ends, less a 1.5px gap before the next,
+     and no narrower than 2px; a fill no narrower than 1px. Lengths, not calc() or max(), which WebKit
+     leaks when computed every poll (styles.test.ts). */
+  .block { position: absolute; top: 0; bottom: 0; margin-right: 1.5px; min-width: 2px; background: color-mix(in srgb, var(--soft) 60%, var(--track)); }
   .fill { position: absolute; inset: 0 auto 0 0; background: var(--bar); }
+  .fill.some { min-width: 1px; }
   .hot .fill { background: var(--warn); }
   .off .fill { background: var(--soft); }
   .block.over { outline: 1.5px solid var(--fg); outline-offset: 1px; z-index: 1; }

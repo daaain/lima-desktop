@@ -99,15 +99,14 @@ machine, so it needs no anonymising. For real data in the real app, replay a sna
 
 ## Does the UI hold on to memory? `just ui-leak`
 
-The app's window keeps polling the backend once a second, and WebKit (Tauri's engine on macOS and
-Linux) kept memory from every poll that Chromium gives back: left open, the window grew by about
-13 MB a minute until the bars' transition was changed (below). `e2e-ui/leak.mjs` reproduces this in minutes rather than hours. It loads
-the built UI with the fake backend into headless WebKit, runs the page's clock forward a second
-at a time (one poll per tick), and pauses for a frame after each tick so the result gets laid out
-and painted. Every so often it weighs the page's process (its footprint on macOS, the same figure
-Activity Monitor shows, and resident size elsewhere). The verdict is the slope through the second
-half of the run, in MB per 1000 ticks, which is about 17 minutes of the app being open. Growth that
-levels off, such as caches filling or code compiling, doesn't count against it.
+The app's window polls the backend once a second for as long as it's open, so anything a poll leaves
+behind adds up over hours. `e2e-ui/leak.mjs` shows it in about a minute. It loads the built UI with
+the fake backend into headless WebKit (Tauri's engine) and runs the page's clock forward a second at
+a time, one poll per tick, pausing for a frame after each so the result is laid out and painted. It
+weighs the page's process every so often: its footprint on macOS, the figure Activity Monitor
+shows, and its resident size elsewhere. The verdict is the growth through the second half of the
+run, in MB per 1000 ticks (about 17 minutes of the app open), so caches filling up and levelling off
+don't count. `just ui-leak` fails above 25. Pages level off at 0–3 MB.
 
     just ui-leak                   # the overview: 1500 ticks, about 75 s
     just ui-leak /containers       # another page
@@ -115,30 +114,19 @@ levels off, such as caches filling or code compiling, doesn't count against it.
     node e2e-ui/leak.mjs --browser chromium
     node e2e-ui/leak.mjs --max-growth 10 --csv leak.csv   # exit 1 above 10 MB per 1000 ticks
 
-What it found (WebKit 2359 on macOS, MB per 1000 ticks): the overview grew 183–232 across three
-runs, `/containers` about 1650, `/images` and `/volumes` about 115, and the VM page 120–150. With the
-clock frozen it was flat (−3), and Chromium levelled off (−17). Taking things out one at a time put
-all of it on one line of CSS. `Bar.svelte` transitioned the fill's width, `max(2px, n%)`, and WebKit
-before October 2026 never frees a computed `calc()` length ([bug 325845][wk-calc], fixed in
-322846@main on 6 October 2026). A transition between two such lengths computes a new one every
-frame. A bare page of 200 such bars grows about 1 GB a minute in Playwright 1.63's WebKit, the same
-with `min()` or `calc(n% + 2px)`, and is flat with a plain `n%`, or in Playwright 1.65's WebKit, which
-has the fix. The fill is now a plain `n%`, with the 2px floor as a `min-width`, and every page levels
-off: 0–3 MB per 1000 ticks after about 150 MB of caches filling. `just ui-leak` fails above 25.
+A frame (40 ms, `--frame-ms`) is shorter than the bars' 0.4 s transition, so the rig cuts
+transitions short, which the app's polls, at least a second apart, never do. A rare "Page crashed"
+is WebKit itself; run it again.
 
-Until the WebKit that people's Macs and Linux distributions ship has the fix, nothing that changes
-with every poll should be a `calc()`, `min()`, `max()` or `clamp()` length, least of all while it
-transitions. A static one in a stylesheet is computed once and costs nothing. Playwright is pinned
-(1.63.0), so the rig keeps running a WebKit from before the fix, like macOS 27.0.1's, where the app leaked. A
-Playwright upgrade brings a fixed WebKit, and the rig then no longer sees this kind of leak, only
-the app's own.
+It found one leak, now fixed. WebKit before October 2026 never frees a computed `calc()`, `min()`,
+`max()` or `clamp()` length ([bug 325845][wk-calc]), and the bars' widths were `max(2px, n%)`, which
+were computed again on every poll and on every frame of their transition. Left open, the window grew
+about 13 MB a minute. macOS 27.0.1 and most Linux distributions still ship that WebKit, so
+`styles.test.ts` keeps those functions out of inline styles. A plain length with a `min-width` in the
+stylesheet does the same job. Playwright's own WebKit has had the fix since 1.65, so the rig no
+longer shows this leak, only ones the app makes itself.
 
 [wk-calc]: https://bugs.webkit.org/show_bug.cgi?id=325845
-
-A tick's frame (40 ms) is shorter than the bars' 0.4 s transition, so the rig cuts each one short,
-which the app never does since its polls are at least a second apart. With `--frame-ms 500` the
-transitions finish, and a run is ten times slower. A rare "Page crashed" from WebKit is the browser
-itself; run it again.
 
 ## Releasing
 

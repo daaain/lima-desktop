@@ -24,7 +24,7 @@
   /* The width a plain percentage and the least of it a min-width, not `max(2px, n%)`: WebKit before
      October 2026 never frees a computed calc() length (bugs.webkit.org/show_bug.cgi?id=325845), and a
      transition between two computes one every frame, about 1 MB a second on the Containers view
-     (`just ui-leak`, docs/development.md). */
+     (styles.test.ts). */
   .fill { background: var(--bar); transition: width 0.4s; }
   .fill.some { min-width: 2px; }
   .behind { background: var(--soft); }
