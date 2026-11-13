@@ -5,25 +5,25 @@
   import { live } from './live.svelte';
   import { bytes } from './format';
   import { containerRows } from './containers';
+  import { section } from './url';
 
   const vms = $derived(live.snapshot?.vms ?? []);
   const runningVms = $derived(vms.filter((v) => v.instance.status === 'Running').length);
   const runningContainers = $derived(containerRows(live.snapshot).filter((r) => r.c.state === 'running').length);
-  const path = $derived(page.url.pathname);
-  const vmsActive = $derived(path === '/' || path.startsWith('/vm/'));
-  const current = (active: boolean) => (active ? 'page' : undefined);
+  const here = $derived(section(page.url.pathname));
+  const current = (s: typeof here) => (s === here ? 'page' : undefined);
 </script>
 
 <header>
   <a href="/" class="brand serif">Lima Desktop</a>
   <nav aria-label="Sections">
-    <a href="/" aria-current={current(vmsActive)}>VMs</a>
+    <a href="/" aria-current={current('vms')}>VMs</a>
     <span class="rule" aria-hidden="true"></span>
-    <a href="/containers" aria-current={current(path === '/containers')} title="In every running VM">Containers</a>
-    <a href="/images" aria-current={current(path === '/images')} title="In every running VM">Images</a>
-    <a href="/volumes" aria-current={current(path === '/volumes')} title="In every running VM">Volumes</a>
+    <a href="/containers" aria-current={current('containers')} title="In every running VM">Containers</a>
+    <a href="/images" aria-current={current('images')} title="In every running VM">Images</a>
+    <a href="/volumes" aria-current={current('volumes')} title="In every running VM">Volumes</a>
     <span class="rule" aria-hidden="true"></span>
-    <a href="/settings" aria-current={current(path === '/settings')}>Settings</a>
+    <a href="/settings" aria-current={current('settings')}>Settings</a>
   </nav>
 </header>
 {#if live.snapshot}

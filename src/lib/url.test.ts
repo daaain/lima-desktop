@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { withParam } from './url';
+import { section, withParam } from './url';
 
 describe('withParam', () => {
   const url = new URL('http://app/containers?vm=shop&running=1');
@@ -10,5 +10,20 @@ describe('withParam', () => {
   });
   it('encodes names', () => {
     expect(withParam(new URL('http://app/images'), 'vm', 'a b&c')).toBe('/images?vm=a+b%26c');
+  });
+});
+
+describe('section', () => {
+  it('names the masthead section a path is in', () => {
+    expect(section('/containers')).toBe('containers');
+    expect(section('/images')).toBe('images');
+    expect(section('/volumes')).toBe('volumes');
+    expect(section('/settings')).toBe('settings');
+    expect(section('/vm/harbor')).toBe('vms');
+    expect(section('/')).toBe('vms');
+  });
+  it("is VMs where the app starts: Tauri's tauri://localhost, whose path is empty", () => {
+    expect(new URL('tauri://localhost').pathname).toBe('');
+    expect(section(new URL('tauri://localhost').pathname)).toBe('vms');
   });
 });
