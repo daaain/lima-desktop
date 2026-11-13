@@ -58,7 +58,11 @@ export function gauges(vm: VmLive): { memory: Gauge; cpu: Gauge; disk: Gauge } {
  * is now is said as now; processes killed are those in the range (`kills`, from its history), and
  * left out until the history has said.
  */
-export function vmSentence(vm: VmLive, over: RangeKey, kills?: number): string {
+export function vmSentence(vm: VmLive, over: RangeKey, kills?: number, now: number = Date.now()): string {
+  // Silent, its last reading says nothing about now: say so rather than describe it.
+  if (vm.stalledSince != null) {
+    return `It hasn't answered for ${uptime(vm.stalledSince / 1000, now)}, though Lima still says it's running. Its figures are from before.`;
+  }
   const g = gauges(vm);
   const parts = [g.memory.used == null ? 'No memory reading yet.' : `${quarters(g.memory.pct)} of its memory is in use.`];
   if (g.disk.hot) parts.push('Its disk is past three quarters too.');
@@ -73,6 +77,10 @@ export function vmSentence(vm: VmLive, over: RangeKey, kills?: number): string {
 /** The overview's headline: how many running VMs are past three quarters of their memory or disk. */
 export function fleetHeadline(running: VmLive[]): string {
   if (running.length === 0) return 'No VM is running.';
+  // A VM that has stopped answering comes first, and its last reading counts for nothing.
+  const stalled = running.filter((v) => v.stalledSince != null);
+  if (stalled.length === 1) return `${stalled[0].instance.name} isn't answering.`;
+  if (stalled.length > 1) return `${countWord(stalled.length)} VMs aren't answering.`;
   const hot = running.map(gauges).filter((g) => g.memory.hot || g.disk.hot);
   if (hot.length === 0) return running.length === 1 ? 'The running VM has room to spare.' : 'Every running VM has room to spare.';
   const memory = hot.some((g) => g.memory.hot);

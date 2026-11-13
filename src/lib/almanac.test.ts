@@ -55,7 +55,25 @@ describe('fleetHeadline', () => {
   });
 });
 
+describe('fleetHeadline while a VM is stalled', () => {
+  const stalled = (name: string, memUsed: number) => ({ ...running(name, memUsed), stalledSince: 1_000 });
+  it("names a VM that isn't answering before anything else", () => {
+    expect(fleetHeadline([stalled('ember', 1), running('a', 7)])).toBe("ember isn't answering.");
+    expect(fleetHeadline([stalled('ember', 1), stalled('harbor', 2)])).toBe("Two VMs aren't answering.");
+  });
+  it("doesn't count a stalled VM's last reading as room to spare", () => {
+    expect(fleetHeadline([stalled('ember', 1)])).toBe("ember isn't answering.");
+  });
+});
+
 describe('vmSentence', () => {
+  it("says a stalled VM isn't answering, and that its figures are from before", () => {
+    const v = { ...running('ember', 1), stalledSince: Date.UTC(2026, 10, 10, 14, 26) };
+    expect(vmSentence(v, '24h', 0, Date.UTC(2026, 10, 10, 14, 30))).toBe(
+      "It hasn't answered for 4 min, though Lima still says it's running. Its figures are from before.",
+    );
+  });
+
   it('leads with memory in quarters', () => {
     expect(vmSentence(running('a', 1), '24h')).toBe('Less than a quarter of its memory is in use.');
   });

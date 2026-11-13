@@ -111,7 +111,7 @@
         <article class="row vm" animate:glide>
           <div class="who">
             <div class="name-line"><a class="name serif" href={href(i)} title={i.name}>{i.name}</a>{@render badges(vm)}</div>
-            <p class="sentence serif" class:hot={g.memory.hot || g.disk.hot}>{vmSentence(vm, range.key, bandRise(band(h, 'oom_kills')))}</p>
+            <p class="sentence serif" class:hot={g.memory.hot || g.disk.hot} class:alert={vm.stalledSince != null}>{vmSentence(vm, range.key, bandRise(band(h, 'oom_kills')), live.snapshot?.updated)}</p>
             {#if issues.length}<p class="error" title={issues.join('\n')}>{issues.join(' · ')}</p>{/if}
             <VmActions inst={i} inlineError={false} bind:error={actionErrors[i.name]} />
           </div>
@@ -197,6 +197,7 @@
   .name { font-size: 1.7rem; font-weight: 600; line-height: 1.15; color: var(--fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   a.badge { color: var(--alert); }
   .sentence { margin: 0; font-size: 1.25rem; line-height: 1.3; }
+  .sentence.alert { color: var(--alert); }
   .meter, .containers { display: grid; gap: 0.5rem; min-width: 0; align-content: start; }
   .figure { margin: 0; font-size: 1.05rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .figure strong { font-size: 1.55rem; font-weight: 600; }

@@ -65,7 +65,8 @@ for (const dark of [false, true]) {
   test(`VM overview${suffix}`, async () => {
     const { page, errors, close } = await open('/', { dark });
     await page.getByRole('heading', { level: 1 }).waitFor();
-    assert.equal(await page.getByRole('heading', { level: 1 }).innerText(), 'Two VMs are past three quarters of their memory or disk.');
+    // ember has stopped answering, which outranks the two VMs past three quarters.
+    assert.equal(await page.getByRole('heading', { level: 1 }).innerText(), "ember isn't answering.");
     const atlas = page.locator('article', { hasText: 'atlas' }).first();
     assert.match(await atlas.innerText(), /More than three quarters of its memory is in use\. One container has exited\./);
     assert.match(await page.locator('article', { hasText: 'quill' }).innerText(), /Its disk is past three quarters too\./);
@@ -187,6 +188,9 @@ test('A VM that has stopped responding says so on the overview and on its page',
   const { page, errors, close } = await open('/');
   const ember = page.locator('article', { hasText: 'ember' }).first();
   await ember.waitFor();
+  // The overview leads with it, and doesn't describe it from its last reading.
+  assert.equal(await page.getByRole('heading', { level: 1 }).innerText(), "ember isn't answering.");
+  assert.match(await ember.locator('.sentence').innerText(), /^It hasn't answered for 4 min, though Lima still says it's running\. Its figures are from before\.$/);
   await ember.getByRole('link', { name: 'stalled' }).click();
   await page.getByText("ember hasn't answered for 4 min, though Lima still says it's running.").waitFor();
   assert.equal(await page.getByRole('heading', { level: 1 }).innerText(), "ember isn't answering.");

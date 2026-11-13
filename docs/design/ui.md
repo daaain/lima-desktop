@@ -17,7 +17,9 @@ The pictures in this guide and the README are drawn from invented data by the UI
 
 - **A page's headline is a sentence with a full stop**, worst news first: "Two VMs are past three
   quarters of their memory or disk.", "harbor needs more memory and CPU, judging by the last 6 h.", "17 of 19 containers are running."
-  When nothing is wrong it says so ("Every running VM has room to spare."). The sentences live in
+  When nothing is wrong it says so ("Every running VM has room to spare."). A VM that has stopped
+  answering is the worst news of all ("ember isn't answering.", on the overview and its own page),
+  and its last reading isn't described as if it were now. The sentences live in
   `src/lib/almanac.ts`, each with its tests; a sentence is never assembled in a component.
 - **How full something is, is said in quarters**: less than a quarter, more than a quarter, more
   than half, more than three quarters. A sentence can't carry "34 %" honestly a second later; the
