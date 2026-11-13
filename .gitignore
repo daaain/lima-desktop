@@ -25,3 +25,6 @@ vite.config.ts.timestamp-*
 
 # End-to-end runs against a real Lima (just e2e): their full logs.
 .e2e/
+
+# Claude Code agents' git worktrees (isolated copies of the repo while a sub-agent works)
+.claude/worktrees/
