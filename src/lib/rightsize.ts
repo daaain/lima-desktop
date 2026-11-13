@@ -93,7 +93,8 @@ function vmMemoryHint(inst: Instance, s: Record<string, Summary>, over: RangeKey
   const full = s.psi_mem_full;
   const total = inst.memory;
   const last = theLast(over);
-  if (!used?.max) return { dimension: 'memory', verdict: 'unknown', reason: 'No memory history yet.' };
+  // Running out needs no history to be told: a kill or a stall carries its own evidence (a stall
+  // can outlast the samples around it, or come before any). Only advice from a peak waits for one.
   if (kills.vm + stalled > 0) {
     // "other" and "more" follow kills of the whole VM; after stalls alone they'd have nothing to follow.
     const others = kills.vm
@@ -120,6 +121,7 @@ function vmMemoryHint(inst: Instance, s: Record<string, Summary>, over: RangeKey
       suggest: roundUpGiB(total * 1.5),
     };
   }
+  if (!used?.max) return { dimension: 'memory', verdict: 'unknown', reason: 'No memory history yet.' };
   const stall = full?.p95 ?? full?.avg;
   if (stall != null && stall >= 10) {
     return {

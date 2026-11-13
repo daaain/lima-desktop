@@ -125,6 +125,18 @@ describe('memory, with the VM stalling', () => {
     expect(h.reason).toBe('The VM ran out of memory and stalled once in the last 24 h.');
     expect(h.suggest).toBe(12 * GiB);
   });
+  it('grows after a stall from memory or a kill of the whole VM even without the samples around it', () => {
+    // A stall kept from a window whose samples have since gone, or never came: it carries its own reading.
+    const stalled = memoryHint(inst(), {}, '24h', [], [fromMemory]);
+    expect(stalled.verdict).toBe('grow');
+    expect(stalled.reason).toBe('The VM ran out of memory and stalled once in the last 24 h.');
+    expect(stalled.suggest).toBe(12 * GiB);
+    expect(memoryHint(inst(), {}, '24h', [vmWide]).verdict).toBe('grow');
+    expect(memoryHint(inst(), counted(1), '24h').verdict).toBe('grow');
+    // Advice from a peak still waits for one.
+    expect(memoryHint(inst(), {}, '24h', [], [unknown]).verdict).toBe('unknown');
+    expect(memoryHint(inst(), {}, '24h', [ownLimit]).verdict).toBe('unknown');
+  });
   it('counts stalls and kills of the whole VM together', () => {
     const h = memoryHint(inst(), { mem_used: s({ max: 2 * GiB }), ...counted(1) }, '24h', [vmWide], [fromMemory, fromMemory]);
     expect(h.reason).toBe('The VM ran out of memory 3 times in the last 24 h: it killed a process once and stalled 2 times.');
