@@ -590,7 +590,11 @@ test("Tooltips show after a short rest, not the browser's slow ones, and screen 
 test('One time range for the whole app, chosen in the masthead and kept for next time', async () => {
   const { page, errors, close } = await open('/containers', { height: 1400 });
   const ranges = page.getByRole('group', { name: 'Time range' });
-  const chosen = () => ranges.locator('button[aria-pressed="true"]').allInnerTexts();
+  // allInnerTexts doesn't wait: on a slow machine the picker may not be drawn yet.
+  const chosen = async () => {
+    await ranges.locator('button[aria-pressed="true"]').first().waitFor();
+    return ranges.locator('button[aria-pressed="true"]').allInnerTexts();
+  };
   // 24 h on first run.
   assert.deepEqual(await chosen(), ['24 h']);
   await page.waitForFunction(() => /peak [^\n]+ in 24 h/.test(document.body.innerText));
