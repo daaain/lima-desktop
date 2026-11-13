@@ -127,8 +127,9 @@ try {
   await page.goto(base + opt.path);
   await page.getByRole('heading', { level: 1 }).waitFor();
   // An installed clock runs in real time until paused: paused, it moves only by runFor, a poll a
-  // tick, and not at all with --frozen.
-  await page.clock.pauseAt((await page.evaluate(() => Date.now())) + 1);
+  // tick, and not at all with --frozen. Paused a second ahead of the page's time, as it runs on
+  // while that's read, and pausing at a time already past throws.
+  await page.clock.pauseAt((await page.evaluate(() => Date.now())) + 1_000);
   await page.clock.runFor(5_000); // first poll, first histories
   await page.waitForTimeout(1_000);
 
