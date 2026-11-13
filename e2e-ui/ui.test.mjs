@@ -439,7 +439,9 @@ test('Images and Volumes open on what was already fetched', async () => {
   await close();
 });
 
-for (const [path, ready] of [['/', 'article'], ['/containers', '.line'], ['/images', '.line'], ['/volumes', '.line']]) {
+// A VM's page is checked once its out-of-memory list is there (harbor's kill and stall are in the
+// 24 h the app opens on): a table's columns are what would push it wider.
+for (const [path, ready] of [['/', 'article'], ['/containers', '.line'], ['/images', '.line'], ['/volumes', '.line'], ['/vm/harbor', '#oom tbody tr']]) {
   test(`${path} stacks on a narrow window`, async () => {
     const { page, errors, close } = await open(path, { width: 420, height: 900 });
     await page.locator(ready).first().waitFor();

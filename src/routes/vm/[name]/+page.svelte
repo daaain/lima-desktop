@@ -206,7 +206,7 @@
                     {#if who.removed}<span class="badge" title="This container no longer exists; its name comes from the history.">removed</span>{/if}
                   {:else if row.kill}
                     <span class="cname">not in a container</span>
-                  {:else}–{/if}
+                  {:else}<span class="none">–</span>{/if}
                   {#if row.stall && who}
                     <span class="muted cid" title="The container using the most memory at the last reading before the VM stopped responding: the first place to look, not necessarily the cause.">largest, {bytes(row.stall.containerMem)}</span>
                   {/if}
@@ -221,7 +221,7 @@
                   <td><span class="badge" class:alert={level === 'vm'}>{OOM_LEVEL_LABEL[level]}</span></td>
                   <td class="cause">{oomCause(e, i.memory)}</td>
                 {:else}
-                  <td>–</td>
+                  <td class="none">–</td>
                   <td><span class="badge alert">{STALL_LABEL}</span></td>
                   <td class="cause">{stallCause(row.stall, i.memory, now)}</td>
                 {/if}
@@ -298,5 +298,18 @@
   @media (max-width: 860px) {
     .column-heads { display: none; }
     .narrow-order { display: block; padding-bottom: 0.5rem; }
+  }
+  /* Five columns don't fit a phone: the time, the badges and a process with its pid and size are
+     as narrow as they get, and together wider than the page (which would then scroll sideways).
+     Each kill or stall wraps instead: its time, who, process and level on as few lines as fit, why
+     on lines of its own; a dash for what a stall has none of goes. */
+  @media (max-width: 640px) {
+    #oom table, #oom tbody, #oom tr { display: block; }
+    #oom thead { display: none; }
+    #oom tr { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.25rem 0.6rem; padding: 0.6rem 0; border-bottom: 1px solid var(--border); }
+    #oom td { display: block; padding: 0; border: 0; }
+    #oom td.cause { flex-basis: 100%; }
+    #oom .none { display: none; }
+    #oom .badge { margin-left: 0; }
   }
 </style>

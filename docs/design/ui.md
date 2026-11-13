@@ -164,7 +164,8 @@ under the sentence, figures and bar it explains, with the allocation as a dashed
   killing anything. A stall is put down to memory only when the last reading had memory past 90 %
   or work waiting on it over 10 % of the time; otherwise its cause is said to be unknown. Stalls are
   shaded on the Memory chart from start to end. The note over the list counts kills and stalls by
-  what ran out, the whole VM once for both. A stall still going on is the headline ("ember isn't
+  what ran out, the whole VM once for both. Below 640px its five columns would be wider than the
+  page, so each kill or stall wraps onto a few lines instead, its cause on lines of its own. A stall still going on is the headline ("ember isn't
   answering."), is said under it, and is a "stalled" badge on the overview. Then its containers as
   lines.
 - **Containers**: the headline and a dot per container; filters; then the column heads (the
