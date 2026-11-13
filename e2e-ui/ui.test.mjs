@@ -679,3 +679,40 @@ test("An earlier range's kills and stalls aren't shown under the range chosen si
   assert.deepEqual(errors, []);
   await close();
 });
+
+test("A range whose lookup fails says so, without listing the previous range's kills as its own", async () => {
+  const { page, errors, close } = await open('/vm/harbor', {
+    height: 1400,
+    init: () => {
+      localStorage.setItem('range', '24h');
+      // Every lookup of an hour's kills fails; 24 h's work.
+      window.__fakeOomFails = ({ from, to, limit }) => limit !== 1 && to - from < 2 * 3_600_000;
+    },
+  });
+  await page.locator('#oom tbody tr').first().waitFor();
+  await page.getByRole('group', { name: 'Time range' }).getByRole('button', { name: '1 h' }).click();
+  await page.locator('#oom .error', { hasText: 'the store could not be read' }).waitFor();
+  assert.equal(await page.locator('#oom tbody tr').count(), 0, "the 24 h rows listed under 1 h");
+  assert.doesNotMatch(await page.locator('main').innerText(), /in the last hour, newest first/);
+  assert.deepEqual(errors, []);
+  await close();
+});
+
+test("The kill count waits for the range just chosen rather than count the previous one's", async () => {
+  const { page, errors, close } = await open('/vm/harbor', {
+    height: 1400,
+    init: () => {
+      localStorage.setItem('range', '24h');
+      // The hour's answers come late; the day's at once.
+      window.__fakeOomDelay = ({ from, to, limit }) => (limit !== 1 && to - from < 2 * 3_600_000 ? 3000 : 0);
+    },
+  });
+  const pressure = page.locator('figure', { hasText: 'Pressure' }).first().locator('.stats');
+  await page.waitForFunction((el) => /\b1\s*OOM kill in/.test(el.innerText), await pressure.elementHandle());
+  await page.getByRole('group', { name: 'Time range' }).getByRole('button', { name: '1 h' }).click();
+  await page.waitForTimeout(800);
+  assert.doesNotMatch(await pressure.innerText(), /\b1\s*OOM kill in/, "the day's kill counted as the hour's");
+  await page.waitForFunction((el) => /\b0\s*OOM kills in/.test(el.innerText), await pressure.elementHandle(), { timeout: 10_000 });
+  assert.deepEqual(errors, []);
+  await close();
+});

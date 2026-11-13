@@ -52,10 +52,12 @@
   let stalls = $state<VmStall[]>([]);
   let latestTs = $state<number | null>(null);
   let oomError = $state<string | null>(null);
-  let oomLoaded = $state(false);
-  // The VM and range the kills and stalls (or the error) are for, so Sizing judges them only
-  // alongside a summary of the same.
-  let oomFor = $state<{ vm: string; over: RangeKey } | null>(null);
+  // The VM and range the kills and stalls are for, and the error: apart, so a failed lookup for a
+  // range just chosen never makes the previous range's kills look like its own. What's shown, and
+  // what Sizing judges alongside a summary of the same, is only what's for the selection on screen.
+  type Selection = { vm: string; over: RangeKey };
+  let dataFor = $state<Selection | null>(null);
+  let errorFor = $state<Selection | null>(null);
 
   /** The kills and stalls in [f, t]; when there are none, also when the latest was. */
   async function outOfMemory(vmName: string, f: number, t: number) {
@@ -81,22 +83,25 @@
         oom = events;
         stalls = found;
         latestTs = latest;
+        dataFor = asked;
         oomError = null;
-        oomLoaded = true;
-        oomFor = asked;
+        errorFor = null;
       },
       // Either step failing ends the loading as an error, so nothing waits on it for ever.
       (e) => {
         oomError = String(e);
-        oomLoaded = true;
-        oomFor = asked;
+        errorFor = asked;
       },
     );
   });
   // Whether what has landed is for the VM and range on screen. inOrder() keeps one selection's
   // overlapping refreshes in order, but a range just chosen can have the previous range's answer
-  // land before its own: until its own does, nothing is listed under its name.
-  const oomCurrent = $derived(oomFor?.vm === name && oomFor?.over === range.key);
+  // (or failure) land before its own: until its own does, nothing is listed under its name.
+  const onScreen = (s: Selection | null) => s?.vm === name && s?.over === range.key;
+  const oomCurrent = $derived(onScreen(dataFor));
+  const errorShown = $derived(onScreen(errorFor) ? oomError : null);
+  // For Sizing: this selection's kills and stalls; null when they couldn't be had; undefined until then.
+  const eventsShown = $derived(errorShown ? null : oomCurrent ? { oom, stalls } : undefined);
   // Kills and stalls in one list, newest first.
   type OomRow = { ts: number; kill: OomEvent; stall?: never } | { ts: number; stall: VmStall; kill?: never };
   const oomRows: OomRow[] = $derived(
@@ -119,7 +124,7 @@
   // kill or stall if need be — that is what was asked to be seen — then scroll to the panel once it exists.
   let arrivedHandled = false;
   $effect(() => {
-    if (!arrivedForOom || !oomCurrent || arrivedHandled) return;
+    if (!arrivedForOom || !(oomCurrent || errorShown) || arrivedHandled) return;
     arrivedHandled = true;
     if (!oomRows.length && latestShown != null) showRangeFor(latestShown);
     tick().then(() => document.getElementById('oom')?.scrollIntoView({ block: 'start' }));
@@ -200,18 +205,19 @@
   {#if vm.podmanError}<p class="error">podman: {vm.podmanError}</p>{/if}
 
   <Sizing inst={i} entity={vm.entity} latest={l} {from} {to} over={range.key} {series} markers={memoryMarkers}
-    oomEvents={oomError ? null : oomLoaded ? oom : undefined} stalls={oomError ? null : oomLoaded ? stalls : undefined} eventsFor={oomFor} bind:hints />
+    oomEvents={eventsShown === undefined ? undefined : eventsShown && eventsShown.oom} stalls={eventsShown === undefined ? undefined : eventsShown && eventsShown.stalls}
+    eventsFor={eventsShown === undefined ? null : { vm: name, over: range.key }} bind:hints />
 
-  {#if oomRows.length || latestShown != null || (oomCurrent && oomError) || arrivedForOom || vm.stalledSince}
+  {#if oomRows.length || latestShown != null || errorShown || arrivedForOom || vm.stalledSince}
     <section class="panel" id="oom">
       <h2 class="head">Out of memory</h2>
       {#if oomRows.length}<p class="note">{outOfMemoryNote(oom, stalls, range.key)}</p>{/if}
-      {#if oomCurrent && oomError}<p class="error">{oomError}</p>{/if}
+      {#if errorShown}<p class="error">{errorShown}</p>{/if}
       {#if vm.oomDetailError}
         <p class="note">No kernel detail: {vm.oomDetailError}. Kills are still counted, but not always which container, or why.</p>
       {/if}
       {#if !oomCurrent}
-        <p class="note">…</p>
+        {#if !errorShown}<p class="note">…</p>{/if}
       {:else if !oomRows.length}
         <p class="note">
           {#if latestShown != null}
