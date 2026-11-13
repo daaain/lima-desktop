@@ -133,8 +133,9 @@ longer shows this leak, only ones the app makes itself.
 The **Release** workflow (`.github/workflows/release.yml`) runs on a `v*` tag. It builds the macOS
 app as a universal `.dmg` on `macos-15`, and the Linux `.deb` and AppImage on `ubuntu-24.04`. Linux
 builds on 24.04, not CI's 26.04, because a binary needs the glibc it was built against or newer.
-The workflow then drafts a GitHub Release with the files attached and install notes above the
-generated changelog.
+The workflow then publishes a GitHub Release with the files attached and install notes above the
+generated changelog. It goes out as soon as the builds pass, with no draft to look over, so do a
+dry run (below) first when anything in the build has changed.
 
 1. On an up-to-date, clean main: **`just release patch`** (or `minor`, `major`, or `0.2.0`). It
    bumps the version in `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml` (and `Cargo.lock`) and
@@ -142,10 +143,10 @@ generated changelog.
    `Release v0.2.0` and tags it, all locally (`git tag -d v0.2.0 && git reset --hard HEAD~1` undoes
    it). Given the version already in the files, it only tags. It fetches first and refuses unless
    main is exactly `origin/main`.
-2. **`just release-push`**: pushes main and the tag together (`--atomic`), which starts the build.
+2. **`just release-push`**: pushes main and the tag together (`--atomic`), which starts the build
+   and the release.
    main has to take a direct push for this; where it only takes pull requests, merge the bump
    commit through one and push just the tag.
-3. Read the draft under Releases, then publish it.
 
 Don't tag by hand: a tag on a commit that still says the old version fails the workflow's first
 job, after the tag is public. The pre-push hook (`.githooks/pre-push`, switched on by `pnpm install`
@@ -154,7 +155,7 @@ before it leaves. To take back a bad tag: `git push origin :refs/tags/vX.Y.Z && 
 
 Run by hand on a branch, it's a dry run: Actions → Release → Run workflow, or
 `gh workflow run release.yml --ref <branch>`. It checks the version, builds everything and keeps the
-files as the run's artifacts, and instead of drafting a release it puts the draft it would make
+files as the run's artifacts, and instead of publishing a release it puts the one it would publish
 (files, notes and changelog) in the run's summary. Use it to try a workflow change, or to time a
 build, before tagging.
 

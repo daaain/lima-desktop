@@ -118,7 +118,7 @@ test:
 # Releasing (docs/development.md): `just release patch` (or minor, major, or 0.2.0) bumps the version in
 # tauri.conf.json, Cargo.toml (and Cargo.lock) and package.json, commits and tags v<version>, all
 # local — `git tag -d v<version> && git reset --hard HEAD~1` undoes it. `just release-push` then
-# starts the Release workflow, which builds the .dmg, .deb and AppImage into a draft GitHub Release.
+# starts the Release workflow, which builds the .dmg, .deb and AppImage and publishes them as a GitHub Release.
 # A pre-push hook (.githooks/pre-push) refuses any v* tag whose commit says another version.
 # Bump the version, commit and tag it - e.g. `just release patch` or `just release 0.2.0`
 release version_or_bump:
@@ -161,7 +161,7 @@ release version_or_bump:
     git tag -a "v$version" -m "Release v$version"
     echo "Tagged v$version. Look it over (git show --stat), then: just release-push"
 
-# Push main and the latest tag together, starting the Release workflow (a draft GitHub Release)
+# Push main and the latest tag together, starting the Release workflow (which publishes the GitHub Release)
 release-push:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -173,4 +173,4 @@ release-push:
     # --atomic: both or neither — a tag pushed without its commit would name one main doesn't have.
     git push --atomic origin main "$tag"
     echo "Building: https://github.com/daaain/lima-desktop/actions/workflows/release.yml"
-    echo "Then read the draft under https://github.com/daaain/lima-desktop/releases and publish it."
+    echo "It publishes to https://github.com/daaain/lima-desktop/releases when the builds are done."

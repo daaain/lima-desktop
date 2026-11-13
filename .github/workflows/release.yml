@@ -1,9 +1,10 @@
 # Release builds: on a version tag (v0.1.0, matching the version in tauri.conf.json, Cargo.toml and
 # package.json), the macOS app (universal: Apple silicon and Intel) as a .dmg and the Linux app as a
-# .deb and an AppImage, attached to a DRAFT GitHub Release to read over and publish by hand.
+# .deb and an AppImage, attached to a GitHub Release published straight away (a dry run first is
+# the time to look them over).
 # Run by hand on any branch (Actions → Release → Run workflow, or `gh workflow run release.yml --ref
 # <branch>`), it's a dry run of all of that: the same checks and builds, the files kept as the run's
-# artifacts, and the release it would draft shown in the run's summary, releasing nothing.
+# artifacts, and the release it would publish shown in the run's summary, releasing nothing.
 #
 # Unsigned: the macOS app is only ad-hoc signed (as every arm64 binary must be), so a downloaded copy
 # is quarantined and macOS refuses it until the quarantine is removed (the release notes and the
@@ -132,7 +133,7 @@ jobs:
           if-no-files-found: error
 
   release:
-    name: draft the GitHub Release
+    name: publish the GitHub Release
     needs: [version, macos, linux]
     runs-on: ubuntu-26.04
     timeout-minutes: 10
@@ -145,7 +146,7 @@ jobs:
           path: dist
           merge-multiple: true
       # Only a pushed v* tag releases; anything run by hand is a dry run, even on a tag.
-      - name: Draft v${{ needs.version.outputs.version }}${{ github.event_name != 'push' && ' (dry run)' || '' }}
+      - name: Release v${{ needs.version.outputs.version }}${{ github.event_name != 'push' && ' (dry run)' || '' }}
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ needs.version.outputs.version }}
@@ -190,7 +191,7 @@ jobs:
                 echo "\`v$VERSION\` is tagged already: bump the version (\`just release patch\`) before releasing this."
                 echo
               fi
-              echo "A run on the tag \`v$VERSION\` would draft this release with these files:"
+              echo "A run on the tag \`v$VERSION\` would publish this release with these files:"
               echo
               for f in "${files[@]}"; do echo "- \`${f##*/}\` ($(du -h "$f" | cut -f1))"; done
               echo
@@ -198,10 +199,10 @@ jobs:
               cat notes.md
               echo "$changes"
             } >> "$GITHUB_STEP_SUMMARY"
-            echo "Dry run: nothing released. The draft it would make is in the run's summary."
+            echo "Dry run: nothing released. The release it would publish is in the run's summary."
             exit 0
           fi
           gh release create "$GITHUB_REF_NAME" "${files[@]}" \
-            --repo "$GITHUB_REPOSITORY" --draft --verify-tag \
+            --repo "$GITHUB_REPOSITORY" --verify-tag \
             --title "Lima Desktop $VERSION" \
             --notes-file notes.md --generate-notes
