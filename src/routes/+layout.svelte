@@ -8,6 +8,7 @@
   import { theme } from '$lib/theme.svelte';
   import Masthead from '$lib/Masthead.svelte';
   import LimaProblem from '$lib/LimaProblem.svelte';
+  import Tooltip from '$lib/Tooltip.svelte';
   let { children } = $props();
   onMount(() => {
     live.start();
@@ -27,6 +28,7 @@
   {/if}
   <main>{@render children()}</main>
 </div>
+<Tooltip />
 
 <style>
   /* The look is described in docs/design/ui.md: a serif for sentences and names, a sans for

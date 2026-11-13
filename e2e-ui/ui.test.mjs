@@ -508,3 +508,24 @@ test("An open container's charts show their latest measurement, and keep up with
   assert.deepEqual(errors, []);
   await close();
 });
+
+test("Tooltips show after a short rest, not the browser's slow ones, and screen readers keep them", async () => {
+  const { page, errors, close } = await open('/');
+  const history = page.locator('.status span', { hasText: 'history' });
+  await history.waitFor();
+  const box = await history.boundingBox();
+  await page.mouse.move(box.x + 5, box.y + box.height / 2);
+  await page.waitForTimeout(100);
+  assert.equal(await page.locator('[role=tooltip]').count(), 0, 'not while the pointer only passes');
+  const tip = page.locator('[role=tooltip]');
+  await tip.waitFor({ timeout: 1000 });
+  assert.match(await tip.textContent(), /Metrics history on disk/);
+  // The browser's own would show too, a second later: its title is gone, kept for screen readers.
+  assert.equal(await history.getAttribute('title'), null);
+  assert.match(await history.getAttribute('aria-description'), /Metrics history on disk/);
+  // Off it, the tooltip goes.
+  await page.mouse.move(2, 2);
+  await tip.waitFor({ state: 'detached', timeout: 1000 });
+  assert.deepEqual(errors, []);
+  await close();
+});

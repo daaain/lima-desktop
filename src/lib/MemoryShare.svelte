@@ -5,6 +5,7 @@
   // (once a minute), not with every live reading.
   import type { Band } from './api';
   import { shareChart, shareTip } from './almanac';
+  import { OWN_TIP, tooltip } from './tipState.svelte';
 
   let { me, vm, ts, vmMemory, hot = false }: {
     /** This container's `mem` and its VM's `mem_used`, over the same columns (history.svelte.ts). */
@@ -13,33 +14,28 @@
   } = $props();
 
   const chart = $derived(shareChart(me, vm, vmMemory));
-  let over = $state<{ i: number; x: number; y: number; flip: boolean } | null>(null);
-
-  function move(e: PointerEvent) {
-    if (!chart) return;
-    const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
-    const i = Math.max(0, Math.min(chart.columns - 1, Math.floor(((e.clientX - r.left) / r.width) * chart.columns)));
-    // Beside the pointer, on whichever side has the room, so it never widens the page.
-    over = { i, x: e.clientX, y: e.clientY, flip: e.clientX > window.innerWidth / 2 };
-  }
   const time = (at: number | undefined) =>
     at == null ? '' : new Date(at).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
-  const tip = $derived(over && chart ? shareTip(time(ts?.[over.i]), me?.max[over.i], vm?.max[over.i], vmMemory) : null);
+
+  // The moment under the pointer, read out by the app's tooltip (Tooltip.svelte).
+  function move(e: PointerEvent) {
+    if (!chart) return;
+    const el = e.currentTarget as HTMLElement;
+    const r = el.getBoundingClientRect();
+    const i = Math.max(0, Math.min(chart.columns - 1, Math.floor(((e.clientX - r.left) / r.width) * chart.columns)));
+    tooltip.point(el, shareTip(time(ts?.[i]), me?.max[i], vm?.max[i], vmMemory), e.clientX, e.clientY);
+  }
 </script>
 
 {#if chart}
   <div class="share" class:hot role="img" aria-label="Memory, last 24 hours: this container's part of its VM's memory in use"
-    onpointermove={move} onpointerleave={() => (over = null)}>
+    {...{ [OWN_TIP]: '' }} onpointermove={move} onpointerleave={() => tooltip.hide()}>
     <svg viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
       <line class="ceiling" x1="0" x2="100" y1={chart.ceiling} y2={chart.ceiling} />
       <path class="vm" d={chart.vm} />
       <path class="me" d={chart.me} />
     </svg>
   </div>
-  {#if over && tip}
-    <div class="tip num" role="tooltip" style:top={`${over.y + 16}px`}
-      style:left={over.flip ? undefined : `${over.x + 12}px`} style:right={over.flip ? `${window.innerWidth - over.x + 12}px` : undefined}>{tip}</div>
-  {/if}
 {:else}
   <div class="share empty" title="Memory: no history yet"></div>
 {/if}
@@ -52,8 +48,4 @@
   .me { fill: var(--bar); }
   .hot .me { fill: var(--warn); }
   .ceiling { stroke: var(--muted); stroke-width: 1; stroke-dasharray: 3 3; vector-effect: non-scaling-stroke; }
-  .tip {
-    position: fixed; z-index: 10; pointer-events: none; white-space: nowrap;
-    background: var(--fg); color: var(--bg); font-size: 0.75rem; line-height: 1.4; padding: 0.35rem 0.55rem; border-radius: 4px;
-  }
 </style>

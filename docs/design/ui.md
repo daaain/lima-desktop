@@ -32,6 +32,11 @@ The pictures in this guide and the README are drawn from invented data by the UI
 - **Counts up to twelve are spelled at the start of a sentence** ("Five are running"), digits
   elsewhere. Names are never abbreviated; a long one is cut with an ellipsis and whole in its
   tooltip.
+- **Tooltips are the app's own, not the browser's.** Any element's `title` is shown by one
+  tooltip (`Tooltip.svelte`, timing in `tips.ts`) after the pointer rests 200 ms — the browser's
+  takes a second or more — then at once from one thing to the next while one is showing. The
+  `title` moves to `aria-description` so screen readers keep it. Something that reads out what's
+  under the pointer itself (the share chart) feeds the same tooltip.
 - **No all-caps labels.** A label is either a serif head over a column ("Memory", "CPU") or a small
   grey line under a figure saying what it is ("peak", "cores, 95th percentile").
 - Units stay on the figure (`38.9 GiB of 45.8 GiB`), in the binary units the rest of the app uses.
