@@ -1,6 +1,6 @@
 // A stand-in for the Rust backend, loaded into the page before the app: it answers the commands
 // in src/lib/api.ts with an invented fleet. Nothing here is recorded from a real machine. The fleet is
-// made to exercise the UI: a VM past three quarters of its memory (a leak), a CPU-bound one with
+// made to exercise the UI: a VM past three quarters of its memory (a leak) with a container restarted after growing for hours, a CPU-bound one with
 // an OOM kill and a stall from memory, one with a nearly full disk and a managed-by marker, one whose podman is
 // too old and that has stopped responding, an idle one, and stopped and broken ones; image stores with superseded tags, dangling images and
 // an image with two tags, and volumes some no container uses (anonymous ones among them). Every value is a function of the entity and the time,
@@ -47,7 +47,13 @@
       if (t < from || t > to) return level;
       return level + (peak - level) * ((t - from) / (to - from)) ** 2;
     },
+    // One shape until `at`, another after: a container restarted.
+    restarted: (before, at, after) => (t, id) => (t < at ? before(t, id) : after(t, id)),
   };
+
+  // atlas's warehouse emulator grew to about 18 GiB over five hours and was restarted three minutes
+  // ago: its cgroup's peak (mem_peak) started again, at 300 MiB, while its history keeps the 18 GiB.
+  const WAREHOUSE_RESTART = NOW - 3 * 60_000;
 
   // harbor ran out of memory two hours ago: its devbox grew for 45 minutes until the VM stopped
   // answering, and nothing was measured until it answered again 17 minutes later, the devbox
@@ -152,7 +158,10 @@
       [
         service('atlas', 'frontend', local('atlas_frontend'), { memMiB: 690, peak: 1.9, pids: 70, cpu: shapes.daily(0.01, 0.4) }),
         service('atlas', 'graph-api', local('atlas_graph-api'), { memMiB: 514, cpu: shapes.daily(0.02, 0.9) }),
-        service('atlas', 'warehouse', 'ghcr.io/example/warehouse-emulator:0.6.6', { memMiB: 2600, mem: shapes.leak(0.3, 1.9, 0.8), peak: 2.1, upHours: 7 }),
+        service('atlas', 'warehouse', 'ghcr.io/example/warehouse-emulator:0.6.6', {
+          memMiB: 240, peak: 1.25, upHours: 0.05,
+          mem: shapes.restarted(shapes.climb(shapes.flat(1, 0.06), WAREHOUSE_RESTART - 5 * HOUR, WAREHOUSE_RESTART, 76), WAREHOUSE_RESTART, shapes.flat(1, 0.06)),
+        }),
         service('atlas', 'scraper', local('atlas_scraper'), { memMiB: 448 }),
         service('atlas', 'research', local('atlas_research'), { memMiB: 370 }),
         service('atlas', 'integrations', local('atlas_integrations'), { memMiB: 309 }),

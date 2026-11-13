@@ -2,7 +2,6 @@
   import { goto } from '$app/navigation';
   import { page } from '$app/state';
   import { live } from '$lib/live.svelte';
-  import { bytes } from '$lib/format';
   import { containersHeadline, countWord, exitedSentence, runsSentence } from '$lib/almanac';
   import { History } from '$lib/history.svelte';
   import { liveTo } from '$lib/liveTo.svelte';
@@ -33,10 +32,11 @@
   const rows = $derived(filterContainers(all, { ...urlFilter, query }));
 
   const history = new History();
-  history.follow(() => rows.filter((r) => r.c.state === 'running').map((r) => r.c.entity));
-  // Every memory bar shares one scale: the largest container listed.
-  const largest = $derived(rows.reduce<typeof rows[number] | null>((top, r) => ((r.c.latest.mem ?? 0) > (top?.c.latest.mem ?? 0) ? r : top), null));
-  const memScale = $derived(Math.max(1, largest?.c.latest.mem ?? 0));
+  // Each running container's last 24 hours, and its VM's: a line draws its memory as its part of the VM's.
+  history.follow(() => {
+    const up = rows.filter((r) => r.c.state === 'running');
+    return [...up.map((r) => r.c.entity), ...new Set(up.map((r) => live.vm(r.vm)?.entity))];
+  });
   // One group per VM. By default the VM using the most memory first, and within it the largest
   // container first; a column head orders both by its column (containers.ts).
   const ordering = new Ordering('containers', CONTAINER_SORTS, BY_MEMORY);
@@ -108,7 +108,7 @@
         {#each g.rows as { vm, c } (c.id)}
           {@const key = keyOf(vm, c.id)}
           <div animate:glide>
-            <ContainerLine {vm} {c} history={history.get(c.entity)} {memScale} vmCpus={g.live?.instance.cpus ?? 1} vmMemory={g.live?.instance.memory ?? 0} second="image"
+            <ContainerLine {vm} {c} history={history.get(c.entity)} vmHistory={history.get(g.live?.entity)} vmCpus={g.live?.instance.cpus ?? 1} vmMemory={g.live?.instance.memory ?? 0} second="image"
               now={live.snapshot?.updated} selected={key in open} onselect={() => toggle(key)} onerror={(e) => (actionError = e)} />
             {#if open[key] != null}
               <div transition:unfold>
@@ -121,8 +121,9 @@
     {/each}
   </div>
   <p class="note">
-    Memory bars share one scale: full width is the largest container listed{#if largest}, {largest.c.composeService ?? largest.c.name} at {bytes(memScale)}{/if}; the pale stretch is each one's peak.
-    CPU bars are scaled to the cores of the container's VM. Above each, the last 24 hours; hover for how long was spent at each level.
+    Memory: full width is the container's own limit, else its VM's memory; dark is now, pale the peak since it started, the tick the peak in the last 24 hours.
+    Above it, the last 24 hours of its VM: the VM's memory in use, soft, and this container's part of it in front; hover to read a moment.
+    CPU bars are scaled to the cores of the container's VM, with its last 24 hours above; hover for how long was spent at each level.
   </p>
 {/if}
 
@@ -133,7 +134,7 @@
   .dot { width: 12px; height: 12px; border-radius: 50%; background: var(--bar); box-sizing: border-box; }
   .dot.off { background: none; border: 2px solid var(--warn); }
   .check { display: flex; align-items: center; gap: 0.3rem; font-size: 0.9rem; }
-  .lines, .containers-grid { --container-columns: minmax(13rem, 1.3fr) minmax(9rem, 1fr) 8.5rem minmax(7rem, 0.6fr) 5.5rem 6.5rem 10rem; }
+  .lines, .containers-grid { --container-columns: minmax(13rem, 1.3fr) minmax(9rem, 1fr) 9.5rem minmax(7rem, 0.6fr) 5.5rem 6.5rem 10rem; }
   .containers-grid { grid-template-columns: var(--container-columns); column-gap: 1.4rem; margin-top: 0.3rem; } /* 0.3rem less: SortHead's min-height */
   .lines { display: grid; gap: 2.2rem; }
   section { border-top: 1px solid var(--fg); padding-top: 0.8rem; border-bottom: 1px solid var(--border); }

@@ -1,17 +1,20 @@
 <script lang="ts">
   // One container as a line: its name, memory and CPU as bars with their last 24 hours above,
   // how long it has been up, and what can be done to it. Used by the Containers view and a VM's page.
+  // Both bars are measured against what the container may use (its memory limit, else its VM's
+  // memory; its VM's cores), never against the other lines, so a line reads the same in any list.
   import type { ContainerLive, Series } from './api';
-  import { band, isHot, share, sketch } from './almanac';
+  import { band, rowMemory, share, sketch } from './almanac';
   import { bytes, cores, rate, uptime } from './format';
   import Bar from './Bar.svelte';
   import ContainerActions from './ContainerActions.svelte';
+  import MemoryShare from './MemoryShare.svelte';
   import Sketch from './Sketch.svelte';
 
-  let { vm, c, history, memScale, vmCpus, vmMemory, second, now, selected = false, onselect, onerror }: {
-    vm: string; c: ContainerLive; history: Series | undefined;
-    /** Bytes at the full width of the memory bar (the largest container listed with it). */
-    memScale: number;
+  let { vm, c, history, vmHistory, vmCpus, vmMemory, second, now, selected = false, onselect, onerror }: {
+    vm: string; c: ContainerLive;
+    /** The last 24 hours of this container, and of its VM (history.svelte.ts). */
+    history: Series | undefined; vmHistory: Series | undefined;
     vmCpus: number; vmMemory: number;
     /** What the line under the name says: the image, or what it's doing (pids and traffic). */
     second: 'image' | 'activity';
@@ -21,9 +24,7 @@
 
   const l = $derived(c.latest);
   const running = $derived(c.state === 'running');
-  // An unlimited container reports the VM's memory as its limit: only a lower one is its own.
-  const limit = $derived(l.mem_limit > 0 && l.mem_limit < vmMemory * 0.95 ? l.mem_limit : undefined);
-  const tight = $derived(limit != null && isHot(share(l.mem, limit)));
+  const memory = $derived(rowMemory(l, { vmMemory, history: band(history, 'mem'), startedAt: c.startedAt, now }));
   const oom = $derived(l.oom_kills ?? 0);
 </script>
 
@@ -37,13 +38,12 @@
   </div>
   {#if running}
     <div class="drawn">
-      <Sketch sketch={sketch(band(history, 'mem'), memScale)} hot={tight} label="Memory" />
-      <Bar pct={share(l.mem, memScale)} behind={share(l.mem_peak, memScale)} hot={tight}
-        label={`Memory ${bytes(l.mem)}, peak ${bytes(l.mem_peak)}${limit ? `, limit ${bytes(limit)}` : ''}; full width ${bytes(memScale)}`} />
+      <MemoryShare me={band(history, 'mem')} vm={band(vmHistory, 'mem_used')} ts={history?.ts ?? vmHistory?.ts} {vmMemory} hot={memory.hot} />
+      <Bar pct={memory.pct} behind={memory.behind} tick={memory.tick} hot={memory.hot} label={memory.label} />
     </div>
     <div class="said">
-      <strong class:hot={tight}>{bytes(l.mem)}</strong>
-      <span class="label">{limit ? `of ${bytes(limit)} limit` : `peak ${bytes(l.mem_peak)}`}</span>
+      <strong class="of" class:hot={memory.hot}><span>{bytes(l.mem)}</span> <span class="label">{memory.of}</span></strong>
+      <span class="label">{memory.peakSaid}</span>
     </div>
     <div class="drawn">
       <Sketch sketch={sketch(band(history, 'cpu_mc'), vmCpus * 1000)} label="CPU" />
@@ -79,6 +79,10 @@
   .drawn { display: grid; gap: 4px; min-width: 0; padding-bottom: 0.35rem; --sketch-height: 22px; --bar-height: 7px; }
   .said { display: grid; gap: 0.05rem; min-width: 0; }
   .said strong { font-size: 1rem; font-weight: 600; white-space: nowrap; }
+  /* "of VM" fits beside the figure; "of 1.0 GiB limit" doesn't, and goes under it. */
+  .said strong.of { white-space: normal; }
+  .said strong.of span { white-space: nowrap; }
+  .said strong .label { font-weight: 400; }
   .said .label, .up { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .up { padding-bottom: 0.15rem; }
   .state { grid-column: 2 / 7; padding-bottom: 0.15rem; }

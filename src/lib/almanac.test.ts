@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { containersHeadline, containersSentence, countWord, exitedSentence, fullWindow, holdsSentence, intervalPhrase, runsSentence, fleetHeadline, hostBar, quarters, share, sketch, unusedHeadline, unusedLede, vmHeadline, vmSentence } from './almanac';
+import {
+  bandPeak, containersHeadline, containersSentence, countWord, exitedSentence, fullWindow, holdsSentence, intervalPhrase, ownLimit, rowMemory,
+  runsSentence, fleetHeadline, hostBar, quarters, selfMemory, share, shareChart, shareTip, sketch, unusedHeadline, unusedLede, vmHeadline, vmSentence,
+} from './almanac';
 import type { Hint } from './rightsize';
 import { container, vm } from './testing';
 
@@ -223,5 +226,135 @@ describe('images and volumes', () => {
     );
     expect(unusedLede({ hot: [], freeable: 1024 ** 2 })).toBe('Removing the unused ones would free 1.0 MiB.');
     expect(unusedLede({ hot: [], freeable: 0 })).toBe('');
+  });
+});
+
+describe("a container's memory", () => {
+  const MiB = 1024 ** 2;
+  const VM = 46.9 * GiB;
+  const NOW = 1_000_000_000_000;
+  const started = NOW / 1000 - 180; // 3 min ago
+  const b = (max: (number | null)[]) => ({ min: max, max, avg: max });
+
+  describe('ownLimit', () => {
+    it('is a limit only when below the VM: an unlimited container reports the VM as its limit', () => {
+      expect(ownLimit(GiB, VM)).toBe(GiB);
+      expect(ownLimit(0, VM)).toBeUndefined();
+      expect(ownLimit(undefined, VM)).toBeUndefined();
+      expect(ownLimit(46.5 * GiB, VM)).toBeUndefined();
+    });
+  });
+
+  describe('bandPeak', () => {
+    it('is the most a band reached, or nothing without samples', () => {
+      expect(bandPeak(b([1, null, 7, 3]))).toBe(7);
+      expect(bandPeak(b([null, null]))).toBeUndefined();
+      expect(bandPeak(undefined)).toBeUndefined();
+    });
+  });
+
+  describe('rowMemory', () => {
+    const restarted = { mem: 242.2 * MiB, mem_peak: 300.5 * MiB, mem_limit: VM };
+    it("is drawn against the VM, its 24 h peak from history even when the cgroup's peak has reset", () => {
+      const m = rowMemory(restarted, { vmMemory: VM, history: b([null, 30.3 * GiB, 18 * GiB, null, 240 * MiB]), startedAt: started, now: NOW });
+      expect(m.scale).toBe(VM);
+      expect(m.limit).toBeUndefined();
+      expect(m.peak).toBe(30.3 * GiB);
+      expect(m.pct).toBeCloseTo(0.504, 2);
+      expect(m.behind).toBeCloseTo(0.626, 2);
+      expect(m.tick).toBeCloseTo(64.6, 1);
+      expect(m.hot).toBe(false);
+      expect(m.of).toBe('of VM');
+      expect(m.peakSaid).toBe('peak 30.3 GiB in 24 h');
+      expect(m.label).toBe(
+        "Memory 242.2 MiB now; peak 30.3 GiB in the last 24 h, 300.5 MiB since it started 3 min ago; full width is the VM's 46.9 GiB",
+      );
+    });
+    it('is drawn against its own limit when it has one, in the warning colour past three quarters of it', () => {
+      const m = rowMemory({ mem: 900 * MiB, mem_peak: 1000 * MiB, mem_limit: GiB }, { vmMemory: VM, history: b([950 * MiB]), startedAt: started, now: NOW });
+      expect(m.scale).toBe(GiB);
+      expect(m.limit).toBe(GiB);
+      expect(m.hot).toBe(true);
+      expect(m.of).toBe('of 1.0 GiB limit');
+      expect(m.label).toMatch(/; full width is its 1\.0 GiB limit$/);
+      expect(rowMemory({ mem: 500 * MiB, mem_limit: GiB }, { vmMemory: VM, startedAt: started, now: NOW }).hot).toBe(false);
+    });
+    it('falls back to the peak since it started until there is history, without claiming 24 h', () => {
+      const m = rowMemory(restarted, { vmMemory: VM, history: b([null, null]), startedAt: started, now: NOW });
+      expect(m.peak).toBe(300.5 * MiB);
+      expect(m.peakSaid).toBe('peak 300.5 MiB');
+      expect(m.label).toBe("Memory 242.2 MiB now; peak 300.5 MiB since it started 3 min ago; full width is the VM's 46.9 GiB");
+    });
+    it('never says a 24 h peak below what it uses now (history lags the live reading)', () => {
+      expect(rowMemory(restarted, { vmMemory: VM, history: b([100 * MiB]), startedAt: started, now: NOW }).peak).toBe(242.2 * MiB);
+    });
+    it('leaves out when it started if that is unknown', () => {
+      expect(rowMemory(restarted, { vmMemory: VM, history: b([GiB]), startedAt: null, now: NOW }).label).toMatch(/300\.5 MiB since it started;/);
+    });
+  });
+
+  describe('shareChart', () => {
+    it('is nothing without the VM memory or any samples', () => {
+      expect(shareChart(b([1]), b([2]), 0)).toBeNull();
+      expect(shareChart(undefined, undefined, 100)).toBeNull();
+      expect(shareChart(b([null]), b([null]), 100)).toBeNull();
+    });
+    it("draws the VM in use and this container in front as stepped areas on the VM's scale, gaps left open", () => {
+      // Four columns, 25 wide; the scale keeps 8 % headroom over the VM's memory for its dashed line.
+      const s = shareChart(b([null, 25, 50, null]), b([50, 50, 100, null]), 100)!;
+      expect(s.ceiling).toBe(8);
+      expect(s.columns).toBe(4);
+      expect(s.vm).toBe('M0,100V54H25V54H50V8H75V100Z');
+      expect(s.me).toBe('M25,100V77H50V54H75V100Z');
+    });
+    it('keeps a gap in the middle as a gap', () => {
+      const s = shareChart(b([50, null, 50, 50]), b([50, null, 50, 50]), 100)!;
+      expect(s.me).toBe('M0,100V54H25V100ZM50,100V54H75V54H100V100Z');
+    });
+    it('clamps what goes past the VM', () => {
+      expect(shareChart(b([200]), b([200]), 100)!.me).toBe('M0,100V8H100V100Z');
+    });
+  });
+
+  describe('shareTip', () => {
+    it("says the moment: this container, its share of the VM, the VM's use", () => {
+      expect(shareTip('14:10', 242.2 * MiB, 5.3 * GiB, VM)).toBe('14:10 · this container 242.2 MiB (0.5 % of the VM) · VM 5.3 GiB of 46.9 GiB in use');
+      expect(shareTip('14:10', 30.3 * GiB, 40 * GiB, VM)).toBe('14:10 · this container 30.3 GiB (65 % of the VM) · VM 40.0 GiB of 46.9 GiB in use');
+    });
+    it('says what was not measured', () => {
+      expect(shareTip('14:10', null, 5.3 * GiB, VM)).toBe('14:10 · nothing from this container · VM 5.3 GiB of 46.9 GiB in use');
+      expect(shareTip('14:10', null, null, VM)).toBe('14:10 · no readings');
+    });
+  });
+
+  describe('selfMemory', () => {
+    const now = { mem: 242.2 * MiB, mem_peak: 300.5 * MiB };
+    it('is drawn against its own peak in the range: now, and the peak since it started', () => {
+      const m = selfMemory(now, { range: b([30.3 * GiB, 240 * MiB]), startedAt: started, now: NOW })!;
+      expect(m.sentence).toBe('It uses less than a quarter of its peak in this range.');
+      expect(m.figures).toBe('242.2 MiB now · peak 30.3 GiB in this range, 300.5 MiB since it started 3 min ago');
+      expect(m.pct).toBeCloseTo(0.78, 2);
+      expect(m.behind).toBeCloseTo(0.97, 2);
+      expect(m.tick).toBeUndefined();
+      expect(m.hot).toBe(false);
+      expect(m.label).toBe(`${m.figures}; full width is its peak in this range`);
+    });
+    it('is drawn against its limit when that is higher, marked, and warns past three quarters of it', () => {
+      const m = selfMemory({ mem: 900 * MiB, mem_peak: 1000 * MiB }, { range: b([950 * MiB]), limit: GiB, startedAt: started, now: NOW })!;
+      expect(m.sentence).toBe('It uses more than three quarters of its 1.0 GiB limit.');
+      expect(m.tick).toBe(100);
+      expect(m.hot).toBe(true);
+      expect(m.label).toMatch(/; full width is its 1\.0 GiB limit$/);
+    });
+    it('says when it is at its peak', () => {
+      expect(selfMemory({ mem: GiB, mem_peak: GiB }, { range: b([GiB]), startedAt: started, now: NOW })!.sentence).toBe('It is at its peak for this range.');
+    });
+    it('has only the peak since it started without history in the range, and nothing without a reading', () => {
+      const m = selfMemory(now, { range: b([null]), startedAt: started, now: NOW })!;
+      expect(m.sentence).toBe('No history in this range yet.');
+      expect(m.figures).toBe('242.2 MiB now · peak 300.5 MiB since it started 3 min ago');
+      expect(m.behind).toBe(100);
+      expect(selfMemory({}, { range: b([GiB]), startedAt: started, now: NOW })).toBeNull();
+    });
   });
 });

@@ -37,9 +37,8 @@
   let hints = $state<Hint[]>([]);
 
   const history = new History();
-  history.follow(() => (vm?.containers ?? []).filter((c) => c.state === 'running').map((c) => c.entity));
-  // The memory bars' full width: the largest peak among this VM's containers.
-  const memScale = $derived(Math.max(1, ...(vm?.containers ?? []).map((c) => Math.max(c.latest.mem ?? 0, c.latest.mem_peak ?? 0))));
+  // Each running container's last 24 hours, and the VM's: a line draws its memory as its part of the VM's.
+  history.follow(() => [vm?.entity, ...(vm?.containers ?? []).filter((c) => c.state === 'running').map((c) => c.entity)]);
 
   $effect(() => {
     const entity = vm?.entity;
@@ -252,8 +251,8 @@
     {#if actionError}<p class="error">{actionError}</p>{/if}
     {#if vm.containers.length}
       <p class="note">
-        Memory: dark is now, pale the peak since it started, full width the largest peak here ({bytes(memScale)}). CPU: full width is this VM's {i.cpus} cores.
-        Above each, the last 24 hours. Compose projects are read-only groups. <a href={`/containers?vm=${encodeURIComponent(name)}`}>Filter and search them in Containers.</a>
+        Memory: full width is the container's own limit, else this VM's {bytes(i.memory)}; dark is now, pale the peak since it started, the tick the peak in the last 24 hours.
+        Above it, the VM's last 24 hours: its memory in use, soft, and this container's part in front. CPU: full width is this VM's {i.cpus} cores, its last 24 hours above. Compose projects are read-only groups. <a href={`/containers?vm=${encodeURIComponent(name)}`}>Filter and search them in Containers.</a>
       </p>
       <div class="lines">
         <div class="narrow-order"><OrderPicker columns={CONTAINER_COLUMNS} {ordering} /></div>
@@ -268,7 +267,7 @@
           {#if groups.length > 1 || g.project}<h3 class="group serif">{g.project ?? 'Not in a compose project'}</h3>{/if}
           {#each g.containers as c (c.id)}
             <div class="row" animate:glide>
-              <ContainerLine vm={name} {c} history={history.get(c.entity)} {memScale} vmCpus={i.cpus} vmMemory={i.memory} second="activity" now={live.snapshot?.updated}
+              <ContainerLine vm={name} {c} history={history.get(c.entity)} vmHistory={history.get(vm.entity)} vmCpus={i.cpus} vmMemory={i.memory} second="activity" now={live.snapshot?.updated}
                 selected={open.includes(c.id)} onselect={() => toggle(c.id)} onerror={(e) => (actionError = e)} />
               {#if open.includes(c.id)}
                 <div id={`detail-${c.id}`} transition:unfold>
@@ -293,7 +292,7 @@
   .title.small { align-items: baseline; }
   .title.small .head { flex: 1 1 20rem; }
   .panel { display: grid; gap: 0.7rem; margin-top: 1.4rem; }
-  .lines { --container-columns: minmax(13rem, 1.3fr) minmax(9rem, 1fr) 8.5rem minmax(7rem, 0.6fr) 5.5rem 6.5rem 10rem; border-bottom: 1px solid var(--border); }
+  .lines { --container-columns: minmax(13rem, 1.3fr) minmax(9rem, 1fr) 9.5rem minmax(7rem, 0.6fr) 5.5rem 6.5rem 10rem; border-bottom: 1px solid var(--border); }
   .column-heads { grid-template-columns: var(--container-columns); column-gap: 1.4rem; margin-top: 0.1rem; } /* 0.3rem less: SortHead's min-height */
   .column-heads + .group, .column-heads + .row > :global(.line) { border-top: 0; }
   .group { margin: 0; padding: 1rem 0 0.4rem; font-size: 1.05rem; font-weight: 500; color: var(--muted); border-top: 1px solid var(--border); }

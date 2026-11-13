@@ -119,6 +119,7 @@ for (const dark of [false, true]) {
     assert.equal(await page.getByRole('heading', { level: 1 }).innerText(), '17 of 19 containers are running.');
     assert.match(await page.locator('main').innerText(), /ember: podman 4\.3\.1 in this VM is too old/);
     await page.locator('.sketch:not(.empty)').first().waitFor();
+    await page.locator('.share:not(.empty)').first().waitFor();
     await shoot(page, `containers${suffix}`);
     assert.deepEqual(errors, []);
     await close();
@@ -458,6 +459,36 @@ test("Hovering one chart reads the same moment off every chart on the page", asy
   const count = await charts.count();
   assert.ok(count >= 4, `${count} charts`);
   for (let n = 1; n < count; n++) assert.equal(await time(n).textContent(), read, `chart ${n} reads the same moment`);
+  assert.deepEqual(errors, []);
+  await close();
+});
+
+test("A container's memory is drawn against its VM or its own limit, its peak from the last 24 hours", async () => {
+  const { page, errors, close } = await open('/containers', { height: 1400 });
+  const line = (name) => page.locator('.line', { has: page.locator('.name', { hasText: new RegExp(`^${name}`) }) }).first();
+  const memory = (name) => line(name).locator('.said').first();
+  // warehouse was restarted three minutes ago after growing to about 18 GiB: its cgroup's peak
+  // started again, but the line says the peak of its last 24 hours, from the history.
+  await line('warehouse').locator('.share:not(.empty)').waitFor();
+  await page.waitForFunction(() => /in 24 h/.test(document.body.innerText));
+  assert.match(await memory('warehouse').innerText(), /^\d+\.\d MiB of VM\npeak 1[78]\.\d GiB in 24 h$/);
+  const bar = await line('warehouse').locator('.bar').first().getAttribute('aria-label');
+  assert.match(bar, /^Memory \d+\.\d MiB now; peak 1[78]\.\d GiB in the last 24 h, 300\.0 MiB since it started 3 min ago; full width is the VM's 48\.0 GiB$/);
+  // harbor's app has a limit of its own: its bar is that wide, and it's past three quarters of it.
+  assert.match(await memory('app').innerText(), /^\d+\.\d MiB of 1\.0 GiB limit\npeak \d+\.\d MiB in 24 h$/);
+  assert.match(await line('app').locator('.bar').first().getAttribute('aria-label'), /full width is its 1\.0 GiB limit$/);
+  assert.equal(await memory('app').locator('strong').evaluate((el) => el.classList.contains('hot')), true);
+  // Hovering the chart above the bar reads one moment of the VM.
+  const chart = await line('warehouse').locator('.share').boundingBox();
+  await page.mouse.move(chart.x + chart.width * 0.97, chart.y + chart.height / 2);
+  assert.match(await page.getByRole('tooltip').innerText(), /^\d\d:\d\d · this container 1\d\.\d GiB \(\d+ % of the VM\) · VM \d+\.\d GiB of 48\.0 GiB in use$/);
+  await page.mouse.move(0, 0);
+  assert.equal(await page.getByRole('tooltip').count(), 0);
+  // Its detail measures it against itself over the detail's hour.
+  await line('warehouse').click();
+  const self = page.locator('section.detail .self');
+  await self.waitFor();
+  assert.match(await self.innerText(), /^It uses less than a quarter of its peak in this range\.\n+\d+\.\d MiB now · peak 1[78]\.\d GiB in this range, 300\.0 MiB since it started 3 min ago$/);
   assert.deepEqual(errors, []);
   await close();
 });

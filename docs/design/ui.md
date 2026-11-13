@@ -70,14 +70,21 @@ section starts at a hairline in `--fg`, rows are separated by hairlines in `--bo
 
 ## Drawings
 
-Three, each a component, each with its scale said in words nearby.
+Four, each a component, each with its scale said in words nearby.
 
 - **Bar** (`Bar.svelte`): a share of a scale, notched at quarters so "past the third notch" can be
   read without the number. It can carry a paler bar behind it (a container's peak) and a tick (a
   VM's peak, or the 95th percentile of its CPU). The scale is the thing's own allocation, except
-  where a note says otherwise: a container's memory is drawn against the largest container listed
-  with it, its CPU against its VM's cores, a stopped VM's memory against the largest stopped VM, an image or volume against the
+  where a note says otherwise: a container's memory is drawn against its own limit if it has one,
+  else its VM's memory, its CPU against its VM's cores (never against the other containers listed,
+  so a line reads the same in any list); a stopped VM's memory against the largest stopped VM, an image or volume against the
   largest one listed (never warning: being large isn't past anything).
+- **Share** (`MemoryShare.svelte`): above a container's memory bar instead of a sketch, the last
+  24 hours of its VM: the VM's memory in use as a soft area, the container's own in front, under a
+  dashed line at the VM's memory. Each column is the most in its stretch of time, so the
+  container's highest point is the bar's tick; gaps (a stall, before it existed) stay gaps. Hover
+  reads one moment ("13:32 · this container 12.0 GiB (25 % of the VM) · VM 38.4 GiB of 48.0 GiB in
+  use"). Its geometry is `almanac.shareChart`, redrawn only when the history is (once a minute).
 - **Sketch** (`Sketch.svelte`): the last 24 hours above a bar, as about a hundred hairline columns
   on a ground that rises to the highest value reached, on the bar's scale. Hairlines that stop
   short of the ground show how far below its peak something usually sits. On hover it becomes the
@@ -132,6 +139,18 @@ under the sentence, figures and bar it explains, with the allocation as a dashed
 - **Containers**: the headline and a dot per container; filters; then the column heads (the
   overview's serif ones, `.column-heads`, as on a VM's page, Images and Volumes) and a group per VM ("atlas runs
   twelve, all in atlas, and one has exited."), each container a line with memory and CPU drawn.
+- **A container's line** (`ContainerLine.svelte`, on Containers and a VM's page) answers "who is
+  eating this VM?". Its memory is "242.2 MiB of VM" (or "of 1.0 GiB limit", which goes under the
+  figure for want of room), then "peak 30.3 GiB in 24 h"; the bar is now, pale the peak since it
+  started, the tick the peak in the last 24 hours (`almanac.rowMemory`). That peak comes from the
+  history, not the cgroup's own `mem_peak`, which starts again with the container: one that
+  filled its VM and was restarted would otherwise show only its new, small peak. Until the history
+  arrives it is the peak since it started, without "in 24 h".
+- **A container's detail** answers "is this unusual for it?": above its charts, a sentence on its
+  own scale ("It uses less than a quarter of its peak in this range.", or "… of its 1.0 GiB
+  limit."), the figures ("242.2 MiB now · peak 30.3 GiB in this range, 300.5 MiB since it started
+  3 min ago") and a bar whose full width is its peak in the range, or its limit (ticked) if that
+  is higher (`almanac.selfMemory`).
 - **Images, Volumes**: the headline counts what no container uses ("Seven of 27 images aren't used
   by any container."), with a dot per image or volume (a hollow ring for unused) and a sentence on
   whose disk is past three quarters, how many unused images are dangling, and what removing the
