@@ -83,6 +83,12 @@ ui-e2e:
     pnpm build
     node --test e2e-ui/ui.test.mjs
 
+# Does the UI keep memory it should give back? A page (default: the overview) in headless WebKit against the fake backend, a poll a tick; MB per 1000 ticks (docs/development.md)
+ui-leak path="/" *args:
+    pnpm build
+    pnpm exec playwright install webkit
+    node e2e-ui/leak.mjs --path {{path}} {{args}}
+
 # Draw the app icon (tools/app-icon.mjs) and make every size the bundles use into src-tauri/icons/
 icon:
     #!/usr/bin/env bash
