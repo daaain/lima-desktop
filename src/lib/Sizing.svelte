@@ -111,8 +111,8 @@
     {/if}
   </p>
 {/snippet}
-{#snippet stat(value: string, what: string)}
-  <div><strong>{value}</strong><span class="label">{what}</span></div>
+{#snippet stat(value: string, what: string, title?: string)}
+  <div {title}><strong>{value}</strong><span class="label">{what}</span></div>
 {/snippet}
 
 <div class="figures">
@@ -147,8 +147,8 @@
     <h2 class="head">Pressure</h2>
     <p class="verdict serif">{pressure}</p>
     <div class="stats num">
-      {@render stat(permille(latest.psi_cpu_some), 'CPU stalled now')}
-      {@render stat(permille(latest.psi_mem_some), 'memory stalled now')}
+      {@render stat(permille(latest.psi_cpu_some), 'waiting on CPU now', "Pressure (Linux's PSI): the share of the last measurement in which at least one task waited for a CPU")}
+      {@render stat(permille(latest.psi_mem_some), 'waiting on memory now', "Pressure (Linux's PSI): the share of the last measurement in which at least one task waited for memory")}
       {@render stat(oomEvents ? String(oomEvents.length) : '–', `${oomEvents?.length === 1 ? 'OOM kill' : 'OOM kills'} ${inRange(over)}`)}
     </div>
     <Chart data={series} format={(v) => `${v.toFixed(1)} %`}

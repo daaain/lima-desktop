@@ -46,7 +46,7 @@ describe('memory, said over the range chosen', () => {
     expect(memoryHint(inst(), { mem_used: s({ max: 7.5 * GiB }) }, '6h').reason).toBe('Peak use 7.5 GiB in the last 6 h is over 90 % of 8.0 GiB.');
     expect(memoryHint(inst(), { mem_used: s({ max: 1 * GiB }) }, '30d').reason).toBe('Peak use 1.0 GiB in the last 30 days is under half of 8.0 GiB.');
     expect(memoryHint(inst(), { mem_used: s({ max: 5 * GiB }), psi_mem_full: s({ p95: 25 }) }, '1h').reason).toBe(
-      'Every task was stalled on memory 2.5 % of the time in the last hour (PSI full, p95): the VM is reclaiming hard.',
+      'Every task waited on memory 2.5 % of the time in the last hour (PSI full, p95): the VM is reclaiming hard.',
     );
     expect(memoryHint(inst(), { mem_used: s({ max: 2 * GiB }), oom_kills: s({ min: 3, max: 5 }) }, '15m').reason).toMatch(
       /^2 processes were killed for lack of memory in the last 15 min; without/,

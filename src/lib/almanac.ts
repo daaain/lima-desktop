@@ -392,7 +392,7 @@ export function pressureSentence(summary: Record<string, Summary> | null, over: 
   const parts = [cpu >= 10 && `on CPU up to ${permille(cpu)}`, mem >= 10 && `on memory up to ${permille(mem)}`].filter(Boolean);
   // "of the time" once, after the first: "on CPU up to 3.0 % of the time, and on memory up to 25.0 %."
   const [first, ...rest] = parts;
-  return `In ${theLast(over)}, work stalled ${first} of the time${rest.map((p) => `, and ${p}`).join('')}.`;
+  return `In ${theLast(over)}, work waited ${first} of the time${rest.map((p) => `, and ${p}`).join('')}.`;
 }
 
 /** How a VM's containers are grouped, said once: "13 containers, all in atlas." */

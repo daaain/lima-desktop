@@ -420,7 +420,7 @@ describe('pressureSentence', () => {
     expect(pressureSentence({}, '1h')).toBe('Nothing waited long for CPU or memory in the last hour.');
   });
   it('says what waited, and the worst of it, over the range', () => {
-    expect(pressureSentence(sum(30, 250), '24h')).toBe('In the last 24 h, work stalled on CPU up to 3.0 % of the time, and on memory up to 25.0 %.');
-    expect(pressureSentence(sum(0, 250), '7d')).toBe('In the last 7 days, work stalled on memory up to 25.0 % of the time.');
+    expect(pressureSentence(sum(30, 250), '24h')).toBe('In the last 24 h, work waited on CPU up to 3.0 % of the time, and on memory up to 25.0 %.');
+    expect(pressureSentence(sum(0, 250), '7d')).toBe('In the last 7 days, work waited on memory up to 25.0 % of the time.');
   });
 });

@@ -49,6 +49,9 @@ The pictures in this guide and the README are drawn from invented data by the UI
   takes a second or more — then at once from one thing to the next while one is showing. The
   `title` moves to `aria-description` so screen readers keep it. Something that reads out what's
   under the pointer itself (the share chart) feeds the same tooltip.
+- **"Stalled" is a VM that has stopped answering, and only that.** Pressure (Linux's PSI) is said
+  as work waiting: "84 % · waiting 0.4 %", "waiting on memory now", "work waited on CPU up to
+  39 % of the time"; its tooltip names PSI for anyone who knows it by that name.
 - **No all-caps labels.** A label is either a serif head over a column ("Memory", "CPU") or a small
   grey line under a figure saying what it is ("peak", "cores, 95th percentile").
 - Units stay on the figure (`38.9 GiB of 45.8 GiB`), in the binary units the rest of the app uses.

@@ -70,6 +70,9 @@ for (const dark of [false, true]) {
     // ember has stopped answering, which outranks the two VMs past three quarters.
     assert.equal(await page.getByRole('heading', { level: 1 }).innerText(), "ember isn't answering.");
     const atlas = page.locator('article', { hasText: 'atlas' }).first();
+    // Pressure is work waiting: "stalled" is kept for a VM that has stopped answering.
+    assert.match(await atlas.innerText(), /\d+ % · waiting \d+\.\d %/);
+    assert.doesNotMatch(await atlas.innerText(), /· stalled/);
     assert.match(await atlas.innerText(), /More than three quarters of its memory is in use\. One container has exited\./);
     assert.match(await page.locator('article', { hasText: 'quill' }).innerText(), /Its disk is past three quarters too\./);
     const harbor = page.locator('article', { hasText: 'harbor' });

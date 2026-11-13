@@ -127,7 +127,7 @@ function vmMemoryHint(inst: Instance, s: Record<string, Summary>, over: RangeKey
     return {
       dimension: 'memory',
       verdict: 'grow',
-      reason: `Every task was stalled on memory ${(stall / 10).toFixed(1)} % of the time in ${last} (PSI full, p95): the VM is reclaiming hard.`,
+      reason: `Every task waited on memory ${(stall / 10).toFixed(1)} % of the time in ${last} (PSI full, p95): the VM is reclaiming hard.`,
       suggest: roundUpGiB(total * 1.5),
     };
   }

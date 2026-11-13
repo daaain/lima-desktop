@@ -120,14 +120,14 @@
             <p class="figure"><strong class:hot={g.memory.hot}>{bytes(g.memory.used)}</strong> <span class="muted">of {bytes(g.memory.size)}</span></p>
             <Sketch sketch={sketch(band(h, 'mem_used'), g.memory.size)} hot={g.memory.hot} label="Memory" />
             <Bar pct={g.memory.pct} label={`Memory: ${g.memory.pct.toFixed(0)} % of the allocation`} />
-            <p class="label">{g.memory.pct.toFixed(0)} % · stalled {permille(l.psi_mem_some)}</p>
+            <p class="label" title="Pressure (Linux's PSI): the share of the last measurement in which at least one task waited for memory">{g.memory.pct.toFixed(0)} % · waiting {permille(l.psi_mem_some)}</p>
           </div>
           <div class="meter num">
             <span class="label narrow">CPU</span>
             <p class="figure"><strong class:hot={g.cpu.hot}>{cores(l.cpu_mc)}</strong> <span class="muted">of {i.cpus} cores</span></p>
             <Sketch sketch={sketch(band(h, 'cpu_mc'), g.cpu.size)} hot={g.cpu.hot} label="CPU" />
             <Bar pct={g.cpu.pct} label={`CPU: ${g.cpu.pct.toFixed(0)} % of the cores`} />
-            <p class="label">{g.cpu.pct.toFixed(0)} % · stalled {permille(l.psi_cpu_some)}</p>
+            <p class="label" title="Pressure (Linux's PSI): the share of the last measurement in which at least one task waited for a CPU">{g.cpu.pct.toFixed(0)} % · waiting {permille(l.psi_cpu_some)}</p>
           </div>
           <div class="meter num">
             <span class="label narrow">Disk</span>
