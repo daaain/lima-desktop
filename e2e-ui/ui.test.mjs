@@ -416,3 +416,19 @@ for (const [path, ready] of [['/', 'article'], ['/containers', '.line'], ['/imag
     await close();
   });
 }
+
+test("Hovering one chart reads the same moment off every chart on the page", async () => {
+  const { page, errors, close } = await open('/vm/harbor', { height: 1400 });
+  const charts = page.locator('.chart');
+  await charts.nth(1).locator('.u-over').waitFor();
+  const time = (n) => charts.nth(n).locator('.u-legend .u-series').first().locator('.u-value');
+  const over = await charts.first().locator('.u-over').boundingBox();
+  await page.mouse.move(over.x + over.width * 0.6, over.y + over.height / 2);
+  await page.waitForFunction((el) => el.textContent !== '–', await time(0).elementHandle());
+  const read = await time(0).textContent();
+  const count = await charts.count();
+  assert.ok(count >= 4, `${count} charts`);
+  for (let n = 1; n < count; n++) assert.equal(await time(n).textContent(), read, `chart ${n} reads the same moment`);
+  assert.deepEqual(errors, []);
+  await close();
+});

@@ -36,6 +36,8 @@
     markers?: { ts: number; label: string }[];
   } = $props();
 
+  const SYNC_KEY = 'time';
+
   let host: HTMLDivElement;
   let plot: uPlot | null = null;
   let width = $state(600);
@@ -131,7 +133,9 @@
       series,
       bands,
       legend: { show: true, live: true },
-      cursor: { drag: { x: false, y: false } },
+      // Every chart on screen shares one time axis: hovering one reads the same moment off them all
+      // (matched by time, not position, so charts of different ranges still agree).
+      cursor: { drag: { x: false, y: false }, sync: { key: SYNC_KEY } },
       scales: { y: { range: (_u, _min, max) => [0, Math.max(max * 1.1, ceiling ?? 0) || 1] } },
       axes: [axis, { ...axis, size: 84, values: (_u, vals) => vals.map((v) => format(v)) }],
       plugins: [markerPlugin],
