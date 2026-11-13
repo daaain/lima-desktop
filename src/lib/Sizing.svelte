@@ -2,15 +2,18 @@
   // A VM's four figures (memory, CPU, pressure, disk), each a verdict in a sentence, the numbers
   // behind it, a bar and the history; then the resize form, which the verdicts can fill in.
   import { api, locked, type Instance, type Latest, type OomEvent, type Series, type Summary, type VmStall } from './api';
-  import { share } from './almanac';
+  import { pressureSentence, share } from './almanac';
   import { bytes, cores, cpuLabel, GiB, permille } from './format';
   import { cpuHint, diskHint, memoryHint, type Hint } from './rightsize';
+  import { inRange, type RangeKey } from './ranges';
   import type { Marker } from './oom';
   import Bar from './Bar.svelte';
   import Chart from './Chart.svelte';
 
-  let { inst, entity, latest, from, to, oomEvents, stalls, series, markers, hints = $bindable([]) }: {
+  let { inst, entity, latest, from, to, over, oomEvents, stalls, series, markers, hints = $bindable([]) }: {
     inst: Instance; entity?: number; latest: Latest; from: number; to: number;
+    /** The range [from, to] is, for the verdicts to say. */
+    over: RangeKey;
     /** The range's OOM kills: undefined while loading, null when unavailable (then only the counter is known). */
     oomEvents: OomEvent[] | null | undefined;
     /** The range's stalls, likewise: undefined while loading, null when unavailable. */
@@ -22,6 +25,9 @@
     hints?: Hint[];
   } = $props();
   let summary = $state<Record<string, Summary> | null>(null);
+  // The range the summary was fetched for: the words say it, not the one just chosen, until it lands.
+  let fetchedOver = $state<RangeKey | null>(null);
+  const summaryOver = $derived(fetchedOver ?? over);
   let cpus = $state(0);
   let memGiB = $state(0);
   let diskGiB = $state(0);
@@ -31,7 +37,8 @@
 
   $effect(() => {
     if (entity == null) return;
-    api.summary(entity, from, to).then((s) => (summary = s), (e) => (error = String(e)));
+    const asked = over;
+    api.summary(entity, from, to).then((s) => ((summary = s), (fetchedOver = asked)), (e) => (error = String(e)));
   });
   $effect(() => {
     cpus = inst.cpus;
@@ -43,7 +50,7 @@
   // the VM", nor the VM as fitting before its stalls are known.
   $effect(() => {
     hints = summary && oomEvents !== undefined && stalls !== undefined
-      ? [memoryHint(inst, summary, oomEvents, stalls), cpuHint(inst, summary), diskHint(inst, latest)]
+      ? [memoryHint(inst, summary, summaryOver, oomEvents, stalls), cpuHint(inst, summary, summaryOver), diskHint(inst, latest)]
       : [];
   });
   const hint = (d: Hint['dimension']) => hints.find((h) => h.dimension === d);
@@ -55,14 +62,7 @@
   const diskUsed = $derived(latest.store_used ?? latest.disk_used);
   const diskSize = $derived(latest.store_size ?? latest.disk_size ?? inst.disk);
   const cpuBusy = $derived(summary?.cpu_mc?.p95 ?? summary?.cpu_mc?.max);
-  const worst = (key: string) => summary?.[key]?.max;
-  const pressure = $derived.by(() => {
-    if (!summary) return 'Collecting history…';
-    const [cpu, mem] = [worst('psi_cpu_some') ?? 0, worst('psi_mem_some') ?? 0];
-    if (cpu < 10 && mem < 10) return 'Nothing waited long for CPU or memory.';
-    const parts = [cpu >= 10 && `on CPU up to ${permille(cpu)} of the time`, mem >= 10 && `on memory up to ${permille(mem)}`].filter(Boolean);
-    return `Work stalled ${parts.join(', and ')}.`;
-  });
+  const pressure = $derived(pressureSentence(summary, summaryOver));
 
   function apply(h: Hint) {
     if (h.suggest == null) return;
@@ -109,7 +109,7 @@
     {@render verdict('memory')}
     <div class="stats num">
       {@render stat(bytes(latest.mem_used), 'now')}
-      {@render stat(bytes(summary?.mem_used?.max), 'peak')}
+      {@render stat(bytes(summary?.mem_used?.max), `peak ${inRange(summaryOver)}`)}
       {@render stat(bytes(memTotal), 'allocated')}
     </div>
     <Bar pct={share(latest.mem_used, memTotal)} tick={summary?.mem_used?.max != null ? share(summary.mem_used.max, memTotal) : undefined} label="Memory now, with a tick at the peak, against the allocation" />
@@ -137,7 +137,7 @@
     <div class="stats num">
       {@render stat(permille(latest.psi_cpu_some), 'CPU stalled now')}
       {@render stat(permille(latest.psi_mem_some), 'memory stalled now')}
-      {@render stat(oomEvents ? String(oomEvents.length) : '–', oomEvents?.length === 1 ? 'OOM kill in this range' : 'OOM kills in this range')}
+      {@render stat(oomEvents ? String(oomEvents.length) : '–', `${oomEvents?.length === 1 ? 'OOM kill' : 'OOM kills'} ${inRange(over)}`)}
     </div>
     <Chart data={series} format={(v) => `${v.toFixed(1)} %`}
       lines={[{ key: 'psi_mem_some', label: 'memory, some', color: '--series-2', scale: 0.1 }, { key: 'psi_mem_full', label: 'memory, all', color: '--series-3', scale: 0.1 }, { key: 'psi_cpu_some', label: 'cpu', color: '--series-1', scale: 0.1 }]} />

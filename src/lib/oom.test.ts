@@ -162,25 +162,29 @@ describe('the out-of-memory summary', () => {
   const cgroup = ev({ containerId: null });
   const unknown = stall({ memUsed: 10 * GiB, psiMemSome: 5 });
   it('counts kills by what ran out', () => {
-    expect(outOfMemoryNote([own, vmWide], [])).toBe(
-      "2 kills in this range, newest first · 1 kill hit a container's own limit · 1 kill because the whole VM ran out of memory",
+    expect(outOfMemoryNote([own, vmWide], [], '24h')).toBe(
+      "2 kills in the last 24 h, newest first · 1 kill hit a container's own limit · 1 kill because the whole VM ran out of memory",
     );
-    expect(outOfMemoryNote([own, own, cgroup, noDetail], [])).toBe(
-      "4 kills in this range, newest first · 2 kills hit containers' own limits · 1 kill hit a cgroup's own limit · 1 kill with no detail",
+    expect(outOfMemoryNote([own, own, cgroup, noDetail], [], '24h')).toBe(
+      "4 kills in the last 24 h, newest first · 2 kills hit containers' own limits · 1 kill hit a cgroup's own limit · 1 kill with no detail",
     );
   });
   it('counts stalls apart from kills, by whether memory ran out', () => {
-    expect(outOfMemoryNote([], [stall()])).toBe('1 stall in this range, newest first · 1 stall because the whole VM ran out of memory');
-    expect(outOfMemoryNote([own], [stall()])).toBe(
-      "1 kill and 1 stall in this range, newest first · 1 kill hit a container's own limit · 1 stall because the whole VM ran out of memory",
+    expect(outOfMemoryNote([], [stall()], '24h')).toBe('1 stall in the last 24 h, newest first · 1 stall because the whole VM ran out of memory');
+    expect(outOfMemoryNote([own], [stall()], '24h')).toBe(
+      "1 kill and 1 stall in the last 24 h, newest first · 1 kill hit a container's own limit · 1 stall because the whole VM ran out of memory",
     );
-    expect(outOfMemoryNote([own], [unknown, unknown])).toBe(
-      "1 kill and 2 stalls in this range, newest first · 1 kill hit a container's own limit · 2 stalls of unknown cause",
+    expect(outOfMemoryNote([own], [unknown, unknown], '24h')).toBe(
+      "1 kill and 2 stalls in the last 24 h, newest first · 1 kill hit a container's own limit · 2 stalls of unknown cause",
     );
   });
   it('says the whole VM ran out once, for kills and stalls alike', () => {
-    expect(outOfMemoryNote([vmWide, vmWide], [stall(), unknown])).toBe(
-      '2 kills and 2 stalls in this range, newest first · 2 kills and 1 stall because the whole VM ran out of memory · 1 stall of unknown cause',
+    expect(outOfMemoryNote([vmWide, vmWide], [stall(), unknown], '24h')).toBe(
+      '2 kills and 2 stalls in the last 24 h, newest first · 2 kills and 1 stall because the whole VM ran out of memory · 1 stall of unknown cause',
     );
+  });
+  it('says the range chosen', () => {
+    expect(outOfMemoryNote([own], [], '1h')).toBe("1 kill in the last hour, newest first · 1 kill hit a container's own limit");
+    expect(outOfMemoryNote([own], [], '30d')).toMatch(/^1 kill in the last 30 days, newest first/);
   });
 });

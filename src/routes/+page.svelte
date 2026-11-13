@@ -2,8 +2,10 @@
   import { live } from '$lib/live.svelte';
   import { bytes, cores, permille } from '$lib/format';
   import type { Instance, VmLive } from '$lib/api';
-  import { band, countWord, fleetHeadline, gauges, share, sketch, vmSentence } from '$lib/almanac';
+  import { band, bandRise, countWord, fleetHeadline, gauges, share, sketch, vmSentence } from '$lib/almanac';
   import { History } from '$lib/history.svelte';
+  import { range } from '$lib/range.svelte';
+  import { theLast } from '$lib/ranges';
   import Bar from '$lib/Bar.svelte';
   import Capacity from '$lib/Capacity.svelte';
   import Sketch from '$lib/Sketch.svelte';
@@ -109,7 +111,7 @@
         <article class="row vm" animate:glide>
           <div class="who">
             <div class="name-line"><a class="name serif" href={href(i)} title={i.name}>{i.name}</a>{@render badges(vm)}</div>
-            <p class="sentence serif" class:hot={g.memory.hot || g.disk.hot}>{vmSentence(vm)}</p>
+            <p class="sentence serif" class:hot={g.memory.hot || g.disk.hot}>{vmSentence(vm, range.key, bandRise(band(h, 'oom_kills')))}</p>
             {#if issues.length}<p class="error" title={issues.join('\n')}>{issues.join(' · ')}</p>{/if}
             <VmActions inst={i} inlineError={false} bind:error={actionErrors[i.name]} />
           </div>
@@ -149,7 +151,7 @@
         </article>
       {/each}
       <p class="note">
-        Above each bar: the last 24 hours, left to right, on a ground that rises to the highest value reached. Hover one to see how
+        Above each bar: {theLast(range.key)}, left to right, on a ground that rises to the highest value reached. Hover one to see how
         long was spent at each level instead. Bars are notched at quarters of the allocation; past the third they turn.
       </p>
     </section>

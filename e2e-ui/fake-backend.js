@@ -61,6 +61,9 @@
   const HARBOR_STALL = NOW - 2 * HOUR;
   const HARBOR_CLIMB = HARBOR_STALL - 45 * 60_000;
   const HARBOR_SILENT = [HARBOR_STALL, HARBOR_STALL + 17 * 60_000];
+  // An hour before that, its app hit its own 1 GiB limit and node was killed: the VM's OOM counter
+  // steps up then, so a range that reaches back to it counts the kill.
+  const HARBOR_KILL = NOW - 3 * HOUR;
 
   const START = NOW - 5 * 24 * HOUR; // how far back the invented history goes
   let nextEntity = 1;
@@ -195,7 +198,7 @@
         }),
         service('harbor', 'cache', 'docker.io/library/valkey:8', { memMiB: 64, silent: HARBOR_SILENT }),
       ],
-      { oomKills: 1, silent: HARBOR_SILENT },
+      { oomKills: (t) => (t >= HARBOR_KILL ? 1 : 0), silent: HARBOR_SILENT },
     ),
     vm(
       instance('quill', 'Running', 4, 8, 60, {
@@ -284,7 +287,7 @@
 
   const harborApp = fleet[1].containers[1];
   const oom = [{
-    ts: NOW - 3 * HOUR, vm: 'harbor', source: 'kernel', constraint: 'CONSTRAINT_MEMCG', containerId: harborApp.id,
+    ts: HARBOR_KILL, vm: 'harbor', source: 'kernel', constraint: 'CONSTRAINT_MEMCG', containerId: harborApp.id,
     cgroup: `/machine.slice/libpod-${harborApp.id}.scope`, process: 'node', pid: 4211, memLimit: 1024 * MiB, anonRss: 1003 * MiB,
     detail: null, containerName: harborApp.name, composeProject: 'harbor', composeService: 'app',
   }];

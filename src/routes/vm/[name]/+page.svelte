@@ -7,8 +7,8 @@
   import { containersSentence, vmHeadline } from '$lib/almanac';
   import { History } from '$lib/history.svelte';
   import type { Hint } from '$lib/rightsize';
-  import { RANGES, rangeMs, type RangeKey } from '$lib/ranges';
-  import { liveTo } from '$lib/liveTo.svelte';
+  import { rangeReaching, theLast } from '$lib/ranges';
+  import { range, rangeWindow } from '$lib/range.svelte';
   import { OOM_LEVEL_LABEL, STALL_LABEL, oomCause, oomLevel, oomMarkers, oomWho, outOfMemoryNote, stallCause, stalledNow, stallMarkers } from '$lib/oom';
   import VmActions from '$lib/VmActions.svelte';
   import Sizing from '$lib/Sizing.svelte';
@@ -24,11 +24,10 @@
   const name = $derived(decodeURIComponent(page.params.name ?? ''));
   const vm = $derived(live.vm(name));
 
-  let range = $state<RangeKey>('1h');
-  // Short ranges follow live, a sample at a time; longer ones are fetched once per choice.
-  const clock = liveTo(() => rangeMs(range) <= 6 * 3_600_000);
-  const to = $derived(clock.to);
-  const from = $derived(to - rangeMs(range));
+  // The app's range, chosen in the masthead: short ones follow live, longer ones are fetched once.
+  const span = rangeWindow();
+  const to = $derived(span.to);
+  const from = $derived(span.from);
   let series = $state<Series | null>(null);
   // Open container details, any number, each under its own line.
   let open = $state<string[]>([]);
@@ -37,7 +36,7 @@
   let hints = $state<Hint[]>([]);
 
   const history = new History();
-  // Each running container's last 24 hours, and the VM's: a line draws its memory as its part of the VM's.
+  // Each running container's range, and the VM's: a line draws its memory as its part of the VM's.
   history.follow(() => [vm?.entity, ...(vm?.containers ?? []).filter((c) => c.state === 'running').map((c) => c.entity)]);
 
   $effect(() => {
@@ -82,14 +81,13 @@
   const memoryMarkers = $derived([...oomMarkers(oom), ...stallMarkers(stalls, stalls.some((s) => s.endReason == null) ? now : to)]);
   const arrivedForOom = $derived(page.url.hash === '#oom');
 
-  /** The shortest range that reaches back to `ts`. */
+  /** The shortest range that reaches back to `ts`: the app's, so every page then shows it too. */
   function showRangeFor(ts: number) {
-    const age = Date.now() - ts;
-    range = (RANGES.find((r) => r.ms >= age) ?? RANGES[RANGES.length - 1]).key;
+    range.choose(rangeReaching(Date.now() - ts));
   }
 
-  // Arriving from an OOM or stalled badge (/vm/<name>#oom): widen the range to the latest kill or
-  // stall if need be, then scroll to the panel once it exists.
+  // Arriving from an OOM or stalled badge (/vm/<name>#oom): widen the app's range to the latest
+  // kill or stall if need be — that is what was asked to be seen — then scroll to the panel once it exists.
   let arrivedHandled = false;
   $effect(() => {
     if (!arrivedForOom || !oomLoaded || arrivedHandled) return;
@@ -150,15 +148,10 @@
   {@const l = vm.latest}
   <div class="crumbs">
     <span class="muted"><a href="/">All VMs</a> · {i.status.toLowerCase()} · {i.vmType} · {i.arch} · Lima {i.limaVersion}</span>
-    <div class="ranges" role="group" aria-label="Range">
-      {#each RANGES as r}
-        <button class="range" class:active={range === r.key} aria-pressed={range === r.key} onclick={() => (range = r.key)}>{r.label}</button>
-      {/each}
-    </div>
   </div>
 
   <div class="title">
-    <h1 class="headline">{vmHeadline(vm, hints)}</h1>
+    <h1 class="headline">{vmHeadline(vm, hints, range.key)}</h1>
     <VmActions inst={i} />
   </div>
 
@@ -177,13 +170,13 @@
   {#if vm.probeError}<p class="error">metrics: {vm.probeError}</p>{/if}
   {#if vm.podmanError}<p class="error">podman: {vm.podmanError}</p>{/if}
 
-  <Sizing inst={i} entity={vm.entity} latest={l} {from} {to} {series} markers={memoryMarkers}
+  <Sizing inst={i} entity={vm.entity} latest={l} {from} {to} over={range.key} {series} markers={memoryMarkers}
     oomEvents={oomError ? null : oomLoaded ? oom : undefined} stalls={oomError ? null : oomLoaded ? stalls : undefined} bind:hints />
 
   {#if oomRows.length || latestTs != null || oomError || arrivedForOom || vm.stalledSince}
     <section class="panel" id="oom">
       <h2 class="head">Out of memory</h2>
-      {#if oomRows.length}<p class="note">{outOfMemoryNote(oom, stalls)}</p>{/if}
+      {#if oomRows.length}<p class="note">{outOfMemoryNote(oom, stalls, range.key)}</p>{/if}
       {#if oomError}<p class="error">{oomError}</p>{/if}
       {#if vm.oomDetailError}
         <p class="note">No kernel detail: {vm.oomDetailError}. Kills are still counted, but not always which container, or why.</p>
@@ -191,7 +184,7 @@
       {#if !oomRows.length}
         <p class="note">
           {#if latestTs != null}
-            None in this range; the latest was {when(latestTs)}.
+            None in {theLast(range.key)}; the latest was {when(latestTs)}.
             <button class="link" onclick={() => latestTs != null && showRangeFor(latestTs)}>Show it</button>
           {:else}
             No OOM kills or stalls recorded in this VM.
@@ -251,8 +244,8 @@
     {#if actionError}<p class="error">{actionError}</p>{/if}
     {#if vm.containers.length}
       <p class="note">
-        Memory: full width is the container's own limit, else this VM's {bytes(i.memory)}; dark is now, pale the peak since it started, the tick the peak in the last 24 hours.
-        Above it, the VM's last 24 hours: its memory in use, soft, and this container's part in front. CPU: full width is this VM's {i.cpus} cores, its last 24 hours above. Compose projects are read-only groups. <a href={`/containers?vm=${encodeURIComponent(name)}`}>Filter and search them in Containers.</a>
+        Memory: full width is the container's own limit, else this VM's {bytes(i.memory)}; dark is now, pale the peak since it started, the tick the peak in {theLast(range.key)}.
+        Above it, the VM over {theLast(range.key)}: its memory in use, soft, and this container's part in front. CPU: full width is this VM's {i.cpus} cores, with {theLast(range.key)} above. Compose projects are read-only groups. <a href={`/containers?vm=${encodeURIComponent(name)}`}>Filter and search them in Containers.</a>
       </p>
       <div class="lines">
         <div class="narrow-order"><OrderPicker columns={CONTAINER_COLUMNS} {ordering} /></div>
@@ -271,7 +264,7 @@
                 selected={open.includes(c.id)} onselect={() => toggle(c.id)} onerror={(e) => (actionError = e)} />
               {#if open.includes(c.id)}
                 <div id={`detail-${c.id}`} transition:unfold>
-                  <ContainerDetail vm={name} {c} {from} {to} vmMemory={i.memory} oomMarkers={oomMarkers(oom, c.id)} onclose={() => toggle(c.id)} />
+                  <ContainerDetail vm={name} {c} {from} {to} over={range.key} vmMemory={i.memory} oomMarkers={oomMarkers(oom, c.id)} onclose={() => toggle(c.id)} />
                 </div>
               {/if}
             </div>
@@ -285,8 +278,6 @@
 
 <style>
   .crumbs { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0.6rem 1.5rem; font-size: 0.9rem; }
-  .ranges { display: flex; gap: 0.3rem; flex-wrap: wrap; }
-  .range { height: 1.9rem; padding: 0 0.8rem; font-size: 0.82rem; }
   .title { display: flex; align-items: flex-end; justify-content: space-between; gap: 1rem 2rem; flex-wrap: wrap; }
   .title .headline { flex: 1 1 30rem; }
   .title.small { align-items: baseline; }

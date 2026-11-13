@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { section, withParam } from './url';
+import { hasHistory, section, withParam } from './url';
 
 describe('withParam', () => {
   const url = new URL('http://app/containers?vm=shop&running=1');
@@ -25,5 +25,11 @@ describe('section', () => {
   it("is VMs where the app starts: Tauri's tauri://localhost, whose path is empty", () => {
     expect(new URL('tauri://localhost').pathname).toBe('');
     expect(section(new URL('tauri://localhost').pathname)).toBe('vms');
+  });
+});
+
+describe('hasHistory', () => {
+  it('is the sections drawn over time, where the time range is chosen', () => {
+    expect((['vms', 'containers', 'images', 'volumes', 'settings'] as const).filter(hasHistory)).toEqual(['vms', 'containers']);
   });
 });

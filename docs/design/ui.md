@@ -16,7 +16,7 @@ The pictures in this guide and the README are drawn from invented data by the UI
 ## Words
 
 - **A page's headline is a sentence with a full stop**, worst news first: "Two VMs are past three
-  quarters of their memory or disk.", "harbor needs more memory and CPU.", "17 of 19 containers are running."
+  quarters of their memory or disk.", "harbor needs more memory and CPU, judging by the last 6 h.", "17 of 19 containers are running."
   When nothing is wrong it says so ("Every running VM has room to spare."). The sentences live in
   `src/lib/almanac.ts`, each with its tests; a sentence is never assembled in a component.
 - **How full something is, is said in quarters**: less than a quarter, more than a quarter, more
@@ -29,6 +29,16 @@ The pictures in this guide and the README are drawn from invented data by the UI
   stalled with memory past 90 % or under pressure; sustained full memory pressure; a peak over
   90 %). A container hitting its own limit, or a stall of unknown cause, never says the VM needs
   more.
+- **What is said over time names the range it is over**, the one chosen in the masthead (see
+  **Time range**, below): "The VM ran out of memory and stalled once in the last 6 h.", "1 kill
+  and 1 stall in the last hour, newest first", "peak 1.2 GiB in 7 days". A verdict judged from the
+  range ends "judging by the last 24 h"; what is now is said as now ("More than half of its memory
+  is in use."). Every range reads in a sentence (`ranges.theLast`: "the last 15 min", "the last
+  hour", "the last 6 h", "the last 24 h", "the last 7 days", "the last 30 days"), and in a column's
+  few words as the picker labels it (`ranges.inRange`: "in 6 h"). A VM is never said to need less
+  than it has on less than a day: under 24 h the memory verdict says "too short a time to tell
+  whether it could do with less" where it otherwise would, and over a longer range that holds less
+  than a day of samples it says "less than a day of history so far".
 - **Counts up to twelve are spelled at the start of a sentence** ("Five are running"), digits
   elsewhere. Names are never abbreviated; a long one is cut with an ellipsis and whole in its
   tooltip.
@@ -84,18 +94,21 @@ Four, each a component, each with its scale said in words nearby.
   else its VM's memory, its CPU against its VM's cores (never against the other containers listed,
   so a line reads the same in any list); a stopped VM's memory against the largest stopped VM, an image or volume against the
   largest one listed (never warning: being large isn't past anything).
-- **Share** (`MemoryShare.svelte`): above a container's memory bar instead of a sketch, the last
-  24 hours of its VM: the VM's memory in use as a soft area, the container's own in front, under a
+- **Share** (`MemoryShare.svelte`): above a container's memory bar instead of a sketch, the range
+  of its VM: the VM's memory in use as a soft area, the container's own in front, under a
   dashed line at the VM's memory. Each column is the most in its stretch of time, so the
   container's highest point is the bar's tick; gaps (a stall, before it existed) stay gaps. Hover
   reads one moment ("13:32 · this container 12.0 GiB (25 % of the VM) · VM 38.4 GiB of 48.0 GiB in
-  use"). Its geometry is `almanac.shareChart`, redrawn only when the history is (once a minute).
-- **Sketch** (`Sketch.svelte`): the last 24 hours above a bar, as about a hundred hairline columns
+  use"; past a day, the moment's day too). Its geometry is `almanac.shareChart`, redrawn only when
+  the history is.
+- **Sketch** (`Sketch.svelte`): the range above a bar, as about a hundred hairline columns
   on a ground that rises to the highest value reached, on the bar's scale. Hairlines that stop
   short of the ground show how far below its peak something usually sits. On hover it becomes the
   distribution instead: one hairline per percent of the scale, as tall as the time spent there,
   with a tick at the maximum. The data is the same hundred points either way (`almanac.sketch`),
-  fetched per entity and refreshed once a minute (`history.svelte.ts`).
+  fetched per entity when it appears or the range changes, then again as a new column comes due
+  but at most once a minute: every minute up to 1 h, every 3.6 min at 6 h, every 14.4 min at 24 h
+  (`history.svelte.ts`, `ranges.historyRefreshMs`).
 - **Capacity** (`Capacity.svelte`): one bar per resource for the whole computer, a block per VM.
   Full width is what the host has (its cores, RAM, and the filesystem Lima's instances are on,
   from the backend's `host`); a block is as wide as its VM's allocation and solid as far as the VM
@@ -109,6 +122,19 @@ under the sentence, figures and bar it explains, with the allocation as a dashed
 
 ## Pages
 
+- **Time range**: one for the whole app (`range.svelte.ts`), chosen in the masthead under the
+  section tabs ("over the last 15 min · 1 h · 6 h · 24 h · 7 days · 30 days", the chosen one
+  filled), on the pages with history — the VMs, a VM, Containers — and not on Images, Volumes or
+  Settings, which have none. Everything drawn or said over time follows it: a VM's charts, its
+  verdicts and its out-of-memory list and markers; every line's sketch, share chart and peak; a
+  container's detail; the overview's sketches and the kills its sentences count. So all of a page
+  answers for the same window, and its charts line up as one is hovered. A range up to 6 h moves
+  on with the clock, a measurement at a time (`liveTo`); a longer one is fetched once as it's
+  chosen. It opens on 24 h the first time, then on whatever was chosen last, kept in the webview's
+  storage as a list's order is. Arriving at a VM from its OOM or "stalled" badge widens the range,
+  if need be, to the shortest that holds the latest kill or stall: that is what was asked to be
+  seen, so the range stays so on every page until chosen again. What is now (a figure, a bar, the
+  overview's headline and capacity bars) stays now.
 - **VMs**: the headline; the three capacity bars; then running VMs, each a row under the column
   heads Memory, CPU, Disk, Containers (a figure, a sketch, a bar, a note), with one dot per
   container; then the VMs that aren't running, with a bar for the memory each is set to. Both lists
@@ -146,14 +172,14 @@ under the sentence, figures and bar it explains, with the allocation as a dashed
   twelve, all in atlas, and one has exited."), each container a line with memory and CPU drawn.
 - **A container's line** (`ContainerLine.svelte`, on Containers and a VM's page) answers "who is
   eating this VM?". Its memory is "242.2 MiB of VM" (or "of 1.0 GiB limit", which goes under the
-  figure for want of room), then "peak 30.3 GiB in 24 h"; the bar is now, pale the peak since it
-  started, the tick the peak in the last 24 hours (`almanac.rowMemory`). That peak comes from the
+  figure for want of room), then "peak 30.3 GiB in 24 h", in the range chosen; the bar is now, pale
+  the peak since it started, the tick the peak in the range (`almanac.rowMemory`). That peak comes from the
   history, not the cgroup's own `mem_peak`, which starts again with the container: one that
   filled its VM and was restarted would otherwise show only its new, small peak. Until the history
-  arrives it is the peak since it started, without "in 24 h".
+  arrives it is the peak since it started, without a range.
 - **A container's detail** answers "is this unusual for it?": above its charts, a sentence on its
-  own scale ("It uses less than a quarter of its peak in this range.", or "… of its 1.0 GiB
-  limit."), the figures ("242.2 MiB now · peak 30.3 GiB in this range, 300.5 MiB since it started
+  own scale ("It uses less than a quarter of its peak in the last 24 h.", or "… of its 1.0 GiB
+  limit."), the figures ("242.2 MiB now · peak 30.3 GiB in the last 24 h, 300.5 MiB since it started
   3 min ago") and a bar whose full width is its peak in the range, or its limit (ticked) if that
   is higher (`almanac.selfMemory`).
 - **Images, Volumes**: the headline counts what no container uses ("Seven of 27 images aren't used

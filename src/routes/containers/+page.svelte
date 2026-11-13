@@ -4,7 +4,8 @@
   import { live } from '$lib/live.svelte';
   import { containersHeadline, countWord, exitedSentence, runsSentence } from '$lib/almanac';
   import { History } from '$lib/history.svelte';
-  import { liveTo } from '$lib/liveTo.svelte';
+  import { range, rangeWindow } from '$lib/range.svelte';
+  import { theLast } from '$lib/ranges';
   import { BY_MEMORY, CONTAINER_COLUMNS, CONTAINER_SORTS, containerRows, filterContainers, groupContainers, readContainerFilter, type ContainerSort } from '$lib/containers';
   import { podmanFailures, podmanScope } from '$lib/perVm';
   import { withParam } from '$lib/url';
@@ -17,14 +18,13 @@
   import { glide, unfold } from '$lib/motion';
   import { Ordering } from '$lib/ordering.svelte';
 
-  const DETAIL_WINDOW_MS = 3_600_000;
-
   let query = $state('');
   let actionError = $state<string | null>(null);
-  // Open details, any number, each under its own line: `vm/id` → when it was opened (its hour ends there).
+  // Open details, any number, each under its own line, keyed `vm/id`.
   let open = $state<Record<string, true>>({});
-  // Open details show the last hour, following live: they share one clock, ticking only while open.
-  const clock = liveTo(() => Object.keys(open).length > 0);
+  // Open details show the app's range, as a VM's page does: they share one clock, ticking (for a
+  // range short enough to follow live) only while one is open.
+  const span = rangeWindow(() => Object.keys(open).length > 0);
 
   const urlFilter = $derived(readContainerFilter(page.url.searchParams));
   const scope = $derived(podmanScope(live.snapshot));
@@ -32,7 +32,7 @@
   const rows = $derived(filterContainers(all, { ...urlFilter, query }));
 
   const history = new History();
-  // Each running container's last 24 hours, and its VM's: a line draws its memory as its part of the VM's.
+  // Each running container's range, and its VM's: a line draws its memory as its part of the VM's.
   history.follow(() => {
     const up = rows.filter((r) => r.c.state === 'running');
     return [...up.map((r) => r.c.entity), ...new Set(up.map((r) => live.vm(r.vm)?.entity))];
@@ -112,7 +112,7 @@
               now={live.snapshot?.updated} selected={key in open} onselect={() => toggle(key)} onerror={(e) => (actionError = e)} />
             {#if open[key] != null}
               <div transition:unfold>
-                <ContainerDetail {vm} {c} from={clock.to - DETAIL_WINDOW_MS} to={clock.to} vmMemory={g.live?.instance.memory ?? 0} onclose={() => close(key)} />
+                <ContainerDetail {vm} {c} from={span.from} to={span.to} over={range.key} vmMemory={g.live?.instance.memory ?? 0} onclose={() => close(key)} />
               </div>
             {/if}
           </div>
@@ -121,9 +121,9 @@
     {/each}
   </div>
   <p class="note">
-    Memory: full width is the container's own limit, else its VM's memory; dark is now, pale the peak since it started, the tick the peak in the last 24 hours.
-    Above it, the last 24 hours of its VM: the VM's memory in use, soft, and this container's part of it in front; hover to read a moment.
-    CPU bars are scaled to the cores of the container's VM, with its last 24 hours above; hover for how long was spent at each level.
+    Memory: full width is the container's own limit, else its VM's memory; dark is now, pale the peak since it started, the tick the peak in {theLast(range.key)}.
+    Above it, its VM over {theLast(range.key)}: the VM's memory in use, soft, and this container's part of it in front; hover to read a moment.
+    CPU bars are scaled to the cores of the container's VM, with {theLast(range.key)} above; hover for how long was spent at each level.
   </p>
 {/if}
 

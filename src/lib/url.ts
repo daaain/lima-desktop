@@ -18,3 +18,6 @@ const OTHERS: Section[] = ['containers', 'images', 'volumes', 'settings'];
 export function section(pathname: string): Section {
   return OTHERS.find((s) => pathname === `/${s}` || pathname.startsWith(`/${s}/`)) ?? 'vms';
 }
+
+/** Whether a section draws anything over time: only there is the time range offered. */
+export const hasHistory = (s: Section) => s === 'vms' || s === 'containers';

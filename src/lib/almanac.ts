@@ -1,8 +1,9 @@
 // The words and small drawings of the UI (docs/design/ui.md): how full something is, said in
 // quarters; who is past three quarters; and a series turned into columns and a distribution.
-import type { Band, Latest, Series, VmLive } from './api';
+import type { Band, Latest, Series, Summary, VmLive } from './api';
 import type { Hint } from './rightsize';
-import { bytes, uptime } from './format';
+import { bytes, permille, uptime } from './format';
+import { inRange, theLast, type RangeKey } from './ranges';
 
 /** Past this share of an allocation a figure, its bar and its sentence turn to the warning colour. */
 export const WARN_PCT = 75;
@@ -52,13 +53,18 @@ export function gauges(vm: VmLive): { memory: Gauge; cpu: Gauge; disk: Gauge } {
   };
 }
 
-/** One sentence about a running VM: its memory in quarters, then what else is worth a look. */
-export function vmSentence(vm: VmLive): string {
+/**
+ * One sentence about a running VM: its memory in quarters, then what else is worth a look. What
+ * is now is said as now; processes killed are those in the range (`kills`, from its history), and
+ * left out until the history has said.
+ */
+export function vmSentence(vm: VmLive, over: RangeKey, kills?: number): string {
   const g = gauges(vm);
   const parts = [g.memory.used == null ? 'No memory reading yet.' : `${quarters(g.memory.pct)} of its memory is in use.`];
   if (g.disk.hot) parts.push('Its disk is past three quarters too.');
-  const kills = vm.latest.oom_kills ?? 0;
-  if (kills > 0) parts.push(`${kills === 1 ? 'One process was' : `${kills} processes were`} killed for lack of memory.`);
+  if (kills != null && kills > 0) {
+    parts.push(`${kills === 1 ? 'One process was' : `${countWord(kills)} processes were`} killed for lack of memory in ${theLast(over)}.`);
+  }
   const exited = vm.containers.filter((c) => c.state !== 'running').length;
   if (exited > 0) parts.push(`${exited === 1 ? 'One container has' : `${countWord(exited)} containers have`} exited.`);
   return parts.join(' ');
@@ -177,6 +183,14 @@ export function bandPeak(band: Band | undefined): number | undefined {
   return peak;
 }
 
+/** How far a counter's band went up across it (a VM's OOM kills); undefined without a sample. */
+export function bandRise(band: Band | undefined): number | undefined {
+  const peak = bandPeak(band);
+  let low: number | undefined;
+  for (const v of band?.min ?? []) if (v != null && (low == null || v < low)) low = v;
+  return peak == null || low == null ? undefined : peak - low;
+}
+
 // A container's memory, measured two ways. Its line in a list answers "who is eating this VM?",
 // so it is drawn against what the container may use: its own limit, else the whole VM (as its CPU
 // is drawn against the VM's cores). Its detail answers "is this unusual for it?", so it is drawn
@@ -195,9 +209,9 @@ export interface RowMemory {
   /** Bytes at full width: its limit, else the VM's memory. */
   scale: number;
   limit?: number;
-  /** The most in the last 24 hours (or, until there is history, since it started). */
+  /** The most in the range (or, until there is history, since it started). */
   peak: number;
-  /** In percent of the scale: now, the peak since it started, the peak in 24 h. */
+  /** In percent of the scale: now, the peak since it started, the peak in the range. */
   pct: number;
   behind: number;
   tick: number;
@@ -205,7 +219,7 @@ export interface RowMemory {
   hot: boolean;
   /** What follows the figure: "of VM", "of 1.0 GiB limit". */
   of: string;
-  /** The line under it: "peak 30.3 GiB in 24 h". */
+  /** The line under it: "peak 30.3 GiB in 24 h", in the range chosen. */
   peakSaid: string;
   label: string;
 }
@@ -213,7 +227,7 @@ export interface RowMemory {
 /** A container's memory in its line: now, against its limit or else its VM, with its peaks. */
 export function rowMemory(
   l: Latest,
-  o: { vmMemory: number; history?: Band; startedAt: number | null; now?: number },
+  o: { vmMemory: number; over: RangeKey; history?: Band; startedAt: number | null; now?: number },
 ): RowMemory {
   const mem = l.mem ?? 0;
   const limit = ownLimit(l.mem_limit, o.vmMemory);
@@ -224,7 +238,7 @@ export function rowMemory(
   const whole = limit ? `its ${bytes(limit)} limit` : `the VM's ${bytes(o.vmMemory)}`;
   const sinceStart = l.mem_peak == null ? '' : `${bytes(l.mem_peak)} ${since(o.startedAt, o.now)}`;
   const peaks = seen != null
-    ? `peak ${bytes(peak)} in the last 24 h${sinceStart ? `, ${sinceStart}` : ''}`
+    ? `peak ${bytes(peak)} in ${theLast(o.over)}${sinceStart ? `, ${sinceStart}` : ''}`
     : `peak ${sinceStart || bytes(peak)}`;
   return {
     scale, limit, peak,
@@ -234,7 +248,7 @@ export function rowMemory(
     hot: limit != null && isHot(share(mem, limit)),
     of: limit ? `of ${bytes(limit)} limit` : 'of VM',
     // "since start" wouldn't fit the column; the label says it.
-    peakSaid: seen != null ? `peak ${bytes(peak)} in 24 h` : `peak ${bytes(peak)}`,
+    peakSaid: seen != null ? `peak ${bytes(peak)} ${inRange(o.over)}` : `peak ${bytes(peak)}`,
     label: `Memory ${bytes(mem)} now; ${peaks}; full width is ${whole}`,
   };
 }
@@ -252,9 +266,9 @@ export interface ShareChart {
 }
 
 /**
- * A container's last 24 hours as its part of its VM: the VM's memory in use and the container's
- * own, both on the VM's scale. Each column is the most in its stretch of time, so the highest the
- * container's area reaches is its 24 h peak (the bar's tick).
+ * A container's history over the range as its part of its VM: the VM's memory in use and the
+ * container's own, both on the VM's scale. Each column is the most in its stretch of time, so the
+ * highest the container's area reaches is its peak in the range (the bar's tick).
  */
 export function shareChart(me: Band | undefined, vm: Band | undefined, vmMemory: number): ShareChart | null {
   if (!(vmMemory > 0)) return null;
@@ -305,25 +319,28 @@ export interface SelfMemory {
  * A container against itself over a range: now and its peak since it started, drawn against the
  * most it used in the range, or its limit if that is higher. Nothing without a reading now.
  */
-export function selfMemory(l: Latest, o: { range?: Band; limit?: number; startedAt: number | null; now?: number }): SelfMemory | null {
+export function selfMemory(
+  l: Latest, o: { over: RangeKey; range?: Band; limit?: number; startedAt: number | null; now?: number },
+): SelfMemory | null {
   if (l.mem == null) return null;
   const mem = l.mem;
+  const last = theLast(o.over);
   const seen = bandPeak(o.range);
   const peak = seen != null ? Math.max(seen, mem) : undefined;
   const scale = Math.max(peak ?? l.mem_peak ?? 0, o.limit ?? 0, mem);
   const byLimit = o.limit != null && o.limit >= scale;
   const pct = share(mem, scale);
   const sinceStart = l.mem_peak == null ? '' : `${bytes(l.mem_peak)} ${since(o.startedAt, o.now)}`;
-  const peaks = peak != null ? `peak ${bytes(peak)} in this range${sinceStart ? `, ${sinceStart}` : ''}` : sinceStart && `peak ${sinceStart}`;
+  const peaks = peak != null ? `peak ${bytes(peak)} in ${last}${sinceStart ? `, ${sinceStart}` : ''}` : sinceStart && `peak ${sinceStart}`;
   const figures = [`${bytes(mem)} now`, peaks].filter(Boolean).join(' · ');
   const sentence = byLimit
     ? `It uses ${quarters(pct).toLowerCase()} of its ${bytes(o.limit)} limit.`
     : peak == null
-      ? 'No history in this range yet.'
+      ? `No history in ${last} yet.`
       : pct >= 99.5
-        ? 'It is at its peak for this range.'
-        : `It uses ${quarters(pct).toLowerCase()} of its peak in this range.`;
-  const whole = byLimit ? `its ${bytes(o.limit)} limit` : peak != null ? 'its peak in this range' : 'its peak since it started';
+        ? `It is at its peak for ${last}.`
+        : `It uses ${quarters(pct).toLowerCase()} of its peak in ${last}.`;
+  const whole = byLimit ? `its ${bytes(o.limit)} limit` : peak != null ? `its peak in ${last}` : 'its peak since it started';
   return {
     sentence, figures, pct,
     behind: share(l.mem_peak, scale),
@@ -339,22 +356,34 @@ const list = (words: string[]) => (words.length <= 1 ? words.join('') : `${words
 /**
  * A VM's page in one sentence, worst news first: that it has stopped answering, else what it needs
  * more of, else what is past three quarters, else what it has too much of, else that it fits.
- * `hints` is empty until history arrives.
+ * `hints` is empty until history arrives; a verdict from them says the range they judged.
  */
-export function vmHeadline(vm: VmLive, hints: Hint[]): string {
+export function vmHeadline(vm: VmLive, hints: Hint[], over: RangeKey): string {
   const name = vm.instance.name;
   if (vm.instance.status !== 'Running') return `${name} is ${vm.instance.status.toLowerCase()}.`;
   // Lima says it's running but it doesn't answer: readings from before the silence can't say it fits.
   if (vm.stalledSince != null) return `${name} isn't answering.`;
   const of = (verdict: Hint['verdict']) => hints.filter((h) => h.verdict === verdict).map((h) => WHAT[h.dimension]);
+  const judged = `, judging by ${theLast(over)}.`;
   const grow = of('grow');
-  if (grow.length) return `${name} needs more ${list(grow)}.`;
+  if (grow.length) return `${name} needs more ${list(grow)}${judged}`;
   const g = gauges(vm);
   const tight = [g.memory.hot && 'memory', g.disk.hot && 'disk'].filter((w): w is string => !!w);
   if (tight.length) return `${name} fits, but its ${list(tight)} ${tight.length === 1 ? 'is' : 'are'} past three quarters.`;
   const shrink = of('shrink');
-  if (shrink.length) return `${name} has more ${list(shrink)} than it uses.`;
-  return hints.length ? `${name} fits its allocation.` : `${name} is running.`;
+  if (shrink.length) return `${name} has more ${list(shrink)} than it uses${judged}`;
+  return hints.length ? `${name} fits its allocation${judged}` : `${name} is running.`;
+}
+
+/** How long work waited on CPU and memory at worst in the range (PSI "some", ‰), in a sentence. */
+export function pressureSentence(summary: Record<string, Summary> | null, over: RangeKey): string {
+  if (!summary) return 'Collecting history…';
+  const [cpu, mem] = [summary.psi_cpu_some?.max ?? 0, summary.psi_mem_some?.max ?? 0];
+  if (cpu < 10 && mem < 10) return `Nothing waited long for CPU or memory in ${theLast(over)}.`;
+  const parts = [cpu >= 10 && `on CPU up to ${permille(cpu)}`, mem >= 10 && `on memory up to ${permille(mem)}`].filter(Boolean);
+  // "of the time" once, after the first: "on CPU up to 3.0 % of the time, and on memory up to 25.0 %."
+  const [first, ...rest] = parts;
+  return `In ${theLast(over)}, work stalled ${first} of the time${rest.map((p) => `, and ${p}`).join('')}.`;
 }
 
 /** How a VM's containers are grouped, said once: "13 containers, all in atlas." */

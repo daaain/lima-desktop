@@ -1,7 +1,9 @@
 <script lang="ts">
-  // A metric's last 24 hours above its bar: hairline columns over time on a ground that rises to
-  // the maximum; on hover, where the time was spent instead, on the bar's own scale.
+  // A metric over the app's range above its bar: hairline columns over time on a ground that rises
+  // to the maximum; on hover, where the time was spent instead, on the bar's own scale.
   import type { Sketch } from './almanac';
+  import { range } from './range.svelte';
+  import { theLast } from './ranges';
 
   let { sketch, hot = false, label }: { sketch: Sketch | null; hot?: boolean; label: string } = $props();
 
@@ -12,7 +14,7 @@
 </script>
 
 <div class="sketch" class:hot class:empty={!sketch}
-  title={sketch ? `${label}, last 24 hours: up to ${sketch.max.toFixed(0)} % of the scale. Hover: where the time was spent.` : `${label}: no history yet`}>
+  title={sketch ? `${label}, ${theLast(range.key)}: up to ${sketch.max.toFixed(0)} % of the scale. Hover: where the time was spent.` : `${label}: no history yet`}>
   {#if sketch}
     <svg class="time" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
       <rect class="ground" x="0" y={100 - sketch.max} width="100" height={sketch.max} />

@@ -4,11 +4,15 @@
   import { bytes, cpuLabel } from './format';
   import { logLines, logTime, type LogLine } from './logs';
   import { band, ownLimit, selfMemory } from './almanac';
+  import type { RangeKey } from './ranges';
   import Bar from './Bar.svelte';
   import Chart from './Chart.svelte';
 
-  let { vm, c, from, to, vmMemory, oomMarkers = [], onclose }: {
-    vm: string; c: ContainerLive; from: number; to: number; vmMemory: number;
+  let { vm, c, from, to, over, vmMemory, oomMarkers = [], onclose }: {
+    vm: string; c: ContainerLive; from: number; to: number;
+    /** The range [from, to] is, for its sentence to say. */
+    over: RangeKey;
+    vmMemory: number;
     /** This container's OOM kills, marked on its Memory chart. */
     oomMarkers?: { ts: number; label: string }[];
     onclose: () => void;
@@ -16,8 +20,11 @@
   const limit = $derived(ownLimit(c.latest.mem_limit, vmMemory));
   let tab = $state<'metrics' | 'logs' | 'inspect'>('metrics');
   let series = $state<Series | null>(null);
+  // The range the series was fetched for: the sentence says it, not one just chosen, until it lands.
+  let fetchedOver = $state<RangeKey | null>(null);
+  const seriesOver = $derived(fetchedOver ?? over);
   // The container against itself over the charts' range, from the series they already fetched.
-  const self = $derived(selfMemory(c.latest, { range: band(series, 'mem'), limit, startedAt: c.startedAt, now: to }));
+  const self = $derived(selfMemory(c.latest, { over: seriesOver, range: band(series, 'mem'), limit, startedAt: c.startedAt, now: to }));
   let logs = $state<LogLine[] | null>(null);
   let logBox = $state<HTMLElement>();
   let inspect = $state('');
@@ -27,7 +34,8 @@
   const entity = $derived(c.entity);
   $effect(() => {
     if (tab !== 'metrics' || entity == null) return;
-    api.series(entity, from, to).then((s) => (series = s), (e) => (error = String(e)));
+    const asked = over;
+    api.series(entity, from, to).then((s) => ((series = s), (fetchedOver = asked)), (e) => (error = String(e)));
   });
   // Likewise its id and VM (a row of the live list, also new every second): the log is fetched when
   // the tab opens, not every second, which would also scroll it back down under the reader.

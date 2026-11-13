@@ -1,11 +1,12 @@
 <script lang="ts">
-  // One container as a line: its name, memory and CPU as bars with their last 24 hours above,
+  // One container as a line: its name, memory and CPU as bars with the app's range of them above,
   // how long it has been up, and what can be done to it. Used by the Containers view and a VM's page.
   // Both bars are measured against what the container may use (its memory limit, else its VM's
   // memory; its VM's cores), never against the other lines, so a line reads the same in any list.
   import type { ContainerLive, Series } from './api';
   import { band, rowMemory, share, sketch } from './almanac';
   import { bytes, cores, rate, uptime } from './format';
+  import { range } from './range.svelte';
   import Bar from './Bar.svelte';
   import ContainerActions from './ContainerActions.svelte';
   import MemoryShare from './MemoryShare.svelte';
@@ -13,7 +14,7 @@
 
   let { vm, c, history, vmHistory, vmCpus, vmMemory, second, now, selected = false, onselect, onerror }: {
     vm: string; c: ContainerLive;
-    /** The last 24 hours of this container, and of its VM (history.svelte.ts). */
+    /** The range of this container, and of its VM (history.svelte.ts). */
     history: Series | undefined; vmHistory: Series | undefined;
     vmCpus: number; vmMemory: number;
     /** What the line under the name says: the image, or what it's doing (pids and traffic). */
@@ -24,7 +25,7 @@
 
   const l = $derived(c.latest);
   const running = $derived(c.state === 'running');
-  const memory = $derived(rowMemory(l, { vmMemory, history: band(history, 'mem'), startedAt: c.startedAt, now }));
+  const memory = $derived(rowMemory(l, { vmMemory, over: range.key, history: band(history, 'mem'), startedAt: c.startedAt, now }));
   const oom = $derived(l.oom_kills ?? 0);
 </script>
 

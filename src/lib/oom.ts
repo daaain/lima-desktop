@@ -3,6 +3,7 @@
 // And VM stalls: a VM that ran out without the kernel killing anything, and stopped responding.
 import type { ContainerLive, OomEvent, VmStall } from './api';
 import { bytes, permille, uptime } from './format';
+import { theLast, type RangeKey } from './ranges';
 
 export type OomLevel = 'container' | 'cgroup' | 'vm' | 'unknown';
 
@@ -141,7 +142,7 @@ const killsAndStalls = (kills: number, stalls: number) =>
  * counts and none of them zero. The whole VM running out is one phrase for kills and stalls
  * alike: one cause, with one fix.
  */
-export function outOfMemoryNote(kills: OomEvent[], stalls: VmStall[]): string {
+export function outOfMemoryNote(kills: OomEvent[], stalls: VmStall[], over: RangeKey): string {
   const killed = (level: OomLevel) => kills.filter((e) => oomLevel(e) === level).length;
   const fromMemory = stalls.filter(stallFromMemory).length;
   const ownLimit = (n: number, whose: string, theirs: string) =>
@@ -150,7 +151,7 @@ export function outOfMemoryNote(kills: OomEvent[], stalls: VmStall[]): string {
   const unknown = killed('unknown');
   const unexplained = stalls.length - fromMemory;
   return [
-    `${killsAndStalls(kills.length, stalls.length)} in this range, newest first`,
+    `${killsAndStalls(kills.length, stalls.length)} in ${theLast(over)}, newest first`,
     ownLimit(killed('container'), "a container's", "containers'"),
     ownLimit(killed('cgroup'), "a cgroup's", "cgroups'"),
     vm + fromMemory > 0 && `${killsAndStalls(vm, fromMemory)} because the whole VM ran out of memory`,

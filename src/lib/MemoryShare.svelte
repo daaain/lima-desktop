@@ -1,11 +1,13 @@
 <script lang="ts">
-  // A container's last 24 hours as its part of its VM, above its memory bar: the VM's memory in
-  // use, drawn soft, the container's own in front, under a dashed line at the VM's memory. Hover
+  // A container over the app's range as its part of its VM, above its memory bar: the VM's memory
+  // in use, drawn soft, the container's own in front, under a dashed line at the VM's memory. Hover
   // reads one moment. The geometry is almanac.shareChart's; it changes only when the history does
-  // (once a minute), not with every live reading.
+  // (a minute apart at most), not with every live reading.
   import type { Band } from './api';
   import { shareChart, shareTip } from './almanac';
   import { OWN_TIP, tooltip } from './tipState.svelte';
+  import { range } from './range.svelte';
+  import { rangeMs, theLast } from './ranges';
 
   let { me, vm, ts, vmMemory, hot = false }: {
     /** This container's `mem` and its VM's `mem_used`, over the same columns (history.svelte.ts). */
@@ -14,8 +16,13 @@
   } = $props();
 
   const chart = $derived(shareChart(me, vm, vmMemory));
+  // Past a day a moment needs its day as well as its time.
   const time = (at: number | undefined) =>
-    at == null ? '' : new Date(at).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+    at == null
+      ? ''
+      : new Date(at).toLocaleString('en-GB', rangeMs(range.key) > 86_400_000
+        ? { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }
+        : { hour: '2-digit', minute: '2-digit' });
 
   // The moment under the pointer, read out by the app's tooltip (Tooltip.svelte).
   function move(e: PointerEvent) {
@@ -28,7 +35,7 @@
 </script>
 
 {#if chart}
-  <div class="share" class:hot role="img" aria-label="Memory, last 24 hours: this container's part of its VM's memory in use"
+  <div class="share" class:hot role="img" aria-label={`Memory, ${theLast(range.key)}: this container's part of its VM's memory in use`}
     {...{ [OWN_TIP]: '' }} onpointermove={move} onpointerleave={() => tooltip.hide()}>
     <svg viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
       <line class="ceiling" x1="0" x2="100" y1={chart.ceiling} y2={chart.ceiling} />
