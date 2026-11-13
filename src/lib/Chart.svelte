@@ -5,6 +5,7 @@
   import type { Series } from './api';
   import { theme } from './theme.svelte';
   import { intervalPhrase } from './almanac';
+  import { latestMeasured } from './chart';
 
   interface Line {
     key: string;
@@ -102,13 +103,11 @@
     },
   };
 
-  /** The newest moment with a value on any line: what the legend reads while nothing is hovered. */
-  function latest(u: uPlot): number | null {
-    for (let i = u.data[0].length - 1; i >= 0; i--) {
-      if (u.data.some((col, s) => s > 0 && col[i] != null)) return i;
-    }
-    return null;
-  }
+  // The columns of measurements (not the allocation's line), as `shape` last laid them out.
+  let measured: number[] = [];
+
+  /** The newest moment with a measurement on any line: what the legend reads while nothing is hovered. */
+  const latest = (u: uPlot) => latestMeasured(u.data, measured);
 
   /** With the pointer off every chart, the legend shows the latest measurement, not dashes. */
   const latestPlugin: uPlot.Plugin = {
@@ -128,6 +127,7 @@
     const cols: (number | null)[][] = [xs];
     const series: uPlot.Series[] = [{ value: (_u, v) => (v == null ? '–' : when(v)) }];
     const bands: uPlot.Band[] = [];
+    const measuredCols: number[] = [];
     for (const line of lines) {
       const band = d.metrics[line.key];
       if (!band) continue;
@@ -136,6 +136,7 @@
       const c = cssVar(line.color);
       const base = cols.length;
       cols.push(band.max.map(scale), band.min.map(scale), band.avg.map(scale));
+      measuredCols.push(base, base + 1, base + 2);
       series.push(
         { label: `${line.label} max`, stroke: 'transparent', points: { show: false }, value: (_u, v) => (v == null ? '–' : format(v)) },
         { label: `${line.label} min`, stroke: 'transparent', points: { show: false }, value: (_u, v) => (v == null ? '–' : format(v)) },
@@ -147,15 +148,16 @@
       cols.push(xs.map(() => ceiling));
       series.push({ label: 'allocated', stroke: cssVar('--muted'), dash: [4, 4], width: 1, points: { show: false }, value: () => format(ceiling) });
     }
-    return { cols, series, bands, key: series.map((s) => s.label ?? '').join('|') };
+    return { cols, series, bands, measuredCols, key: series.map((s) => s.label ?? '').join('|') };
   }
 
   // What the plot was built with: new data of the same shape only replaces the columns.
   let builtKey = '';
 
   function build(d: Series) {
-    const { cols, series, bands, key } = shape(d);
+    const { cols, series, bands, measuredCols, key } = shape(d);
     builtKey = `${key}|${scheme}|${theme.choice}`;
+    measured = measuredCols;
     const axis = { stroke: cssVar('--muted'), grid: { stroke: cssVar('--grid'), width: 1 }, ticks: { stroke: cssVar('--grid') } };
     const opts: uPlot.Options = {
       width,
@@ -180,8 +182,9 @@
    * and forgetting it.
    */
   function update(d: Series) {
-    const { cols, key } = shape(d);
+    const { cols, measuredCols, key } = shape(d);
     if (!plot || `${key}|${scheme}|${theme.choice}` !== builtKey) return build(d);
+    measured = measuredCols;
     const { left, top } = plot.cursor;
     plot.setData(cols as uPlot.AlignedData);
     if (left != null && left >= 0 && top != null) plot.setCursor({ left, top });
