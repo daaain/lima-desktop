@@ -657,3 +657,25 @@ test("A failed lookup of the latest kill is said, and the verdicts don't wait on
   assert.deepEqual(errors, []);
   await close();
 });
+
+test("An earlier range's kills and stalls aren't shown under the range chosen since", async () => {
+  // The 24 h answer is slow, the 1 h answers slower: choosing 1 h while 24 h is on its way has
+  // the 24 h answer land first, after the range has changed.
+  const { page, errors, close } = await open('/vm/harbor', {
+    height: 1400,
+    init: () => {
+      localStorage.setItem('range', '24h');
+      window.__fakeOomDelay = ({ from, to, limit }) => (limit === 1 ? 0 : to - from > 12 * 3_600_000 ? 1500 : 3000);
+    },
+  });
+  await page.getByRole('group', { name: 'Time range' }).getByRole('button', { name: '1 h' }).click();
+  // Past the 24 h answer, before the 1 h one: harbor's kill (3 h ago) and stall (2 h ago) are
+  // outside the last hour, so nothing may be listed as in it.
+  await page.waitForTimeout(2200);
+  assert.equal(await page.locator('#oom tbody tr').count(), 0, "the 24 h answer's rows under 1 h");
+  assert.doesNotMatch(await page.locator('main').innerText(), /in the last hour, newest first/);
+  // Once the 1 h answer lands: none in it, and when the latest was.
+  await page.getByText(/None in the last hour; the latest was/).waitFor({ timeout: 10_000 });
+  assert.deepEqual(errors, []);
+  await close();
+});

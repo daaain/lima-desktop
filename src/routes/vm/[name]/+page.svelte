@@ -93,14 +93,21 @@
       },
     );
   });
+  // Whether what has landed is for the VM and range on screen. inOrder() keeps one selection's
+  // overlapping refreshes in order, but a range just chosen can have the previous range's answer
+  // land before its own: until its own does, nothing is listed under its name.
+  const oomCurrent = $derived(oomFor?.vm === name && oomFor?.over === range.key);
   // Kills and stalls in one list, newest first.
   type OomRow = { ts: number; kill: OomEvent; stall?: never } | { ts: number; stall: VmStall; kill?: never };
   const oomRows: OomRow[] = $derived(
-    [...oom.map((kill) => ({ ts: kill.ts, kill })), ...stalls.map((stall) => ({ ts: stall.start, stall }))].sort((a, b) => b.ts - a.ts),
+    !oomCurrent ? [] : [...oom.map((kill) => ({ ts: kill.ts, kill })), ...stalls.map((stall) => ({ ts: stall.start, stall }))].sort((a, b) => b.ts - a.ts),
   );
   const now = $derived(live.snapshot?.updated ?? to);
   // Only a stall going on follows the clock, so the chart isn't redrawn every poll for nothing.
-  const memoryMarkers = $derived([...oomMarkers(oom), ...stallMarkers(stalls, stalls.some((s) => s.endReason == null) ? now : to)]);
+  const memoryMarkers = $derived(
+    !oomCurrent ? [] : [...oomMarkers(oom), ...stallMarkers(stalls, stalls.some((s) => s.endReason == null) ? now : to)],
+  );
+  const latestShown = $derived(oomCurrent ? latestTs : null);
   const arrivedForOom = $derived(page.url.hash === '#oom');
 
   /** The shortest range that reaches back to `ts`: the app's, so every page then shows it too. */
@@ -112,9 +119,9 @@
   // kill or stall if need be — that is what was asked to be seen — then scroll to the panel once it exists.
   let arrivedHandled = false;
   $effect(() => {
-    if (!arrivedForOom || !oomLoaded || arrivedHandled) return;
+    if (!arrivedForOom || !oomCurrent || arrivedHandled) return;
     arrivedHandled = true;
-    if (!oomRows.length && latestTs != null) showRangeFor(latestTs);
+    if (!oomRows.length && latestShown != null) showRangeFor(latestShown);
     tick().then(() => document.getElementById('oom')?.scrollIntoView({ block: 'start' }));
   });
 
@@ -195,19 +202,21 @@
   <Sizing inst={i} entity={vm.entity} latest={l} {from} {to} over={range.key} {series} markers={memoryMarkers}
     oomEvents={oomError ? null : oomLoaded ? oom : undefined} stalls={oomError ? null : oomLoaded ? stalls : undefined} eventsFor={oomFor} bind:hints />
 
-  {#if oomRows.length || latestTs != null || oomError || arrivedForOom || vm.stalledSince}
+  {#if oomRows.length || latestShown != null || (oomCurrent && oomError) || arrivedForOom || vm.stalledSince}
     <section class="panel" id="oom">
       <h2 class="head">Out of memory</h2>
       {#if oomRows.length}<p class="note">{outOfMemoryNote(oom, stalls, range.key)}</p>{/if}
-      {#if oomError}<p class="error">{oomError}</p>{/if}
+      {#if oomCurrent && oomError}<p class="error">{oomError}</p>{/if}
       {#if vm.oomDetailError}
         <p class="note">No kernel detail: {vm.oomDetailError}. Kills are still counted, but not always which container, or why.</p>
       {/if}
-      {#if !oomRows.length}
+      {#if !oomCurrent}
+        <p class="note">…</p>
+      {:else if !oomRows.length}
         <p class="note">
-          {#if latestTs != null}
-            None in {theLast(range.key)}; the latest was {when(latestTs)}.
-            <button class="link" onclick={() => latestTs != null && showRangeFor(latestTs)}>Show it</button>
+          {#if latestShown != null}
+            None in {theLast(range.key)}; the latest was {when(latestShown)}.
+            <button class="link" onclick={() => latestShown != null && showRangeFor(latestShown)}>Show it</button>
           {:else}
             No OOM kills or stalls recorded in this VM.
           {/if}

@@ -459,7 +459,11 @@
       // A test can set this before the app loads to have the lookup of a VM's latest kill (the one
       // asked for with a limit of 1) fail, as a store that can't be read would.
       if (limit === 1 && window.__fakeLatestKillFails) throw new Error('the store could not be read');
-      return oom.filter((e) => (vm == null || e.vm === vm) && e.ts >= from && e.ts <= to).slice(0, limit);
+      const found = oom.filter((e) => (vm == null || e.vm === vm) && e.ts >= from && e.ts <= to).slice(0, limit);
+      // A test can set this to answer some lookups late (ms, from the asked window), as a busy
+      // store would, to have answers land out of order.
+      const delay = window.__fakeOomDelay?.({ vm, from, to, limit });
+      return delay ? new Promise((resolve) => setTimeout(() => resolve(found), delay)) : found;
     },
     stalls: ({ vm, from, to, limit = 500 }) =>
       stalls.filter((s) => (vm == null || s.vm === vm) && overlaps(s, from, to)).sort((a, b) => b.start - a.start).slice(0, limit),
