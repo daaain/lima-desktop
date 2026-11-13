@@ -19,6 +19,14 @@ pub const MIN_SILENCE: Duration = Duration::from_secs(45);
 const SILENT_BLOCKS: u64 = 10;
 /// The memory pressure kept with a stall is the highest in this long before it.
 const PRESSURE_WINDOW_MS: i64 = 60_000;
+/// How much later than the last block a guest's boot has to seem before it counts as a reboot.
+/// The guest reads its uptime as it starts a block, the app notes the time as the block ends: the
+/// work in between (a `df`, a look through the cgroups) and the ssh hop take a moment, more in a VM
+/// short of memory, and needn't take as long for one block as for the next. That difference makes
+/// a guest that kept running seem to have booted after the last block only if that block came
+/// within this long of a boot; it hides a reboot only within this long of the last block, which a
+/// reboot that quick would be dropped for anyway, had it been seen.
+const BOOT_SLACK: Duration = Duration::from_secs(2);
 
 /// How long a probe at `interval_secs` may be silent before its VM counts as stalled.
 pub fn threshold(interval_secs: u64) -> Duration {
@@ -102,6 +110,7 @@ pub enum Change {
 }
 
 struct Last {
+    at: Instant,
     ts: i64,
     uptime: f64,
     reading: Reading,
@@ -125,7 +134,13 @@ pub struct Watch {
 impl Watch {
     /// A block arrived at `at` (wall-clock `ts`), from a guest up for `uptime` seconds.
     pub fn block(&mut self, at: Instant, ts: i64, uptime: f64, reading: Reading) -> Option<Change> {
-        let booted = self.last.as_ref().is_some_and(|l| uptime < l.uptime);
+        // Booted since the last block: less uptime than it had then, or less than the time since.
+        // That time is on the monotonic clock, as the guest's uptime is: the wall clock leaps on
+        // while the computer sleeps, so a guest paused meanwhile would seem to have booted later.
+        let booted = self.last.as_ref().is_some_and(|l| {
+            let up = Duration::try_from_secs_f64(uptime).unwrap_or_default();
+            uptime < l.uptime || up + BOOT_SLACK < at.saturating_duration_since(l.at)
+        });
         let change = self.open.take().map(|(mut stall, threshold)| {
             if booted {
                 // The guest's own clock says when it came back up; until then it was down or stuck.
@@ -143,6 +158,7 @@ impl Watch {
             Change::Ended(stall)
         });
         self.last = Some(Last {
+            at,
             ts,
             uptime,
             reading,
@@ -388,6 +404,52 @@ mod tests {
             other => panic!("expected the stall to be dropped, got {other:?}"),
         }
         assert_eq!(w.stalled_since(), None);
+    }
+
+    #[test]
+    fn a_reboot_is_found_even_when_the_new_uptime_is_higher() {
+        // Up 20 s at the last block, reset 5 s later, back 70 s on up for 65 s: more uptime than
+        // before, but it booted after the last block, and soon after it.
+        let t0 = Instant::now();
+        let mut w = Watch::default();
+        w.block(t0, 1_000_000, 20.0, reading(95, 250));
+        began(w.tick(t0 + T, T, "vm", None));
+        match w.block(t0 + 70 * S, 1_070_000, 65.0, reading(10, 0)) {
+            Some(Change::Dropped(s)) => {
+                assert_eq!(s.start, 1_000_000);
+                assert_eq!(s.end_reason, Some(End::Rebooted));
+            }
+            other => panic!("expected the reboot to be dropped, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_late_reboot_with_a_higher_uptime_ends_it_at_the_boot() {
+        // Up 20 s at the last block, reset 60 s later, back 100 s on up for 40 s.
+        let t0 = Instant::now();
+        let mut w = Watch::default();
+        w.block(t0, 1_000_000, 20.0, reading(95, 250));
+        began(w.tick(t0 + T, T, "vm", None));
+        let s = ended(w.block(t0 + 100 * S, 1_100_000, 40.0, reading(10, 0)));
+        assert_eq!(s.end, Some(1_060_000));
+        assert_eq!(s.end_reason, Some(End::Rebooted));
+    }
+
+    #[test]
+    fn the_computer_sleeping_through_a_stall_is_no_reboot() {
+        // Stalled, then the lid closed for 8 h: the wall clock leaps on, the monotonic clock and
+        // the guest's uptime don't, so its boot only looks like it came after the last block.
+        let t0 = Instant::now();
+        let mut w = Watch::default();
+        w.block(t0, 1_000_000, 600.0, reading(95, 250));
+        began(w.tick(t0 + T, T, "vm", None));
+        let s = ended(w.block(
+            t0 + 120 * S,
+            1_120_000 + 8 * 3_600_000,
+            720.0,
+            reading(10, 0),
+        ));
+        assert_eq!(s.end_reason, Some(End::Resumed));
     }
 
     #[test]
