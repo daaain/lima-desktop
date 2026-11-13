@@ -716,3 +716,25 @@ test("The kill count waits for the range just chosen rather than count the previ
   assert.deepEqual(errors, []);
   await close();
 });
+
+test("An open container's kill markers are only the range's own", async () => {
+  const { page, errors, close } = await open('/vm/harbor', {
+    height: 1600,
+    init: () => {
+      localStorage.setItem('range', '24h');
+      // A week's lookups fail; a day's work.
+      window.__fakeOomFails = ({ from, to, limit }) => limit !== 1 && to - from > 2 * 24 * 3_600_000;
+    },
+  });
+  await page.locator('#oom tbody tr').first().waitFor();
+  // app's kill, three hours ago, is marked on its memory chart.
+  await page.locator('.line', { has: page.locator('.name', { hasText: /^app/ }) }).first().click();
+  const memory = page.locator('section.detail .chart').first();
+  await page.waitForFunction((el) => el.dataset.markers === '1', await memory.elementHandle());
+  // Over a week whose lookup failed, it isn't kept as if it were all the week held.
+  await page.getByRole('group', { name: 'Time range' }).getByRole('button', { name: '7 days' }).click();
+  await page.locator('#oom .error', { hasText: 'the store could not be read' }).waitFor();
+  assert.equal(await memory.getAttribute('data-markers'), '0');
+  assert.deepEqual(errors, []);
+  await close();
+});

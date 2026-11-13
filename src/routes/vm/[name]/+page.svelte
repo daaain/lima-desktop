@@ -301,7 +301,7 @@
                 selected={open.includes(c.id)} onselect={() => toggle(c.id)} onerror={(e) => (actionError = e)} />
               {#if open.includes(c.id)}
                 <div id={`detail-${c.id}`} transition:unfold>
-                  <ContainerDetail vm={name} {c} {from} {to} over={range.key} vmMemory={i.memory} oomMarkers={oomMarkers(oom, c.id)} onclose={() => toggle(c.id)} />
+                  <ContainerDetail vm={name} {c} {from} {to} over={range.key} vmMemory={i.memory} oomMarkers={oomCurrent ? oomMarkers(oom, c.id) : []} onclose={() => toggle(c.id)} />
                 </div>
               {/if}
             </div>
