@@ -40,7 +40,8 @@ after(async () => {
   server?.kill();
 });
 
-async function open(path, { dark = false, width = 1320, height = 900 } = {}) {
+/** `init`, if given, runs in the page before the app does (after the fake backend is set up). */
+async function open(path, { dark = false, width = 1320, height = 900, init } = {}) {
   const context = await browser.newContext({
     viewport: { width, height }, deviceScaleFactor: 1.5, colorScheme: dark ? 'dark' : 'light', locale: 'en-GB', timezoneId: 'UTC',
   });
@@ -50,6 +51,7 @@ async function open(path, { dark = false, width = 1320, height = 900 } = {}) {
   page.on('console', (m) => m.type() === 'error' && errors.push(m.text()));
   await page.clock.setFixedTime(NOW);
   await page.addInitScript({ path: join(root, 'e2e-ui/fake-backend.js') });
+  if (init) await page.addInitScript(init);
   await page.goto(base + path);
   return { page, errors, close: () => context.close() };
 }
@@ -637,6 +639,21 @@ test("Arriving from an OOM badge widens the app's range to reach the latest kill
   // The kill three hours ago, the stall two: the shortest range holding both is 6 h.
   await page.getByText('in the last 6 h, newest first').waitFor();
   assert.deepEqual(await ranges.locator('button[aria-pressed="true"]').allInnerTexts(), ['6 h']);
+  assert.deepEqual(errors, []);
+  await close();
+});
+
+test("A failed lookup of the latest kill is said, and the verdicts don't wait on it", async () => {
+  // In the last hour harbor neither killed nor stalled, so its page asks when it last did; that fails.
+  const { page, errors, close } = await open('/vm/harbor', {
+    init: () => {
+      localStorage.setItem('range', '1h');
+      window.__fakeLatestKillFails = true;
+    },
+  });
+  await page.locator('#oom .error', { hasText: 'the store could not be read' }).waitFor();
+  const memory = page.locator('figure', { hasText: 'Memory' }).first().locator('.verdict');
+  await page.waitForFunction((el) => !/Collecting history/.test(el.textContent), await memory.elementHandle());
   assert.deepEqual(errors, []);
   await close();
 });

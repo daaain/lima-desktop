@@ -7,7 +7,8 @@
   import { containersSentence, vmHeadline } from '$lib/almanac';
   import { History } from '$lib/history.svelte';
   import type { Hint } from '$lib/rightsize';
-  import { rangeReaching, theLast } from '$lib/ranges';
+  import { rangeReaching, theLast, type RangeKey } from '$lib/ranges';
+  import { inOrder } from '$lib/inOrder';
   import { range, rangeWindow } from '$lib/range.svelte';
   import { OOM_LEVEL_LABEL, STALL_LABEL, oomCause, oomLevel, oomMarkers, oomWho, outOfMemoryNote, stallCause, stalledNow, stallMarkers } from '$lib/oom';
   import VmActions from '$lib/VmActions.svelte';
@@ -52,23 +53,44 @@
   let latestTs = $state<number | null>(null);
   let oomError = $state<string | null>(null);
   let oomLoaded = $state(false);
+  // The VM and range the kills and stalls (or the error) are for, so Sizing judges them only
+  // alongside a summary of the same.
+  let oomFor = $state<{ vm: string; over: RangeKey } | null>(null);
+
+  /** The kills and stalls in [f, t]; when there are none, also when the latest was. */
+  async function outOfMemory(vmName: string, f: number, t: number) {
+    const [events, found] = await Promise.all([api.oomEvents(vmName, f, t), api.stalls(vmName, f, t)]);
+    let latest: number | null = null;
+    if (!events.length && !found.length) {
+      const [kill, stall] = await Promise.all([api.oomEvents(vmName, 0, Date.now(), 1), api.stalls(vmName, 0, Date.now(), 1)]);
+      const times = [kill[0]?.ts, stall[0]?.start].filter((t): t is number => t != null);
+      latest = times.length ? Math.max(...times) : null;
+    }
+    return { events, found, latest };
+  }
+
+  // A range chosen, or a stall begun or ended, while an earlier fetch is on its way: that one's
+  // answer, or failure, mustn't replace the newer one's when it lands after it.
+  const oomInOrder = inOrder();
   $effect(() => {
     const [vmName, f, t] = [name, from, to];
+    const asked = { vm: vmName, over: range.key };
     void vm?.stalledSince;
-    Promise.all([api.oomEvents(vmName, f, t), api.stalls(vmName, f, t)]).then(
-      async ([events, found]) => {
+    oomInOrder(outOfMemory(vmName, f, t)).then(
+      ({ events, found, latest }) => {
         oom = events;
         stalls = found;
-        latestTs = null;
-        if (!events.length && !found.length) {
-          const [kill, stall] = await Promise.all([api.oomEvents(vmName, 0, Date.now(), 1), api.stalls(vmName, 0, Date.now(), 1)]);
-          const times = [kill[0]?.ts, stall[0]?.start].filter((t): t is number => t != null);
-          latestTs = times.length ? Math.max(...times) : null;
-        }
+        latestTs = latest;
         oomError = null;
         oomLoaded = true;
+        oomFor = asked;
       },
-      (e) => (oomError = String(e)),
+      // Either step failing ends the loading as an error, so nothing waits on it for ever.
+      (e) => {
+        oomError = String(e);
+        oomLoaded = true;
+        oomFor = asked;
+      },
     );
   });
   // Kills and stalls in one list, newest first.
@@ -171,7 +193,7 @@
   {#if vm.podmanError}<p class="error">podman: {vm.podmanError}</p>{/if}
 
   <Sizing inst={i} entity={vm.entity} latest={l} {from} {to} over={range.key} {series} markers={memoryMarkers}
-    oomEvents={oomError ? null : oomLoaded ? oom : undefined} stalls={oomError ? null : oomLoaded ? stalls : undefined} bind:hints />
+    oomEvents={oomError ? null : oomLoaded ? oom : undefined} stalls={oomError ? null : oomLoaded ? stalls : undefined} eventsFor={oomFor} bind:hints />
 
   {#if oomRows.length || latestTs != null || oomError || arrivedForOom || vm.stalledSince}
     <section class="panel" id="oom">

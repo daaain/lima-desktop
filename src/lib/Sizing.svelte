@@ -6,11 +6,12 @@
   import { bytes, cores, cpuLabel, GiB, permille } from './format';
   import { cpuHint, diskHint, memoryHint, type Hint } from './rightsize';
   import { inRange, type RangeKey } from './ranges';
+  import { inOrder } from './inOrder';
   import type { Marker } from './oom';
   import Bar from './Bar.svelte';
   import Chart from './Chart.svelte';
 
-  let { inst, entity, latest, from, to, over, oomEvents, stalls, series, markers, hints = $bindable([]) }: {
+  let { inst, entity, latest, from, to, over, oomEvents, stalls, eventsFor, series, markers, hints = $bindable([]) }: {
     inst: Instance; entity?: number; latest: Latest; from: number; to: number;
     /** The range [from, to] is, for the verdicts to say. */
     over: RangeKey;
@@ -18,6 +19,8 @@
     oomEvents: OomEvent[] | null | undefined;
     /** The range's stalls, likewise: undefined while loading, null when unavailable. */
     stalls: VmStall[] | null | undefined;
+    /** The VM and range `oomEvents` and `stalls` were fetched for. */
+    eventsFor: { vm: string; over: RangeKey } | null;
     series: Series | null;
     /** OOM kills and stalls to mark on the memory chart. */
     markers: Marker[];
@@ -25,9 +28,11 @@
     hints?: Hint[];
   } = $props();
   let summary = $state<Record<string, Summary> | null>(null);
-  // The range the summary was fetched for: the words say it, not the one just chosen, until it lands.
-  let fetchedOver = $state<RangeKey | null>(null);
-  const summaryOver = $derived(fetchedOver ?? over);
+  // The VM and range the summary was fetched for: the words say its range, not the one just chosen,
+  // until it lands.
+  let summaryFor = $state<{ vm: string; over: RangeKey } | null>(null);
+  const summaryOver = $derived(summaryFor?.over ?? over);
+  const vmName = $derived(inst.name);
   let cpus = $state(0);
   let memGiB = $state(0);
   let diskGiB = $state(0);
@@ -35,10 +40,12 @@
   let error = $state<string | null>(null);
   let done = $state(false);
 
+  // An older range's summary landing after a newer one's would put it back, and never match the events.
+  const summaryInOrder = inOrder();
   $effect(() => {
     if (entity == null) return;
-    const asked = over;
-    api.summary(entity, from, to).then((s) => ((summary = s), (fetchedOver = asked)), (e) => (error = String(e)));
+    const asked = { vm: vmName, over };
+    summaryInOrder(api.summary(entity, from, to)).then((s) => ((summary = s), (summaryFor = asked)), (e) => (error = String(e)));
   });
   $effect(() => {
     cpus = inst.cpus;
@@ -47,9 +54,14 @@
   });
 
   // Wait for the OOM events and stalls too, so a container-limit kill never flashes up as "grow
-  // the VM", nor the VM as fitting before its stalls are known.
+  // the VM", nor the VM as fitting before its stalls are known. And judge them only with a summary
+  // of the same VM and range: each arrives in its own time after a new range is chosen, and a 1 h
+  // summary with the last 24 h's stalls would say a stall from hours ago was in the last hour.
+  const together = $derived(
+    summaryFor?.vm === vmName && eventsFor?.vm === vmName && summaryFor.over === eventsFor.over,
+  );
   $effect(() => {
-    hints = summary && oomEvents !== undefined && stalls !== undefined
+    hints = summary && together && oomEvents !== undefined && stalls !== undefined
       ? [memoryHint(inst, summary, summaryOver, oomEvents, stalls), cpuHint(inst, summary, summaryOver), diskHint(inst, latest)]
       : [];
   });
