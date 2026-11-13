@@ -174,12 +174,15 @@ const WHAT = { memory: 'memory', cpu: 'CPU', disk: 'disk' } as const;
 const list = (words: string[]) => (words.length <= 1 ? words.join('') : `${words.slice(0, -1).join(', ')} and ${words[words.length - 1]}`);
 
 /**
- * A VM's page in one sentence, worst news first: what it needs more of, else what is past three
- * quarters, else what it has too much of, else that it fits. `hints` is empty until history arrives.
+ * A VM's page in one sentence, worst news first: that it has stopped answering, else what it needs
+ * more of, else what is past three quarters, else what it has too much of, else that it fits.
+ * `hints` is empty until history arrives.
  */
 export function vmHeadline(vm: VmLive, hints: Hint[]): string {
   const name = vm.instance.name;
   if (vm.instance.status !== 'Running') return `${name} is ${vm.instance.status.toLowerCase()}.`;
+  // Lima says it's running but it doesn't answer: readings from before the silence can't say it fits.
+  if (vm.stalledSince != null) return `${name} isn't answering.`;
   const of = (verdict: Hint['verdict']) => hints.filter((h) => h.verdict === verdict).map((h) => WHAT[h.dimension]);
   const grow = of('grow');
   if (grow.length) return `${name} needs more ${list(grow)}.`;

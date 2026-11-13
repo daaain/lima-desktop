@@ -156,16 +156,31 @@ describe('a VM that stalled', () => {
 });
 
 describe('the out-of-memory summary', () => {
-  const kills = [ev(), ev({ constraint: 'CONSTRAINT_NONE' })];
+  const own = ev();
+  const vmWide = ev({ constraint: 'CONSTRAINT_NONE', containerId: null });
+  const noDetail = ev({ constraint: null });
+  const cgroup = ev({ containerId: null });
+  const unknown = stall({ memUsed: 10 * GiB, psiMemSome: 5 });
   it('counts kills by what ran out', () => {
-    expect(outOfMemoryNote(kills, [])).toBe(
-      "2 kills in this range, newest first · 1 hit a container's (or cgroup's) own limit · 1 because the whole VM ran out",
+    expect(outOfMemoryNote([own, vmWide], [])).toBe(
+      "2 kills in this range, newest first · 1 kill hit a container's own limit · 1 kill because the whole VM ran out of memory",
+    );
+    expect(outOfMemoryNote([own, own, cgroup, noDetail], [])).toBe(
+      "4 kills in this range, newest first · 2 kills hit containers' own limits · 1 kill hit a cgroup's own limit · 1 kill with no detail",
     );
   });
-  it('counts stalls apart from kills', () => {
-    expect(outOfMemoryNote([], [stall()])).toBe('1 stall in this range, newest first');
-    expect(outOfMemoryNote(kills.slice(0, 1), [stall(), stall()])).toBe(
-      "1 kill and 2 stalls in this range, newest first · 1 hit a container's (or cgroup's) own limit · 0 because the whole VM ran out",
+  it('counts stalls apart from kills, by whether memory ran out', () => {
+    expect(outOfMemoryNote([], [stall()])).toBe('1 stall in this range, newest first · 1 stall because the whole VM ran out of memory');
+    expect(outOfMemoryNote([own], [stall()])).toBe(
+      "1 kill and 1 stall in this range, newest first · 1 kill hit a container's own limit · 1 stall because the whole VM ran out of memory",
+    );
+    expect(outOfMemoryNote([own], [unknown, unknown])).toBe(
+      "1 kill and 2 stalls in this range, newest first · 1 kill hit a container's own limit · 2 stalls of unknown cause",
+    );
+  });
+  it('says the whole VM ran out once, for kills and stalls alike', () => {
+    expect(outOfMemoryNote([vmWide, vmWide], [stall(), unknown])).toBe(
+      '2 kills and 2 stalls in this range, newest first · 2 kills and 1 stall because the whole VM ran out of memory · 1 stall of unknown cause',
     );
   });
 });

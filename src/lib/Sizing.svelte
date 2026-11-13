@@ -1,7 +1,7 @@
 <script lang="ts">
   // A VM's four figures (memory, CPU, pressure, disk), each a verdict in a sentence, the numbers
   // behind it, a bar and the history; then the resize form, which the verdicts can fill in.
-  import { api, locked, type Instance, type Latest, type OomEvent, type Series, type Summary } from './api';
+  import { api, locked, type Instance, type Latest, type OomEvent, type Series, type Summary, type VmStall } from './api';
   import { share } from './almanac';
   import { bytes, cores, cpuLabel, GiB, permille } from './format';
   import { cpuHint, diskHint, memoryHint, type Hint } from './rightsize';
@@ -9,10 +9,12 @@
   import Bar from './Bar.svelte';
   import Chart from './Chart.svelte';
 
-  let { inst, entity, latest, from, to, oomEvents, series, markers, hints = $bindable([]) }: {
+  let { inst, entity, latest, from, to, oomEvents, stalls, series, markers, hints = $bindable([]) }: {
     inst: Instance; entity?: number; latest: Latest; from: number; to: number;
     /** The range's OOM kills: undefined while loading, null when unavailable (then only the counter is known). */
     oomEvents: OomEvent[] | null | undefined;
+    /** The range's stalls, likewise: undefined while loading, null when unavailable. */
+    stalls: VmStall[] | null | undefined;
     series: Series | null;
     /** OOM kills and stalls to mark on the memory chart. */
     markers: Marker[];
@@ -37,9 +39,12 @@
     diskGiB = Math.round(inst.disk / GiB);
   });
 
-  // Wait for the OOM events too, so a container-limit kill never flashes up as "grow the VM".
+  // Wait for the OOM events and stalls too, so a container-limit kill never flashes up as "grow
+  // the VM", nor the VM as fitting before its stalls are known.
   $effect(() => {
-    hints = summary && oomEvents !== undefined ? [memoryHint(inst, summary, oomEvents), cpuHint(inst, summary), diskHint(inst, latest)] : [];
+    hints = summary && oomEvents !== undefined && stalls !== undefined
+      ? [memoryHint(inst, summary, oomEvents, stalls), cpuHint(inst, summary), diskHint(inst, latest)]
+      : [];
   });
   const hint = (d: Hint['dimension']) => hints.find((h) => h.dimension === d);
   const stopped = $derived(inst.status === 'Stopped');

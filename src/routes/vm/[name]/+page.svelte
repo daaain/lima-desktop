@@ -182,7 +182,8 @@
   {#if vm.probeError}<p class="error">metrics: {vm.probeError}</p>{/if}
   {#if vm.podmanError}<p class="error">podman: {vm.podmanError}</p>{/if}
 
-  <Sizing inst={i} entity={vm.entity} latest={l} {from} {to} {series} markers={memoryMarkers} oomEvents={oomError ? null : oomLoaded ? oom : undefined} bind:hints />
+  <Sizing inst={i} entity={vm.entity} latest={l} {from} {to} {series} markers={memoryMarkers}
+    oomEvents={oomError ? null : oomLoaded ? oom : undefined} stalls={oomError ? null : oomLoaded ? stalls : undefined} bind:hints />
 
   {#if oomRows.length || latestTs != null || oomError || arrivedForOom || vm.stalledSince}
     <section class="panel" id="oom">

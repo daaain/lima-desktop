@@ -132,15 +132,31 @@ export function stalledNow(vm: string, since: number, now: number): string {
 }
 
 const count = (n: number, noun: string) => `${n} ${noun}${n === 1 ? '' : 's'}`;
+/** "1 kill and 2 stalls", leaving out a zero. */
+const killsAndStalls = (kills: number, stalls: number) =>
+  [kills > 0 && count(kills, 'kill'), stalls > 0 && count(stalls, 'stall')].filter(Boolean).join(' and ');
 
-/** What the range holds: kills (by what ran out) and stalls. */
+/**
+ * What the range holds, then each kill and stall by what ran out, every phrase naming which it
+ * counts and none of them zero. The whole VM running out is one phrase for kills and stalls
+ * alike: one cause, with one fix.
+ */
 export function outOfMemoryNote(kills: OomEvent[], stalls: VmStall[]): string {
-  const what = [kills.length && count(kills.length, 'kill'), stalls.length && count(stalls.length, 'stall')].filter(Boolean);
-  const parts = [`${what.join(' and ')} in this range, newest first`];
-  if (kills.length) {
-    const own = kills.filter((e) => ['container', 'cgroup'].includes(oomLevel(e))).length;
-    const vm = kills.filter((e) => oomLevel(e) === 'vm').length;
-    parts.push(`${own} hit a container's (or cgroup's) own limit`, `${vm} because the whole VM ran out`);
-  }
-  return parts.join(' · ');
+  const killed = (level: OomLevel) => kills.filter((e) => oomLevel(e) === level).length;
+  const fromMemory = stalls.filter(stallFromMemory).length;
+  const ownLimit = (n: number, whose: string, theirs: string) =>
+    n > 0 && `${count(n, 'kill')} hit ${n === 1 ? `${whose} own limit` : `${theirs} own limits`}`;
+  const vm = killed('vm');
+  const unknown = killed('unknown');
+  const unexplained = stalls.length - fromMemory;
+  return [
+    `${killsAndStalls(kills.length, stalls.length)} in this range, newest first`,
+    ownLimit(killed('container'), "a container's", "containers'"),
+    ownLimit(killed('cgroup'), "a cgroup's", "cgroups'"),
+    vm + fromMemory > 0 && `${killsAndStalls(vm, fromMemory)} because the whole VM ran out of memory`,
+    unknown > 0 && `${count(unknown, 'kill')} with no detail`,
+    unexplained > 0 && `${count(unexplained, 'stall')} of unknown cause`,
+  ]
+    .filter(Boolean)
+    .join(' · ');
 }

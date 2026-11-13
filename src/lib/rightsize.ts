@@ -1,8 +1,8 @@
 // Right-sizing hints from a window of history. Advice, never applied automatically: the numbers
 // and the reasoning are shown so the person can disagree.
-import type { Instance, OomEvent, Summary } from './api';
+import type { Instance, OomEvent, Summary, VmStall } from './api';
 import { GiB, bytes } from './format';
-import { oomLevel, type OomLevel } from './oom';
+import { oomLevel, stallFromMemory, type OomLevel } from './oom';
 
 export type Verdict = 'grow' | 'shrink' | 'ok' | 'unknown';
 export interface Hint {
@@ -50,30 +50,48 @@ const ownLimitNote = (n: number) =>
     : `${n} OOM kills were containers hitting their own memory limits`;
 
 /**
- * Memory advice. Only a kill where the whole VM ran out argues for a bigger VM: a container
- * hitting its own limit is fixed by raising that limit, so it's noted, never a reason to grow.
+ * Memory advice. Only the whole VM running out argues for a bigger VM: a kill of the whole VM, or
+ * a stall whose last reading says memory ran out (the VM thrashed instead of killing anything,
+ * which is no lesser sign). A container hitting its own limit is fixed by raising that limit, so
+ * it's noted, never a reason to grow; nor is a stall of unknown cause.
  */
-export function memoryHint(inst: Instance, s: Record<string, Summary>, events?: OomEvent[] | null): Hint {
+export function memoryHint(inst: Instance, s: Record<string, Summary>, events?: OomEvent[] | null, stalls?: VmStall[] | null): Hint {
   const kills = killsByLevel(s, events);
-  const hint = vmMemoryHint(inst, s, kills);
-  if (kills.ownLimit === 0 || kills.vm > 0) return hint;
+  const stalled = (stalls ?? []).filter(stallFromMemory).length;
+  const hint = vmMemoryHint(inst, s, kills, stalled);
+  if (kills.ownLimit === 0 || kills.vm + stalled > 0) return hint;
   return { ...hint, reason: `${hint.reason} ${ownLimitNote(kills.ownLimit)} — raise those, not the VM's.` };
 }
 
-function vmMemoryHint(inst: Instance, s: Record<string, Summary>, kills: Kills): Hint {
+const times = (n: number) => (n === 1 ? 'once' : `${n} times`);
+
+/** "The VM ran out of memory …": how often, and how when it both killed and stalled. */
+function ranOut(killed: number, stalled: number): string {
+  if (stalled === 0) return `The VM ran out of memory ${times(killed)} in this window.`;
+  if (killed === 0) return `The VM ran out of memory and stalled ${times(stalled)} in this window.`;
+  return `The VM ran out of memory ${times(killed + stalled)} in this window: it killed a process ${times(killed)} and stalled ${times(stalled)}.`;
+}
+
+function vmMemoryHint(inst: Instance, s: Record<string, Summary>, kills: Kills, stalled: number): Hint {
   const used = s.mem_used;
   const full = s.psi_mem_full;
   const total = inst.memory;
   if (!used?.max) return { dimension: 'memory', verdict: 'unknown', reason: 'No memory history yet.' };
-  if (kills.vm > 0) {
-    const others = [
-      kills.ownLimit && `${plural(kills.ownLimit, 'other kill was a container hitting its own limit', 'other kills were containers hitting their own limits')}.`,
-      kills.unknown && `${plural(kills.unknown, 'more has', 'more have')} no detail.`,
-    ].filter(Boolean);
+  if (kills.vm + stalled > 0) {
+    // "other" and "more" follow kills of the whole VM; after stalls alone they'd have nothing to follow.
+    const others = kills.vm
+      ? [
+          kills.ownLimit && `${plural(kills.ownLimit, 'other kill was a container hitting its own limit', 'other kills were containers hitting their own limits')}.`,
+          kills.unknown && `${plural(kills.unknown, 'more has', 'more have')} no detail.`,
+        ]
+      : [
+          kills.ownLimit && `${ownLimitNote(kills.ownLimit)}.`,
+          kills.unknown && `${plural(kills.unknown, 'kill has', 'kills have')} no detail.`,
+        ];
     return {
       dimension: 'memory',
       verdict: 'grow',
-      reason: [`The VM ran out of memory ${kills.vm === 1 ? 'once' : `${kills.vm} times`} in this window.`, ...others].join(' '),
+      reason: [ranOut(kills.vm, stalled), ...others.filter(Boolean)].join(' '),
       suggest: roundUpGiB(total * 1.5),
     };
   }

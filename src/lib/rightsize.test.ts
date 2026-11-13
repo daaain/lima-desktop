@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { Instance, OomEvent, Summary } from './api';
+import type { Instance, OomEvent, Summary, VmStall } from './api';
 import { GiB } from './format';
 import { cpuHint, diskHint, memoryHint } from './rightsize';
 
@@ -75,6 +75,45 @@ describe('memory, knowing which level each OOM kill was', () => {
     const h = memoryHint(inst(), { mem_used: s({ max: 2 * GiB }), ...counted(3) }, [ownLimit]);
     expect(h.verdict).toBe('grow');
     expect(h.reason).toContain('2 processes were killed');
+  });
+});
+
+describe('memory, with the VM stalling', () => {
+  const stall = (o: Partial<VmStall> = {}): VmStall => ({
+    vm: 'acme', start: 0, end: 1_000_000, endReason: 'stopped', memUsed: 7.6 * GiB, memTotal: 7.75 * GiB,
+    psiMemSome: 250, psiMemFull: 40, containerId: null, containerMem: null, containerName: null,
+    composeProject: null, composeService: null, ...o,
+  });
+  const fromMemory = stall();
+  const unknown = stall({ memUsed: 2 * GiB, psiMemSome: 5 });
+  const ownLimit: OomEvent = {
+    ts: 0, vm: 'acme', source: 'kernel', constraint: 'CONSTRAINT_MEMCG', containerId: 'c'.repeat(64), cgroup: null,
+    process: 'node', pid: 1, memLimit: GiB, anonRss: null, detail: null, containerName: null, composeProject: null, composeService: null,
+  };
+  const vmWide: OomEvent = { ...ownLimit, constraint: 'CONSTRAINT_NONE', containerId: null };
+  const counted = (n: number) => ({ oom_kills: s({ min: 0, max: n }) });
+
+  it('grows after a stall from memory, as after the whole VM running out, whatever the peak', () => {
+    const h = memoryHint(inst(), { mem_used: s({ max: 2 * GiB }) }, [], [fromMemory]);
+    expect(h.verdict).toBe('grow');
+    expect(h.reason).toBe('The VM ran out of memory and stalled once in this window.');
+    expect(h.suggest).toBe(12 * GiB);
+  });
+  it('counts stalls and kills of the whole VM together', () => {
+    const h = memoryHint(inst(), { mem_used: s({ max: 2 * GiB }), ...counted(1) }, [vmWide], [fromMemory, fromMemory]);
+    expect(h.reason).toBe('The VM ran out of memory 3 times in this window: it killed a process once and stalled 2 times.');
+  });
+  it('says what else there was, beside a stall', () => {
+    const h = memoryHint(inst(), { mem_used: s({ max: 2 * GiB }), ...counted(2) }, [ownLimit], [fromMemory]);
+    expect(h.verdict).toBe('grow');
+    expect(h.reason).toBe('The VM ran out of memory and stalled once in this window. 1 OOM kill was a container hitting its own memory limit. 1 kill has no detail.');
+  });
+  it("doesn't let a stall of unknown cause decide", () => {
+    const h = memoryHint(inst(), { mem_used: s({ max: 1 * GiB }) }, [], [unknown]);
+    expect(h.verdict).toBe('shrink');
+    const kills = memoryHint(inst(), { mem_used: s({ max: 5 * GiB }), ...counted(1) }, [ownLimit], [unknown]);
+    expect(kills.verdict).toBe('ok');
+    expect(kills.reason).toContain("— raise those, not the VM's");
   });
 });
 

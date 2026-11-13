@@ -92,17 +92,21 @@ for (const dark of [false, true]) {
     // The kill was three hours ago: widen the range to see it and what it did to the verdicts.
     await page.getByRole('button', { name: '6 h' }).click();
     await page.getByText('hit its own 1 GiB limit').waitFor();
-    assert.equal(await page.getByRole('heading', { level: 1 }).innerText(), 'harbor needs more CPU.');
-    assert.match(await page.locator('figure', { hasText: 'Memory' }).first().innerText(), /raise those, not the VM's/);
+    // Two hours ago it also stalled, with memory nearly full and nothing killed: that, not the
+    // container's own limit, is why it needs more memory.
+    assert.equal(await page.getByRole('heading', { level: 1 }).innerText(), 'harbor needs more memory and CPU.');
+    assert.match(
+      await page.locator('figure', { hasText: 'Memory' }).first().innerText(),
+      /The VM ran out of memory and stalled once in this window\. 1 OOM kill was a container hitting its own memory limit\./,
+    );
     const oom = await page.locator('#oom').innerText();
     assert.match(oom, /hit its own 1 GiB limit/);
-    // Two hours ago it also stalled, with memory nearly full and nothing killed.
     assert.match(oom, /^Out of memory\n/);
-    assert.match(oom, /1 kill and 1 stall in this range/);
+    assert.match(oom, /1 kill and 1 stall in this range, newest first · 1 kill hit a container's own limit · 1 stall because the whole VM ran out of memory\n/);
     assert.match(oom, /VM stalled/);
     assert.match(oom, /The VM ran out of memory and stalled instead of killing anything \(7\.4 GiB of 7\.8 GiB in use, memory pressure up to 25\.0 %\)/);
-    assert.match(oom, /It stayed stuck for 17 min, until the VM was stopped\./);
-    assert.match(oom, /harbor-devbox\s+largest, 2\.4 GiB/);
+    assert.match(oom, /It answered again after 17 min\./);
+    assert.match(oom, /harbor-devbox\s+largest, 5\.9 GiB/);
     await page.locator('.u-over').first().waitFor();
     await shoot(page, `vm${suffix}`);
     assert.deepEqual(errors, []);
@@ -180,6 +184,7 @@ test('A VM that has stopped responding says so on the overview and on its page',
   await ember.waitFor();
   await ember.getByRole('link', { name: 'stalled' }).click();
   await page.getByText("ember hasn't answered for 4 min, though Lima still says it's running.").waitFor();
+  assert.equal(await page.getByRole('heading', { level: 1 }).innerText(), "ember isn't answering.");
   const oom = await page.locator('#oom').innerText();
   assert.match(oom, /VM stalled/);
   assert.match(oom, /It has not answered for 4 min so far\./);

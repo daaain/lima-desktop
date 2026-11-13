@@ -16,7 +16,7 @@ The pictures in this guide and the README are drawn from invented data by the UI
 ## Words
 
 - **A page's headline is a sentence with a full stop**, worst news first: "Two VMs are past three
-  quarters of their memory or disk.", "harbor needs more CPU.", "17 of 19 containers are running."
+  quarters of their memory or disk.", "harbor needs more memory and CPU.", "17 of 19 containers are running."
   When nothing is wrong it says so ("Every running VM has room to spare."). The sentences live in
   `src/lib/almanac.ts`, each with its tests; a sentence is never assembled in a component.
 - **How full something is, is said in quarters**: less than a quarter, more than a quarter, more
@@ -25,7 +25,10 @@ The pictures in this guide and the README are drawn from invented data by the UI
 - **Past three quarters is the one threshold** (`WARN_PCT`). The sentence, the figure, the bar and
   the history all turn at the same point, so they never disagree. Right-sizing's verdicts
   (`rightsize.ts`) are stricter and separate: they look at a window of history, and say "needs
-  more" only on evidence (an OOM kill of the whole VM, stalls, a peak over 90 %).
+  more" only on evidence (the whole VM running out, whether the kernel killed something or the VM
+  stalled with memory past 90 % or under pressure; sustained full memory pressure; a peak over
+  90 %). A container hitting its own limit, or a stall of unknown cause, never says the VM needs
+  more.
 - **Counts up to twelve are spelled at the start of a sentence** ("Five are running"), digits
   elsewhere. Names are never abbreviated; a long one is cut with an ellipsis and whole in its
   tooltip.
@@ -122,8 +125,10 @@ under the sentence, figures and bar it explains, with the allocation as a dashed
   is anything to list: OOM kills, and stalls, where the VM stopped responding without the kernel
   killing anything. A stall is put down to memory only when the last reading had memory past 90 %
   or work waiting on it over 10 % of the time; otherwise its cause is said to be unknown. Stalls are
-  shaded on the Memory chart from start to end. A stall still going on is said under the headline,
-  and as a "stalled" badge on the overview. Then its containers as lines.
+  shaded on the Memory chart from start to end. The note over the list counts kills and stalls by
+  what ran out, the whole VM once for both. A stall still going on is the headline ("ember isn't
+  answering."), is said under it, and is a "stalled" badge on the overview. Then its containers as
+  lines.
 - **Containers**: the headline and a dot per container; filters; then the column heads (the
   overview's serif ones, `.column-heads`, as on a VM's page, Images and Volumes) and a group per VM ("atlas runs
   twelve, all in atlas, and one has exited."), each container a line with memory and CPU drawn.

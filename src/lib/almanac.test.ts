@@ -144,6 +144,12 @@ describe('vmHeadline', () => {
     expect(vmHeadline(running('a', 1), ok)).toBe('a fits its allocation.');
     expect(vmHeadline(running('a', 1), [])).toBe('a is running.');
   });
+  it('says first that a running VM has stopped answering, whatever else it needs', () => {
+    const stalled = { ...running('a', 7), stalledSince: 1_000 };
+    expect(vmHeadline(stalled, [hint('memory', 'grow')])).toBe("a isn't answering.");
+    expect(vmHeadline(stalled, [])).toBe("a isn't answering.");
+    expect(vmHeadline({ ...running('a', 1), stalledSince: null }, ok)).toBe('a fits its allocation.');
+  });
 });
 
 describe('containersSentence', () => {

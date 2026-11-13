@@ -1,7 +1,7 @@
 // A stand-in for the Rust backend, loaded into the page before the app: it answers the commands
 // in src/lib/api.ts with an invented fleet. Nothing here is recorded from a real machine. The fleet is
 // made to exercise the UI: a VM past three quarters of its memory (a leak), a CPU-bound one with
-// an OOM kill and a stall, one with a nearly full disk and a managed-by marker, one whose podman is
+// an OOM kill and a stall from memory, one with a nearly full disk and a managed-by marker, one whose podman is
 // too old and that has stopped responding, an idle one, and stopped and broken ones; image stores with superseded tags, dangling images and
 // an image with two tags, and volumes some no container uses (anonymous ones among them). Every value is a function of the entity and the time,
 // so two runs at the same (fixed) time draw the same picture.
@@ -41,11 +41,25 @@
     },
     // Grows steadily across the last week: a disk filling.
     filling: (from, to, now) => (t) => from + (to - from) * Math.max(0, 1 - (now - t) / (7 * 24 * HOUR)),
+    // `base`, but between `from` and `to` climbing ever faster to `peak`: memory running out.
+    climb: (base, from, to, peak) => (t, id) => {
+      const level = base(t, id);
+      if (t < from || t > to) return level;
+      return level + (peak - level) * ((t - from) / (to - from)) ** 2;
+    },
   };
+
+  // harbor ran out of memory two hours ago: its devbox grew for 45 minutes until the VM stopped
+  // answering, and nothing was measured until it answered again 17 minutes later, the devbox
+  // back to its usual size. No process was killed, so its OOM counters and uptimes carry on.
+  const HARBOR_STALL = NOW - 2 * HOUR;
+  const HARBOR_CLIMB = HARBOR_STALL - 45 * 60_000;
+  const HARBOR_SILENT = [HARBOR_STALL, HARBOR_STALL + 17 * 60_000];
 
   const START = NOW - 5 * 24 * HOUR; // how far back the invented history goes
   let nextEntity = 1;
   const metricsOf = new Map(); // entity → { metric: (t) => value }
+  const silentOf = new Map(); // entity → [from, to]: when nothing was measured
 
   const marker = (o = {}) => ({ state: 'none', locked: [], ...o });
   const instance = (name, status, cpus, memGiB, diskGiB, o = {}) => ({
@@ -54,11 +68,16 @@
     marker: marker(), ...o,
   });
 
-  function entity(metrics) {
+  function entity(metrics, silent) {
     const id = nextEntity++;
     metricsOf.set(id, Object.fromEntries(Object.entries(metrics).map(([k, f]) => [k, typeof f === 'function' ? (t) => f(t, id) : () => f])));
+    if (silent) silentOf.set(id, silent);
     return id;
   }
+  const isSilent = (id, t) => {
+    const s = silentOf.get(id);
+    return !!s && t > s[0] && t < s[1];
+  };
   const latest = (id, t) => Object.fromEntries(Object.entries(metricsOf.get(id)).map(([k, f]) => [k, Math.round(f(t))]));
   const scaled = (shape, scale) => (t, id) => Math.max(0, shape(t, id)) * scale;
 
@@ -86,6 +105,7 @@
             net_tx_bps: scaled(shapes.bursty(0.02, 1, 0.2), (o.net ?? 4000) * 0.7),
           }
         : {},
+      o.silent,
     );
     return {
       id: (n.toString(16).padStart(4, '0') + 'c0ffee').repeat(7).slice(0, 64), name, image, imageId: hexOf(image),
@@ -117,7 +137,7 @@
       host_rss: scaled(shape.hostRss ?? shape.mem, mem * 0.9),
       host_cpu_mc: scaled(shape.cpu, inst.cpus * 1100),
       host_disk_alloc: scaled(shape.disk, inst.disk * 1.05),
-    });
+    }, o.silent);
     return {
       instance: inst, entity: id, latest: {}, containers, probeError: o.probeError, podmanError: o.podmanError, oomDetailError: null,
       stalledSince: o.stalledSince ?? null,
@@ -147,13 +167,26 @@
     ),
     vm(
       instance('harbor', 'Running', 4, 8, 60),
-      { cpu: shapes.bursty(0.25, 0.97, 0.45), mem: shapes.daily(0.42, 0.62), disk: shapes.flat(0.44, 0), psiCpu: shapes.bursty(0.05, 0.6, 0.4), psiMem: shapes.bursty(0, 0.08, 0.05) },
+      {
+        cpu: shapes.bursty(0.25, 0.97, 0.45),
+        // To the stall's last reading: 7.4 GiB of 7.75 GiB, memory pressure 25 %, all of it 4 %.
+        mem: shapes.climb(shapes.daily(0.42, 0.62), HARBOR_CLIMB, HARBOR_STALL, 0.955),
+        disk: shapes.flat(0.44, 0),
+        psiCpu: shapes.bursty(0.05, 0.6, 0.4),
+        psiMem: shapes.climb(shapes.bursty(0, 0.08, 0.05), HARBOR_CLIMB, HARBOR_STALL, 0.25),
+        psiMemFull: shapes.climb(shapes.flat(0, 0), HARBOR_CLIMB, HARBOR_STALL, 0.04),
+      },
       [
-        container('harbor-devbox', local('harbor-devbox'), { memMiB: 2500, cpu: shapes.bursty(0.4, 2.6, 0.45), upHours: 38 }),
-        service('harbor', 'app', 'docker.io/library/node:24-trixie-slim', { memMiB: 900, limitMiB: 1024, peak: 1.13, oomKills: 1, cpu: shapes.bursty(0.2, 1.1, 0.4), upHours: 3 }),
-        service('harbor', 'cache', 'docker.io/library/valkey:8', { memMiB: 64 }),
+        container('harbor-devbox', local('harbor-devbox'), {
+          memMiB: 2500, mem: shapes.climb(shapes.flat(1, 0.06), HARBOR_CLIMB, HARBOR_STALL, 2.4), peak: 2.4,
+          cpu: shapes.bursty(0.4, 2.6, 0.45), upHours: 38, silent: HARBOR_SILENT,
+        }),
+        service('harbor', 'app', 'docker.io/library/node:24-trixie-slim', {
+          memMiB: 900, limitMiB: 1024, peak: 1.13, oomKills: 1, cpu: shapes.bursty(0.2, 1.1, 0.4), upHours: 3, silent: HARBOR_SILENT,
+        }),
+        service('harbor', 'cache', 'docker.io/library/valkey:8', { memMiB: 64, silent: HARBOR_SILENT }),
       ],
-      { oomKills: 1 },
+      { oomKills: 1, silent: HARBOR_SILENT },
     ),
     vm(
       instance('quill', 'Running', 4, 8, 60, {
@@ -202,7 +235,8 @@
     return { ...settings };
   }
 
-  // Each point's band: `per` sub-samples spread across the point's span.
+  // Each point's band: five sub-samples spread across the point's span, leaving out those taken
+  // while the entity was silent; a point with none left is a gap (null), as the backend gives it.
   function series({ entity: id, from, to, points = 600 }) {
     const metrics = metricsOf.get(id) ?? {};
     const lo = Math.max(from, START);
@@ -213,10 +247,11 @@
     for (const [key, f] of Object.entries(metrics)) {
       const band = { min: [], max: [], avg: [] };
       for (const t of ts) {
-        const samples = [0, 1, 2, 3, 4].map((i) => f(t - (step * i) / 5));
-        band.min.push(Math.round(Math.min(...samples)));
-        band.max.push(Math.round(Math.max(...samples)));
-        band.avg.push(Math.round(samples.reduce((a, b) => a + b, 0) / samples.length));
+        const samples = [0, 1, 2, 3, 4].map((i) => t - (step * i) / 5).filter((at) => !isSilent(id, at)).map(f);
+        const none = samples.length === 0;
+        band.min.push(none ? null : Math.round(Math.min(...samples)));
+        band.max.push(none ? null : Math.round(Math.max(...samples)));
+        band.avg.push(none ? null : Math.round(samples.reduce((a, b) => a + b, 0) / samples.length));
       }
       out[key] = band;
     }
@@ -226,11 +261,12 @@
   function summary({ entity: id, from, to }) {
     const s = series({ entity: id, from, to, points: 300 });
     const seconds = Math.floor((to - Math.max(from, START)) / 1000);
+    const known = (xs) => xs.filter((x) => x != null);
     return Object.fromEntries(
       Object.entries(s.metrics).map(([key, band]) => {
-        const sorted = [...band.avg].sort((a, b) => a - b);
+        const sorted = known(band.avg).sort((a, b) => a - b);
         return [key, {
-          min: Math.min(...band.min), max: Math.max(...band.max), avg: sorted.reduce((a, b) => a + b, 0) / sorted.length,
+          min: Math.min(...known(band.min)), max: Math.max(...known(band.max)), avg: sorted.reduce((a, b) => a + b, 0) / sorted.length,
           p95: sorted[Math.floor(sorted.length * 0.95)], samples: seconds,
         }];
       }),
@@ -244,17 +280,17 @@
     detail: null, containerName: harborApp.name, composeProject: 'harbor', composeService: 'app',
   }];
 
-  // VMs that stopped responding: harbor two hours ago, its memory nearly full, until it was
-  // stopped; ember right now.
+  // VMs that stopped responding: harbor two hours ago, its memory nearly full and its devbox the
+  // largest, until it answered again (HARBOR_STALL, above); ember right now.
   const harborDevbox = fleet[1].containers[0];
   const stall = (vm, start, o) => ({
     vm, start, end: null, endReason: null, memUsed: null, memTotal: null, psiMemSome: null, psiMemFull: null,
     containerId: null, containerMem: null, containerName: null, composeProject: null, composeService: null, ...o,
   });
   const stalls = [
-    stall('harbor', NOW - 2 * HOUR, {
-      end: NOW - 2 * HOUR + 17 * 60_000, endReason: 'stopped', memUsed: 7.4 * GiB, memTotal: 7.75 * GiB, psiMemSome: 250, psiMemFull: 40,
-      containerId: harborDevbox.id, containerMem: 2500 * MiB, containerName: harborDevbox.name,
+    stall('harbor', HARBOR_SILENT[0], {
+      end: HARBOR_SILENT[1], endReason: 'resumed', memUsed: 7.4 * GiB, memTotal: 7.75 * GiB, psiMemSome: 250, psiMemFull: 40,
+      containerId: harborDevbox.id, containerMem: 2.4 * 2500 * MiB, containerName: harborDevbox.name,
     }),
     stall('ember', fleet[4].stalledSince, { memUsed: 3.7 * GiB, memTotal: 3.75 * GiB, psiMemSome: 310, psiMemFull: 120 }),
   ];
