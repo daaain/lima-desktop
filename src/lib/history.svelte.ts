@@ -4,12 +4,16 @@
 // last answer.
 import { api, type Series } from './api';
 import { fullWindow } from './almanac';
+import { inOrder } from './inOrder';
 import { range } from './range.svelte';
 import { historyRefreshMs, rangeMs, SKETCH_POINTS, type RangeKey } from './ranges';
 
 export class History {
   #series = $state<Record<number, { over: RangeKey; series: Series }>>({});
   #asked = new Map<number, { over: RangeKey; at: number }>();
+  // Each entity's requests, so an older answer (another range's, or this one's asked before) landing
+  // after a newer one is dropped.
+  #inOrder = new Map<number, ReturnType<typeof inOrder>>();
 
   /** An entity's history over the range chosen now; nothing while only another range's is here. */
   get(entity: number | undefined): Series | undefined {
@@ -35,11 +39,11 @@ export class History {
         const asked = e == null ? undefined : this.#asked.get(e);
         if (e == null || (asked?.over === over && now - asked.at < every / 2)) continue;
         this.#asked.set(e, { over, at: now });
-        api.series(e, from, now, SKETCH_POINTS).then(
-          (s) => {
-            // A range chosen while this was on its way has asked for its own.
-            if (this.#asked.get(e)?.over === over) this.#series[e] = { over, series: fullWindow(s, from, now, SKETCH_POINTS) };
-          },
+        let order = this.#inOrder.get(e);
+        if (!order) this.#inOrder.set(e, (order = inOrder()));
+        order(api.series(e, from, now, SKETCH_POINTS)).then(
+          // Another range's answer is kept, but not given out as this one's (`get`).
+          (s) => (this.#series[e] = { over, series: fullWindow(s, from, now, SKETCH_POINTS) }),
           () => {},
         );
       }

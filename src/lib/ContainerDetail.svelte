@@ -4,6 +4,7 @@
   import { bytes, cpuLabel } from './format';
   import { logLines, logTime, type LogLine } from './logs';
   import { band, ownLimit, selfMemory } from './almanac';
+  import { inOrder } from './inOrder';
   import type { RangeKey } from './ranges';
   import Bar from './Bar.svelte';
   import Chart from './Chart.svelte';
@@ -32,10 +33,12 @@
 
   // `c` is a new object every second; fetch again only when the entity or the range changes.
   const entity = $derived(c.entity);
+  // An earlier range's answer landing after a later one's would put its charts back under the later name.
+  const seriesInOrder = inOrder();
   $effect(() => {
     if (tab !== 'metrics' || entity == null) return;
     const asked = over;
-    api.series(entity, from, to).then((s) => ((series = s), (fetchedOver = asked)), (e) => (error = String(e)));
+    seriesInOrder(api.series(entity, from, to)).then((s) => ((series = s), (fetchedOver = asked)), (e) => (error = String(e)));
   });
   // Likewise its id and VM (a row of the live list, also new every second): the log is fetched when
   // the tab opens, not every second, which would also scroll it back down under the reader.
