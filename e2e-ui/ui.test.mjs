@@ -738,3 +738,28 @@ test("An open container's kill markers are only the range's own", async () => {
   assert.deepEqual(errors, []);
   await close();
 });
+
+test("A VM's charts show the range chosen last, however late an earlier range's answer lands", async () => {
+  const { page, errors, close } = await open('/vm/harbor', { height: 1400, init: () => localStorage.setItem('range', '24h') });
+  const memory = page.locator('figure', { hasText: 'Memory' }).first().locator('.chart');
+  const DAY = 24 * 3_600_000;
+  const span = async () => Number(await memory.getAttribute('data-span'));
+  await page.waitForFunction((el) => Number(el.dataset.span) > 20 * 3_600_000, await memory.elementHandle());
+  // A week's answer comes late, and spans the week (the invented history is shorter); choosing a
+  // week, then a day again, has it land after the day's.
+  await page.evaluate(() => {
+    window.__fakeSeries = ({ from, to }, answer) => {
+      if (to - from <= 2 * 24 * 3_600_000) return answer;
+      const step = (to - from) / Math.max(1, answer.ts.length - 1);
+      const week = { ...answer, ts: answer.ts.map((_, i) => Math.round(from + i * step)) };
+      return new Promise((resolve) => setTimeout(() => resolve(week), 1500));
+    };
+  });
+  const ranges = page.getByRole('group', { name: 'Time range' });
+  await ranges.getByRole('button', { name: '7 days' }).click();
+  await ranges.getByRole('button', { name: '24 h' }).click();
+  await page.waitForTimeout(2500);
+  assert.ok((await span()) < 2 * DAY, `the memory chart spans ${((await span()) / DAY).toFixed(1)} days under 24 h`);
+  assert.deepEqual(errors, []);
+  await close();
+});

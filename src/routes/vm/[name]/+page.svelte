@@ -40,10 +40,19 @@
   // Each running container's range, and the VM's: a line draws its memory as its part of the VM's.
   history.follow(() => [vm?.entity, ...(vm?.containers ?? []).filter((c) => c.state === 'running').map((c) => c.entity)]);
 
+  // Derived on its own: `vm` is a new object at every snapshot, and the series would otherwise be
+  // fetched again every second whatever the range.
+  const entity = $derived(vm?.entity);
+  // A live range's refreshes overlap: inOrder() keeps a late one from replacing a newer one. And an
+  // answer for a range (or VM) no longer on screen is dropped, or a week's charts could land
+  // after, and stay under, the day chosen since.
+  const seriesInOrder = inOrder();
   $effect(() => {
-    const entity = vm?.entity;
     if (entity == null) return;
-    api.series(entity, from, to).then((s) => (series = s));
+    const asked = { vm: name, over: range.key };
+    seriesInOrder(api.series(entity, from, to)).then((s) => {
+      if (asked.vm === name && asked.over === range.key) series = s;
+    });
   });
 
   // OOM kills and stalls in the range; when there are none, when the latest was (to offer a range

@@ -219,8 +219,9 @@
   onDestroy(() => plot?.destroy());
 </script>
 
-<!-- How many moments are marked: drawn on the canvas, so said here too for anything reading the page. -->
-<section class="chart" data-markers={markers.length}>
+<!-- How many moments are marked, and how long the data spans: drawn on the canvas, so said here
+     too for anything reading the page. -->
+<section class="chart" data-markers={markers.length} data-span={data?.ts.length ? data.ts[data.ts.length - 1] - data.ts[0] : 0}>
   {#if title}<h3>{title}{#if data?.sampleSecs}<span class="res">{intervalPhrase(data.sampleSecs)}</span>{/if}</h3>{/if}
   <div bind:this={host} bind:clientWidth={width}></div>
   {#if data && data.ts.length === 0}<p class="empty">No samples in this range.</p>{/if}

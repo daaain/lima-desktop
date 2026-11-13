@@ -453,7 +453,9 @@
     snapshot,
     settings: () => ({ ...settings }),
     set_settings: (args) => later(setSettings(args)),
-    series,
+    // A test can set __fakeSeries to stand between the app and an answer: to change it, or have it
+    // land late (a promise), so answers arrive out of order.
+    series: (args) => (window.__fakeSeries ? window.__fakeSeries(args, series(args)) : series(args)),
     summary,
     oom_events: ({ vm, from, to, limit = 500 }) => {
       // A test can set this before the app loads to have the lookup of a VM's latest kill (the one
