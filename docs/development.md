@@ -100,8 +100,8 @@ machine, so it needs no anonymising. For real data in the real app, replay a sna
 ## Does the UI hold on to memory? `just ui-leak`
 
 The app's window keeps polling the backend once a second, and WebKit (Tauri's engine on macOS and
-Linux) has kept memory from every poll that Chromium gives back: left open, the window grew
-by about 13 MB a minute. `e2e-ui/leak.mjs` reproduces this in minutes rather than hours. It loads
+Linux) kept memory from every poll that Chromium gives back: left open, the window grew by about
+13 MB a minute until the bars' transition was fixed (below). `e2e-ui/leak.mjs` reproduces this in minutes rather than hours. It loads
 the built UI with the fake backend into headless WebKit, runs the page's clock forward a second
 at a time (one poll per tick), and pauses for a frame after each tick so the result gets laid out
 and painted. Every so often it weighs the page's process (its footprint on macOS, the same figure
@@ -113,14 +113,21 @@ levels off, such as caches filling or code compiling, doesn't count against it.
     just ui-leak /containers       # another page
     node e2e-ui/leak.mjs --frozen  # the same pauses without ticks: the engine's own drift
     node e2e-ui/leak.mjs --browser chromium
-    node e2e-ui/leak.mjs --max-growth 25 --csv leak.csv   # exit 1 above 25 MB per 1000 ticks
+    node e2e-ui/leak.mjs --max-growth 10 --csv leak.csv   # exit 1 above 10 MB per 1000 ticks
 
-What it showed when it was written (WebKit 2359 on macOS, MB per 1000 ticks): the overview grew
-183–232 across three runs, `/containers` about 1650, `/images` and `/volumes` about 115, and the
-VM page 120–150. With the clock frozen it was flat (−3), and Chromium levelled off (−17). Every
-page leaks the same 110 or so, so that part is shared (layout or masthead); `/containers` adds far
-more of its own. A fix should bring a page close to the frozen run; `--max-growth` turns that into
-a pass or fail. A rare "Page crashed" from WebKit is the browser itself; run it again.
+What it found (WebKit 2359 on macOS, MB per 1000 ticks): the overview grew 183–232 across three
+runs, `/containers` about 1650, `/images` and `/volumes` about 115, and the VM page 120–150. With the
+clock frozen it was flat (−3), and Chromium levelled off (−17). Taking things out one at a time put
+all of it on one line of CSS. `Bar.svelte` transitioned the fill's width, `max(2px, n%)`, and WebKit
+keeps something from every transition it runs between two `max()` values, even ones that finish. The
+fill is now a plain `n%`, with the 2px floor as a `min-width`, and every page levels off: 0–3 MB
+per 1000 ticks after about 150 MB of caches filling. `just ui-leak` fails above 25. So a bar's width
+shouldn't be a `max()`, `min()` or `clamp()` while it transitions.
+
+A tick's frame (40 ms) is shorter than the bars' 0.4 s transition, so the rig cuts each one short,
+which the app never does since its polls are at least a second apart. With `--frame-ms 500` the
+transitions finish, and a run is ten times slower. A rare "Page crashed" from WebKit is the browser
+itself; run it again.
 
 ## Releasing
 

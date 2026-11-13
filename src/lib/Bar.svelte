@@ -13,7 +13,7 @@
 
 <div class="bar" class:hot={hot ?? (!plain && isHot(pct))} class:quiet role={label ? 'img' : undefined} aria-label={label} title={label}>
   {#if behind != null}<span class="behind" style:width={`${clamp(behind)}%`}></span>{/if}
-  <span class="fill" style:width={pct > 0 ? `max(2px, ${clamp(pct)}%)` : '0'}></span>
+  <span class="fill" class:some={pct > 0} style:width={`${clamp(pct)}%`}></span>
   <span class="notch" style:left="25%"></span><span class="notch" style:left="50%"></span><span class="notch" style:left="75%"></span>
   {#if tick != null}<span class="tick" style:left={`${clamp(tick)}%`}></span>{/if}
 </div>
@@ -21,7 +21,11 @@
 <style>
   .bar { position: relative; height: var(--bar-height, 6px); background: var(--track); }
   .fill, .behind { position: absolute; inset: 0 auto 0 0; }
+  /* The width a plain percentage and the least of it a min-width, not `max(2px, n%)`: WebKit keeps
+     every transition between two max()es it has run, about 1 MB a second on the Containers view
+     (`just ui-leak`, docs/development.md). */
   .fill { background: var(--bar); transition: width 0.4s; }
+  .fill.some { min-width: 2px; }
   .behind { background: var(--soft); }
   .hot .fill { background: var(--warn); }
   .quiet .fill { background: var(--soft); }
