@@ -373,12 +373,16 @@ test("An image's layers open under its line, config steps folded away, each laye
   const detail = page.locator('section.detail').first();
   await detail.locator('ol.steps li').first().waitFor();
   assert.equal(await line.getAttribute('aria-expanded'), 'true');
-  // Four layers; the three config steps only when asked for, their wrapper taken off.
-  assert.equal(await detail.locator('ol.steps li').count(), 4);
-  assert.match(await detail.locator('ol.steps li').first().innerText(), /COPY \. \/app/);
+  // Four layers in Dockerfile order, the base first; the three config steps only when asked for,
+  // their wrapper taken off.
+  const steps = detail.locator('ol.steps li');
+  assert.equal(await steps.count(), 4);
+  assert.match(await steps.first().innerText(), /debian\.sh --arch arm64/);
+  assert.match(await steps.last().innerText(), /COPY \. \/app/);
   await detail.getByRole('button', { name: 'Show 3 config steps' }).click();
-  assert.equal(await detail.locator('ol.steps li').count(), 7);
-  assert.match(await detail.locator('ol.steps li').first().innerText(), /^config\s+CMD \["node", "server\.js"\]/);
+  assert.equal(await steps.count(), 7);
+  assert.match(await steps.first().innerText(), /debian\.sh --arch arm64/);
+  assert.match(await steps.last().innerText(), /^config\s+CMD \["node", "server\.js"\]/);
   // A layer opens what it added, under its step; a deletion is said as one.
   await detail.locator('.step', { hasText: 'npm ci' }).click();
   const files = detail.locator('.files section.detail');

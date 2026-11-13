@@ -202,8 +202,8 @@ under the sentence, figures and bar it explains, with the allocation as a dashed
   Its tooltip says what goes with it and names a few of the listed images that keep the rest. One
   measurement serves both pages, and a VM's is taken again after
   something is removed from it. Both lists are fetched from the start and kept, so neither page
-  opens blank. A line opens a detail under it, as a container's does: an image's layers (the
-  config-only steps folded away; a layer opens what it added, what it deletes struck through), or a volume's files, a folder at a time, with the start of a file
+  opens blank. A line opens a detail under it, as a container's does: an image's layers (in Dockerfile order, the
+  base first; the config-only steps folded away; a layer opens what it added, what it deletes struck through), or a volume's files, a folder at a time, with the start of a file
   (read-only, over Lima's ssh). Details unfold and fold back, without motion when the system asks
   for less of it.
 
