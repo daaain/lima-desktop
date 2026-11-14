@@ -1,6 +1,7 @@
 pub mod collector;
 pub mod commands;
 pub mod guest_files;
+pub mod host_proc;
 pub mod journal;
 pub mod lima;
 pub mod marker;

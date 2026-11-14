@@ -146,7 +146,7 @@
             {:else}
               <a href={`/containers?vm=${encodeURIComponent(i.name)}`}>{ctRunning} of {vm.containers.length} running</a>
             {/if}
-            <p class="label" title="What the VM costs this computer right now: the hypervisor's resident memory">{bytes(l.host_rss)} RAM on your computer</p>
+            <p class="label" title="What the VM costs this computer right now: the memory its virtual machine process holds, as Activity Monitor counts it">{bytes(l.host_rss)} RAM on your computer</p>
           </div>
         </article>
       {/each}

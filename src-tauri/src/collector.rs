@@ -423,6 +423,8 @@ impl Collector {
 
     async fn probe_loop(self: Arc<Self>, name: String) {
         let mut sys = sysinfo::System::new().ok();
+        // Found once, from the instance's files it holds open; looked for again only if it goes.
+        let mut vm_proc = self.instance(&name).map(|i| crate::host_proc::VmProcess::new(i.dir));
         let mut interval = self.interval.subscribe();
         // The last block before a restart for a new interval, so the first block after it still
         // has a rate. (After a failure there's none: the VM may have rebooted.)
@@ -462,7 +464,8 @@ impl Collector {
             let n = name.clone();
             let reading = probe::read_blocks(stdout, |block| {
                 let mut row = probe::vm_row(prev.as_ref(), &block, inst.cpus);
-                host_columns(&mut row, &inst, sys.as_mut());
+                let vm_pid = vm_proc.as_mut().and_then(|p| p.pid(Instant::now()));
+                host_columns(&mut row, &inst, sys.as_mut(), vm_pid);
                 let ts = now_ms();
                 if let Some(id) = entity {
                     me.store().ingest(id, ts, row.clone());
@@ -749,10 +752,11 @@ fn counter_events(vm: &str, pending: Vec<PendingKill>, reason: &str) -> Vec<OomE
         .collect()
 }
 
-/// Host-side columns for a VM row: the hypervisor's RSS and CPU (Lima's driver process — on vz
-/// the VM runs inside the host agent, so its pid is the driver's too) and the disk image's real,
-/// allocated size (a sparse file's blocks, not its virtual length).
-fn host_columns(row: &mut [i64], inst: &Instance, sys: Option<&mut sysinfo::System>) {
+/// Host-side columns for a VM row: what it costs this computer in memory and CPU — the process the
+/// guest runs in (`host_proc`), plus Lima's host agent and driver — and the disk image's real,
+/// allocated size (a sparse file's blocks, not its virtual length). Memory is each process's
+/// physical footprint where the OS keeps one, else its resident memory.
+fn host_columns(row: &mut [i64], inst: &Instance, sys: Option<&mut sysinfo::System>, vm_pid: Option<u32>) {
     let col = |name: &str| {
         VM_METRICS
             .iter()
@@ -762,9 +766,11 @@ fn host_columns(row: &mut [i64], inst: &Instance, sys: Option<&mut sysinfo::Syst
     if let Some(sys) = sys {
         let mut pids: Vec<sysinfo::Pid> = [inst.driver_pid, inst.host_agent_pid]
             .into_iter()
+            .chain(vm_pid)
             .filter(|&p| p > 0)
             .map(sysinfo::Pid::from_u32)
             .collect();
+        pids.sort();
         pids.dedup();
         if !pids.is_empty() {
             sys.refresh_processes_specifics(
@@ -777,7 +783,7 @@ fn host_columns(row: &mut [i64], inst: &Instance, sys: Option<&mut sysinfo::Syst
             let (mut rss, mut cpu, mut seen) = (0u64, 0f32, false);
             for pid in &pids {
                 if let Some(p) = sys.process(*pid) {
-                    rss += p.memory();
+                    rss += crate::host_proc::footprint(pid.as_u32()).unwrap_or_else(|| p.memory());
                     cpu += p.cpu_usage();
                     seen = true;
                 }
