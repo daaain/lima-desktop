@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_RANGE, RANGES, followsLive, historyRefreshMs, inRange, parseRange, rangeReaching, theLast } from './ranges';
+import {
+  DEFAULT_RANGE, RANGES, SHORT_RANGES, followsLive, historyRefreshMs, inRange, parseRange, rangeLabel, rangeMs, rangeReaching, theLast,
+} from './ranges';
 
 const HOUR = 3_600_000;
 
@@ -52,5 +54,22 @@ describe('historyRefreshMs', () => {
     expect(historyRefreshMs('6h')).toBe(6 * HOUR / 100);
     expect(historyRefreshMs('24h')).toBe(24 * HOUR / 100);
     expect(historyRefreshMs('30d')).toBe(30 * 24 * HOUR / 100);
+  });
+});
+
+describe('the shorter range only the popover offers', () => {
+  it('is said like the others', () => {
+    expect(theLast('2m')).toBe('the last 2 min');
+    expect(inRange('2m')).toBe('in 2 min');
+    expect(rangeLabel('2m')).toBe('2 min');
+    expect(rangeLabel('7d')).toBe('7 days');
+    expect(rangeMs('2m')).toBe(120_000);
+    expect(followsLive('2m')).toBe(true);
+  });
+  it("isn't one of the app's ranges", () => {
+    expect(RANGES.map((r) => r.key)).not.toContain('2m');
+    expect(SHORT_RANGES.map((r) => r.key)).toEqual(['2m']);
+    expect(parseRange('2m')).toBe('24h');
+    expect(rangeReaching(60_000)).toBe('15m');
   });
 });

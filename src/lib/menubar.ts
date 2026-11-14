@@ -3,8 +3,10 @@
 // draws are here, so a component only places them (docs/design/ui.md).
 import type { Snapshot, Stack, StackMetric } from './api';
 import { isHot } from './almanac';
-import { bytes } from './format';
-import { inRange, RANGES, type RangeKey } from './ranges';
+import { bytes, decimalBytes } from './format';
+import { inRange, rangeLabel, rangeMs, theLast, type AnyRangeKey } from './ranges';
+
+export { rangeLabel };
 
 export type Tab = StackMetric;
 export const TABS: readonly { key: Tab; label: string }[] = [
@@ -15,39 +17,51 @@ export const TABS: readonly { key: Tab; label: string }[] = [
 /** The tab asked for (`?tab=`), Memory if it isn't one. */
 export const parseTab = (s: string | null | undefined): Tab => TABS.find((t) => t.key === s)?.key ?? 'mem';
 
-/** The ranges each tab offers: memory and CPU move by the minute, a disk over days. */
-export const TAB_RANGES: Record<Tab, readonly RangeKey[]> = {
-  mem: ['15m', '1h', '6h', '24h'],
-  cpu: ['15m', '1h', '6h', '24h'],
-  disk: ['24h', '7d', '30d'],
+/**
+ * The ranges each tab offers: memory and CPU move by the second (2 min, to watch them change) and the
+ * minute, a disk over days, and over an hour for one filling fast.
+ */
+export const TAB_RANGES: Record<Tab, readonly AnyRangeKey[]> = {
+  mem: ['2m', '15m', '1h', '6h', '24h'],
+  cpu: ['2m', '15m', '1h', '6h', '24h'],
+  disk: ['1h', '24h', '7d', '30d'],
 };
-const DEFAULT_RANGE: Record<Tab, RangeKey> = { mem: '1h', cpu: '1h', disk: '7d' };
+const DEFAULT_RANGE: Record<Tab, AnyRangeKey> = { mem: '1h', cpu: '1h', disk: '7d' };
 /** The range kept last time for `tab`, if it offers it; else its default. */
-export const parseTabRange = (tab: Tab, saved: string | null | undefined): RangeKey =>
+export const parseTabRange = (tab: Tab, saved: string | null | undefined): AnyRangeKey =>
   TAB_RANGES[tab].find((k) => k === saved) ?? DEFAULT_RANGE[tab];
-/** A range's button: "1 h", "7 days". */
-export const rangeLabel = (k: RangeKey) => RANGES.find((r) => r.key === k)!.label;
 /** Under the chart's left end: "1 h ago". */
-export const agoLabel = (k: RangeKey) => `${rangeLabel(k)} ago`;
+export const agoLabel = (k: AnyRangeKey) => `${rangeLabel(k)} ago`;
 /** How many buckets the chart asks for: about one per 3 px of a 360 px popover. */
 export const STACK_POINTS = 120;
 
+/**
+ * How often the stack is fetched again while its range moves on with the clock: as each new column
+ * comes due, so 2 min moves every second and 15 min every 7.5 s, but never more often than the
+ * computer is measured, when nothing new would have come.
+ */
+export const stackRefreshMs = (k: AnyRangeKey, intervalSecs: number | undefined) =>
+  Math.max((intervalSecs ?? 1) * 1000, rangeMs(k) / STACK_POINTS);
+
 /** What a tab reads from the snapshot: the computer's use and size (`hostUse`), and each VM's own cost on it. */
-const KEYS: Record<Tab, { used: string; total: string; vm: string }> = {
-  mem: { used: 'mem_used', total: 'mem_total', vm: 'host_rss' },
+const KEYS: Record<Tab, { used: string; total: string; vm: string; wired?: string }> = {
+  mem: { used: 'mem_used', total: 'mem_total', vm: 'host_rss', wired: 'mem_wired' },
   cpu: { used: 'cpu_mc', total: 'cpu_total_mc', vm: 'host_cpu_mc' },
   disk: { used: 'disk_used', total: 'disk_total', vm: 'host_disk_alloc' },
 };
 
-/** A figure in the tab's unit: bytes as the rest of the app says them, millicores as cores to one decimal. */
+/**
+ * A figure in the tab's unit: memory in the binary units the rest of the app says, a disk in powers of
+ * 1000 as Finder says it (so the two agree on how big it is), millicores as cores to one decimal.
+ */
 export function amount(tab: Tab, v: number | null | undefined): string {
   if (v == null || !Number.isFinite(v) || v < 0) return '–';
-  return tab === 'cpu' ? `${(v / 1000).toFixed(1)} cores` : bytes(v);
+  return tab === 'cpu' ? `${(v / 1000).toFixed(1)} cores` : tab === 'disk' ? decimalBytes(v) : bytes(v);
 }
 
-/** The computer's whole: "64.0 GiB", "12 cores". */
+/** The computer's whole: "64.0 GiB", "994.7 GB", "12 cores". */
 function whole(tab: Tab, v: number): string {
-  if (tab !== 'cpu') return bytes(v);
+  if (tab !== 'cpu') return amount(tab, v);
   const n = v / 1000;
   return `${Number.isInteger(n) ? n : n.toFixed(1)} cores`;
 }
@@ -68,7 +82,12 @@ export interface Shares {
   total: number;
   /** The VMs' parts added up. */
   vms: number;
-  /** Used less the VMs, never below nothing. */
+  /**
+   * Memory only, where it's read: what the kernel, the GPU and drivers hold, which is never paged out
+   * or compressed. None of it is a VM's, so it's inside what they leave of the use, and kept there.
+   */
+  wired: number | null;
+  /** Used less the VMs and wired memory, never below nothing. */
   rest: number;
   /** Total less used, never below nothing. */
   free: number;
@@ -96,8 +115,11 @@ export function shares(snap: Snapshot | null | undefined, tab: Tab): Shares | nu
     }))
     .sort(largestFirst);
   const vms = parts.reduce((s, p) => s + (p.now ?? 0), 0);
+  const left = Math.max(0, used - vms);
+  const read = k.wired ? host?.[k.wired] : undefined;
+  const wired = read != null && read >= 0 ? Math.min(read, left) : null;
   const pct = Math.min(100, Math.max(0, (used / total) * 100));
-  return { used, total, vms, rest: Math.max(0, used - vms), free: Math.max(0, total - used), pct, hot: isHot(pct), parts };
+  return { used, total, vms, wired, rest: left - (wired ?? 0), free: Math.max(0, total - used), pct, hot: isHot(pct), parts };
 }
 
 const largestFirst = (a: { now: number | null; name: string }, b: { now: number | null; name: string }) =>
@@ -107,16 +129,28 @@ const largestFirst = (a: { now: number | null; name: string }, b: { now: number 
 export const percentFigure = (s: Shares | null) =>
   s == null ? '–' : `${s.pct > 0 && s.pct < 1 ? s.pct.toFixed(1) : Math.round(s.pct)} %`;
 
-/** Under the big figure: "of this computer's 64.0 GiB in use: the VMs 35.0 GiB, everything else 9.8 GiB". */
+/**
+ * Under the big figure, its parts in the order they're stacked: "of this computer's 64.0 GiB in use:
+ * the VMs 35.0 GiB, wired 4.0 GiB, everything else 5.8 GiB".
+ */
 export function ofSentence(tab: Tab, s: Shares | null): string {
   if (!s) return `This computer's ${tab === 'mem' ? 'memory' : tab === 'cpu' ? 'CPU' : 'disk'} hasn't been read yet.`;
-  return `of this computer's ${whole(tab, s.total)} in use: the VMs ${amount(tab, s.vms)}, everything else ${amount(tab, s.rest)}`;
+  const wired = s.wired == null ? '' : `, ${WIRED.name} ${amount(tab, s.wired)}`;
+  return `of this computer's ${whole(tab, s.total)} in use: the VMs ${amount(tab, s.vms)}${wired}, everything else ${amount(tab, s.rest)}`;
 }
 
+/** Wired memory's legend row: its name, a few words on what it is, and more when pointed at. */
+export const WIRED = {
+  name: 'wired',
+  aside: 'kernel, GPU and drivers',
+  tip: "Memory macOS keeps for the kernel, the GPU and drivers. It can't be paged out or compressed, and none of it is a VM's.",
+} as const;
+
 /** The chart's description, for a screen reader. */
-export function chartLabel(tab: Tab, over: RangeKey): string {
+export function chartLabel(tab: Tab, over: AnyRangeKey, wired = false): string {
   const what = tab === 'mem' ? 'memory' : tab === 'cpu' ? 'CPU' : 'disk';
-  return `Each VM's ${what} stacked over ${RANGES.find((r) => r.key === over)!.last}, everything else above it, up to the whole computer`;
+  const above = wired ? 'wired memory and everything else above it' : 'everything else above it';
+  return `Each VM's ${what} stacked over ${theLast(over)}, ${above}, up to the whole computer`;
 }
 
 /** The footer: "Recording every 1 s". */
@@ -187,9 +221,9 @@ export const layerFigure = (tab: Tab, l: Layer) => (l.now == null ? 'not running
 
 /**
  * A legend row's grey aside, over the range: "peak 16.6 GiB in 1 h"; for a disk, which only grows
- * between clean-ups, how much it grew ("grew 4.2 GiB in 7 days"). Empty until the history is here.
+ * between clean-ups, how much it grew ("grew 4.5 GB in 7 days"). Empty until the history is here.
  */
-export function layerAside(tab: Tab, l: Layer, over: RangeKey): string {
+export function layerAside(tab: Tab, l: Layer, over: AnyRangeKey): string {
   if (tab === 'disk') {
     if (l.constant || (!l.running && l.now != null)) return 'not running';
     const e = ends(l.values);
@@ -208,7 +242,9 @@ export function layerAside(tab: Tab, l: Layer, over: RangeKey): string {
 export interface StackChart {
   /** Each VM's band, bottom first, as `layers` ordered them; `shade` picks its colour. */
   bands: { name: string; shade: number; d: string }[];
-  /** Everything else, from the VMs' top to the computer's use. */
+  /** Memory's wired part, from the VMs' top, kept under the computer's use; null without it. */
+  wired: string | null;
+  /** Everything else, from the VMs' top (or wired memory's) to the computer's use. */
   rest: string;
   /** The line along the top of the VMs. */
   top: string;
@@ -219,8 +255,9 @@ export const SHADES = 5;
 
 /**
  * The stack as areas: each bucket where the computer's use was measured is a column (its value
- * held across its bucket, and joined straight to the next), the VMs from the bottom, then
- * everything else up to the computer's use; a bucket with no reading of the computer is a gap. A
+ * held across its bucket, and joined straight to the next), the VMs from the bottom, then wired
+ * memory if the stack has it (never past the computer's use: it's part of what the VMs leave),
+ * then everything else up to the computer's use; a bucket with no reading of the computer is a gap. A
  * VM without a reading in a measured bucket adds nothing there. The scale is the computer's total;
  * nothing is drawn past it, or past the bucket's own total.
  */
@@ -238,15 +275,19 @@ export function stackChart(
   const x = (t: number) => r(Math.min(o.width, Math.max(0, ((t - o.from) / (o.to - o.from)) * o.width)));
   const y = (v: number) => r(o.height - (Math.min(scale, Math.max(0, v)) / scale) * o.height);
 
-  // Cumulative heights per bucket: lows[k] is where layer k starts, lows[ls.length] the VMs' top.
+  // Cumulative heights per bucket: cum[i][k] is where layer k starts, cum[i][ls.length] the VMs' top.
   const cum: number[][] = [];
+  const wiredTop: number[] = [];
   const restTop: number[] = [];
   for (let i = 0; i < n; i++) {
     const cap = Math.min(scale, stack.total[i] ?? scale);
     const col = [0];
     for (const l of ls) col.push(Math.min(cap, col[col.length - 1] + Math.max(0, l.values?.[i] ?? 0)));
     cum.push(col);
-    restTop.push(Math.max(col[col.length - 1], Math.min(cap, stack.used[i] ?? 0)));
+    const vms = col[col.length - 1];
+    const top = Math.max(vms, Math.min(cap, stack.used[i] ?? 0));
+    wiredTop.push(Math.min(top, vms + Math.max(0, stack.wired?.[i] ?? 0)));
+    restTop.push(top);
   }
 
   // Runs of measured buckets.
@@ -270,7 +311,8 @@ export function stackChart(
   const k = ls.length;
   return {
     bands: ls.map((l, j) => ({ name: l.name, shade: j % SHADES, d: area((i) => cum[i][j + 1], (i) => cum[i][j]) })),
-    rest: area((i) => restTop[i], (i) => cum[i][k]),
+    wired: stack.wired ? area((i) => wiredTop[i], (i) => cum[i][k]) : null,
+    rest: area((i) => restTop[i], (i) => wiredTop[i]),
     top: runs.map(([a, b]) => `M${edge((i) => cum[i][k], a, b).join('L')}`).join(''),
   };
 }

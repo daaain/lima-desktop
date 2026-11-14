@@ -222,11 +222,12 @@
     vm(instance('relic', 'Broken', 2, 2, 20)),
   ];
 
-  // The whole computer (collector.rs HostLive): 128 GiB, 16 cores and a 994 GiB disk, as `host` says.
+  // The whole computer (collector.rs HostLive): 128 GiB, 16 cores and a 1 TB disk (994.7 GB as Finder
+  // says it, 926.4 GiB), as `host` says.
   // Its use is the VMs' own costs on it (each VM's host_* readings, a stopped VM's disk image too)
   // and everything else this computer does: a steady 19 GiB or so of memory, a few busy cores now and
   // then, and the rest of a disk past three quarters, so the disk tab warns.
-  const HOST = { cpus: 16, memory: 128 * GiB, disk: 994 * GiB };
+  const HOST = { cpus: 16, memory: 128 * GiB, disk: 994.66e9 };
   const runningFleet = () => fleet.filter((v) => v.entity);
   const vmCost = (key, t) => runningFleet().reduce((sum, v) => sum + metricsOf.get(v.entity)[key](t), 0);
   const imagesAtRest = () => fleet.filter((v) => !v.entity).reduce((sum, v) => sum + (v.latest.host_disk_alloc ?? 0), 0);
@@ -239,7 +240,8 @@
   const hostMetrics = () => ({
     mem_used: (t, id) => vmCost('host_rss', t) + rest.mem(t, id),
     mem_total: HOST.memory,
-    mem_wired: 5.2 * GiB,
+    // The kernel's, the GPU's and drivers': part of everything else, as none of it is a VM's.
+    mem_wired: (t, id) => 5.2 * GiB + (noise(id, 3, t / 60_000) - 0.5) * 0.4 * GiB,
     mem_compressed: (t, id) => 1.4 * GiB + rest.mem(t, id) * 0.05,
     cpu_mc: (t, id) => vmCost('host_cpu_mc', t) + rest.cpu(t, id),
     cpu_total_mc: HOST.cpus * 1000,
@@ -247,15 +249,16 @@
     disk_total: HOST.disk,
   });
 
-  // The menu bar's stack (commands::host_stack): the computer's use and size and each running VM's
-  // own cost, averaged over the same buckets; a stopped VM has no history.
+  // The menu bar's stack (commands::host_stack): the computer's use and size (and for memory, its
+  // wired part) and each running VM's own cost, averaged over the same buckets; a stopped VM has no
+  // history. A bucket is never narrower than the samples are apart, with a quarter to spare.
   const STACK_KEYS = { mem: ['mem_used', 'mem_total', 'host_rss'], cpu: ['cpu_mc', 'cpu_total_mc', 'host_cpu_mc'], disk: ['disk_used', 'disk_total', 'host_disk_alloc'] };
   hostEntity = entity(hostMetrics());
 
   function hostStack({ metric, from, to, points = 120 }) {
     const [usedKey, totalKey, vmKey] = STACK_KEYS[metric];
     const lo = Math.max(from, START);
-    const step = Math.max(60_000, (to - lo) / points);
+    const step = Math.max(1250 * settings.intervalSecs, (to - lo) / points);
     const ts = [];
     for (let t = lo; t + step <= to + 1; t += step) ts.push(Math.round(t));
     const samples = (f, t) => [0, 1, 2, 3, 4].map((i) => f(t + (step * i) / 5));
@@ -265,6 +268,7 @@
       ts,
       used: avg(host[usedKey]),
       total: avg(host[totalKey]),
+      ...(metric === 'mem' ? { wired: avg(host.mem_wired) } : {}),
       vms: runningFleet().map((v) => {
         const f = metricsOf.get(v.entity)[vmKey];
         return { name: v.instance.name, avg: avg(f), peak: Math.round(Math.max(...ts.flatMap((t) => samples(f, t)))) };
@@ -323,7 +327,7 @@
   function series({ entity: id, from, to, points = 600 }) {
     const metrics = metricsOf.get(id) ?? {};
     const lo = Math.max(from, START);
-    const step = Math.max(60_000, (to - lo) / points);
+    const step = Math.max(1250 * settings.intervalSecs, (to - lo) / points);
     const ts = [];
     for (let t = lo + step; t <= to; t += step) ts.push(Math.round(t));
     const out = {};

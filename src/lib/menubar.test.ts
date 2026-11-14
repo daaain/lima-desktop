@@ -2,11 +2,12 @@ import { describe, expect, it } from 'vitest';
 import type { Snapshot, Stack, VmLive } from './api';
 import {
   agoLabel, amount, chartLabel, layerAside, layerFigure, layers, ofSentence, parseTab, parseTabRange, percentFigure, recordingPhrase,
-  shares, stackChart, type Layer,
+  shares, stackChart, stackRefreshMs, TAB_RANGES, WIRED, type Layer,
 } from './menubar';
 import { vm } from './testing';
 
 const GiB = 1024 ** 3;
+const GB = 1e9;
 const running = (name: string, latest: Record<string, number>, o: Partial<VmLive> = {}): VmLive => ({ ...vm({ name }), latest, ...o });
 const stopped = (name: string, latest: Record<string, number>): VmLive => ({ ...vm({ name, status: 'Stopped' }), latest });
 const snap = (vms: VmLive[], host?: Record<string, number>): Snapshot => ({
@@ -14,13 +15,13 @@ const snap = (vms: VmLive[], host?: Record<string, number>): Snapshot => ({
 });
 
 const host = {
-  mem_used: 44.8 * GiB, mem_total: 64 * GiB, cpu_mc: 4500, cpu_total_mc: 12000, disk_used: 700 * GiB, disk_total: 926 * GiB,
+  mem_used: 44.8 * GiB, mem_total: 64 * GiB, mem_wired: 4 * GiB, cpu_mc: 4500, cpu_total_mc: 12000, disk_used: 760 * GB, disk_total: 994.7 * GB,
 };
 const fleet = snap(
   [
-    running('harbor', { host_rss: 10 * GiB, host_cpu_mc: 3000, host_disk_alloc: 30 * GiB }),
-    running('atlas', { host_rss: 25 * GiB, host_cpu_mc: 400, host_disk_alloc: 40 * GiB }, { stalledSince: 5 }),
-    stopped('foundry', { host_disk_alloc: 61 * GiB }),
+    running('harbor', { host_rss: 10 * GiB, host_cpu_mc: 3000, host_disk_alloc: 30 * GB }),
+    running('atlas', { host_rss: 25 * GiB, host_cpu_mc: 400, host_disk_alloc: 40 * GB }, { stalledSince: 5 }),
+    stopped('foundry', { host_disk_alloc: 61 * GB }),
   ],
   host,
 );
@@ -31,6 +32,14 @@ describe('tabs and ranges', () => {
     expect(parseTab('cpu')).toBe('cpu');
     expect(parseTab(null)).toBe('mem');
     expect(parseTab('swap')).toBe('mem');
+  });
+  it('offers 2 min to watch memory and CPU move, and 1 h for a disk filling fast', () => {
+    expect(TAB_RANGES.mem).toEqual(['2m', '15m', '1h', '6h', '24h']);
+    expect(TAB_RANGES.cpu).toEqual(['2m', '15m', '1h', '6h', '24h']);
+    expect(TAB_RANGES.disk).toEqual(['1h', '24h', '7d', '30d']);
+    expect(parseTabRange('cpu', '2m')).toBe('2m');
+    expect(parseTabRange('disk', '1h')).toBe('1h');
+    expect(parseTabRange('disk', '2m')).toBe('7d');
   });
   it("keeps a range per tab only if the tab offers it", () => {
     expect(parseTabRange('mem', null)).toBe('1h');
@@ -43,6 +52,15 @@ describe('tabs and ranges', () => {
   it('labels the chart’s left end', () => {
     expect(agoLabel('1h')).toBe('1 h ago');
     expect(agoLabel('7d')).toBe('7 days ago');
+    expect(agoLabel('2m')).toBe('2 min ago');
+  });
+  it('fetches the stack again as each new column comes due, but not more often than the computer is measured', () => {
+    expect(stackRefreshMs('2m', 1)).toBe(1000);
+    expect(stackRefreshMs('15m', 1)).toBe(7500);
+    expect(stackRefreshMs('1h', 1)).toBe(30_000);
+    expect(stackRefreshMs('2m', 2)).toBe(2000);
+    expect(stackRefreshMs('15m', 10)).toBe(10_000);
+    expect(stackRefreshMs('2m', undefined)).toBe(1000);
   });
 });
 
@@ -51,10 +69,11 @@ describe('shares', () => {
     expect(shares(snap([]), 'mem')).toBeNull();
     expect(shares(snap([], { mem_used: 1 }), 'mem')).toBeNull();
   });
-  it('adds up the VMs, the rest of the use and what is free', () => {
+  it('adds up the VMs, wired memory, the rest of the use and what is free', () => {
     const s = shares(fleet, 'mem')!;
     expect(s.vms).toBe(35 * GiB);
-    expect(s.rest / GiB).toBeCloseTo(9.8);
+    expect(s.wired).toBe(4 * GiB);
+    expect(s.rest / GiB).toBeCloseTo(5.8);
     expect(s.free / GiB).toBeCloseTo(19.2);
     expect(s.pct).toBeCloseTo(70);
     expect(s.hot).toBe(false);
@@ -62,10 +81,16 @@ describe('shares', () => {
     expect(s.parts.map((p) => p.name)).toEqual(['atlas', 'harbor']);
     expect(s.parts[0].stalled).toBe(true);
   });
+  it('keeps wired memory inside what the VMs leave of the use, and has it only for memory', () => {
+    const tight = snap([running('a', { host_rss: 38 * GiB })], { mem_used: 40 * GiB, mem_total: 64 * GiB, mem_wired: 5 * GiB });
+    expect(shares(tight, 'mem')).toMatchObject({ wired: 2 * GiB, rest: 0 });
+    expect(shares(snap([], { mem_used: 40 * GiB, mem_total: 64 * GiB }), 'mem')!.wired).toBeNull();
+    expect(shares(fleet, 'cpu')!.wired).toBeNull();
+  });
   it("counts a stopped VM's disk image", () => {
     const s = shares(fleet, 'disk')!;
     expect(s.parts.map((p) => [p.name, p.running])).toEqual([['foundry', false], ['atlas', true], ['harbor', true]]);
-    expect(s.vms).toBe(131 * GiB);
+    expect(s.vms).toBe(131 * GB);
     expect(s.hot).toBe(true);
   });
   it('never has the rest below nothing, when the VMs are counted as more than the computer uses', () => {
@@ -81,15 +106,24 @@ describe('what the popover says', () => {
     expect(percentFigure(null)).toBe('–');
   });
   it('says what the figure is of, in the units the app uses', () => {
-    expect(ofSentence('mem', shares(fleet, 'mem'))).toBe("of this computer's 64.0 GiB in use: the VMs 35.0 GiB, everything else 9.8 GiB");
+    expect(ofSentence('mem', shares(fleet, 'mem'))).toBe(
+      "of this computer's 64.0 GiB in use: the VMs 35.0 GiB, wired 4.0 GiB, everything else 5.8 GiB",
+    );
     expect(ofSentence('cpu', shares(fleet, 'cpu'))).toBe("of this computer's 12 cores in use: the VMs 3.4 cores, everything else 1.1 cores");
+    // A disk as Finder says it, in powers of 1000; memory as the rest of the app does.
+    expect(ofSentence('disk', shares(fleet, 'disk'))).toBe("of this computer's 994.7 GB in use: the VMs 131.0 GB, everything else 629.0 GB");
     expect(ofSentence('disk', null)).toBe("This computer's disk hasn't been read yet.");
   });
   it('says the rest plainly', () => {
     expect(amount('cpu', 250)).toBe('0.3 cores');
     expect(amount('mem', null)).toBe('–');
+    expect(amount('disk', 61 * GB)).toBe('61.0 GB');
+    expect(WIRED.aside).toBe('kernel, GPU and drivers');
     expect(recordingPhrase(2)).toBe('Recording every 2 s');
-    expect(chartLabel('mem', '1h')).toBe("Each VM's memory stacked over the last hour, everything else above it, up to the whole computer");
+    expect(chartLabel('cpu', '1h')).toBe("Each VM's CPU stacked over the last hour, everything else above it, up to the whole computer");
+    expect(chartLabel('mem', '2m', true)).toBe(
+      "Each VM's memory stacked over the last 2 min, wired memory and everything else above it, up to the whole computer",
+    );
   });
 });
 
@@ -120,9 +154,9 @@ describe('layers', () => {
     });
     const ls = layers(shares(fleet, 'disk'), stack, 'disk');
     const by = Object.fromEntries(ls.map((l) => [l.name, l]));
-    expect(by.foundry).toMatchObject({ constant: true, values: [61 * GiB, 61 * GiB, 61 * GiB] });
+    expect(by.foundry).toMatchObject({ constant: true, values: [61 * GB, 61 * GB, 61 * GB] });
     expect(by.atlas).toMatchObject({ constant: false, values: [38 * GiB, 38 * GiB, 38 * GiB] });
-    expect(by.harbor).toMatchObject({ constant: true, values: [30 * GiB, 30 * GiB, 30 * GiB] });
+    expect(by.harbor).toMatchObject({ constant: true, values: [30 * GB, 30 * GB, 30 * GB] });
   });
   it("leaves a VM's memory missing where it wasn't measured", () => {
     const stack = stackOf({ vms: [{ name: 'atlas', avg: [null, 25 * GiB], peak: 25 * GiB }] });
@@ -140,16 +174,18 @@ describe("the legend's figures", () => {
     expect(layerAside('mem', layer({}), '1h')).toBe('peak 16.6 GiB in 1 h');
     expect(layerAside('cpu', layer({ now: 1000, peak: null, values: [400, 2500, null] }), '6h')).toBe('peak 2.5 cores in 6 h');
     expect(layerAside('mem', layer({ peak: null, values: null }), '1h')).toBe('');
+    expect(layerAside('mem', layer({}), '2m')).toBe('peak 16.6 GiB in 2 min');
   });
   it('says how much a disk grew, or shrank, over the range', () => {
-    expect(layerAside('disk', layer({ values: [10 * GiB, null, 14.2 * GiB] }), '7d')).toBe('grew 4.2 GiB in 7 days');
-    expect(layerAside('disk', layer({ values: [10 * GiB, 9 * GiB] }), '24h')).toBe('shrank 1.0 GiB in 24 h');
-    expect(layerAside('disk', layer({ values: [10 * GiB, 10 * GiB] }), '30d')).toBe('unchanged in 30 days');
+    expect(layerAside('disk', layer({ values: [10 * GB, null, 14.2 * GB] }), '7d')).toBe('grew 4.2 GB in 7 days');
+    expect(layerAside('disk', layer({ values: [10 * GB, 9 * GB] }), '24h')).toBe('shrank 1.0 GB in 24 h');
+    expect(layerAside('disk', layer({ values: [10 * GB, 10 * GB] }), '1h')).toBe('unchanged in 1 h');
     expect(layerAside('disk', layer({ running: false, constant: true }), '7d')).toBe('not running');
   });
   it("says a VM without a reading now isn't running", () => {
     expect(layerFigure('mem', layer({ now: null }))).toBe('not running');
     expect(layerFigure('cpu', layer({ now: 2400 }))).toBe('2.4 cores');
+    expect(layerFigure('disk', layer({ now: 61 * GB }))).toBe('61.0 GB');
   });
 });
 
@@ -166,6 +202,17 @@ describe('stackChart', () => {
       { name: 'b', shade: 1, d: 'M0,70L25,70L75,50L100,50L100,60L75,60L25,80L0,80Z' },
     ]);
     expect(c.rest).toBe('M0,50L25,50L75,40L100,40L100,50L75,50L25,70L0,70Z');
+    expect(c.top).toBe('M0,70L25,70L75,50L100,50');
+    expect(c.wired).toBeNull();
+  });
+
+  it('puts wired memory on the VMs, under everything else, and never past the computer\'s use', () => {
+    // Used 50 then 60; the VMs 30 then 50; wired 5 then 15, which is more than the 10 the VMs leave.
+    const stack = stackOf({ wired: [5, 15] });
+    const c = stackChart(stack, [layer('a', [30, 50])], at)!;
+    expect(c.wired).toBe('M0,65L25,65L75,40L100,40L100,50L75,50L25,70L0,70Z');
+    expect(c.rest).toBe('M0,50L25,50L75,40L100,40L100,40L75,40L25,65L0,65Z');
+    // The line stays along the VMs' top.
     expect(c.top).toBe('M0,70L25,70L75,50L100,50');
   });
 

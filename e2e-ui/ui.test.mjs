@@ -198,19 +198,27 @@ for (const dark of [false, true]) {
     assert.equal(await page.getByRole('link', { name: 'Settings' }).count(), 0);
     assert.equal(await page.getByRole('tab', { name: 'Memory' }).getAttribute('aria-selected'), 'true');
     assert.match(await page.locator('.big').innerText(), /^\d+ %$/);
-    assert.match(await page.locator('.of').innerText(), /^of this computer's 128\.0 GiB in use: the VMs \d+\.\d GiB, everything else \d+\.\d GiB$/);
+    assert.match(
+      await page.locator('.of').innerText(),
+      /^of this computer's 128\.0 GiB in use: the VMs \d+\.\d GiB, wired \d+\.\d GiB, everything else \d+\.\d GiB$/,
+    );
     // A row per running VM, the largest first, each with its peak over the range it opens on.
     assert.deepEqual(await page.locator('.legend .row[data-vm] .name').allInnerTexts(), ['atlas', 'harbor', 'quill', 'lantern', 'ember']);
     await page.waitForFunction(() => /peak \d+\.\d GiB in 1 h/.test(document.querySelector('.legend').innerText));
     assert.equal(await page.getByRole('group', { name: 'Over the last' }).getByRole('button', { name: '1 h' }).getAttribute('aria-pressed'), 'true');
     // ember has stopped answering.
     assert.match(await page.locator('.row[data-vm="ember"] .name').getAttribute('class'), /\bhot\b/);
-    assert.match(await page.locator('.legend').innerText(), /everything else[\s\S]*free/);
+    // Wired memory has its own row and band, between the VMs and everything else.
+    assert.match(await page.locator('.legend').innerText(), /ember[\s\S]*wired\s+\d+\.\d GiB\s+kernel, GPU and drivers[\s\S]*everything else[\s\S]*free/);
     assert.equal(await page.locator('svg path.band.vm').count(), 5);
+    assert.equal(await page.locator('svg path.band.wired').count(), 1);
     assert.match(await page.locator('footer').innerText(), /Recording every 1 s/);
     // The window is asked to fit the page.
     await page.waitForFunction(() => window.__fakeCalls.some((c) => c.cmd === 'fit_popover' && c.args.height > 200));
     await shoot(page, `menubar${suffix}`);
+    await page.getByRole('tab', { name: 'Disk' }).click();
+    await page.waitForFunction(() => /grew [\d.]+ GB in 7 days/.test(document.querySelector('.legend').innerText));
+    await shoot(page, `menubar-disk${suffix}`);
     assert.deepEqual(errors, []);
     await close();
   });
@@ -227,9 +235,15 @@ test('The popover opens on the tab asked for, switches tabs and keeps each one\'
   assert.match(await page.locator('.big').getAttribute('class'), /\bhot\b/);
   // A stopped VM's disk image counts, drawn at its size now.
   const foundry = page.locator('.row[data-vm="foundry"]');
-  assert.match(await foundry.innerText(), /61\.0 GiB\s+not running/);
-  await page.waitForFunction(() => /grew [\d.]+ GiB in 7 days/.test(document.querySelector('.row[data-vm="quill"]').innerText));
+  // A disk in powers of 1000, as Finder says it.
+  assert.match(await page.locator('.of').innerText(), /^of this computer's 994\.7 GB in use: the VMs \d+\.\d GB, everything else \d+\.\d GB$/);
+  assert.match(await foundry.innerText(), /65\.5 GB\s+not running/);
+  await page.waitForFunction(() => /grew [\d.]+ GB in 7 days/.test(document.querySelector('.row[data-vm="quill"]').innerText));
   assert.equal(await page.locator('svg path.band.vm').count(), 9);
+  assert.equal(await page.locator('svg path.band.wired').count(), 0);
+  assert.equal(await page.locator('.legend').getByText('wired').count(), 0);
+  // An hour, for a disk filling fast.
+  assert.deepEqual(await page.getByRole('group', { name: 'Over the last' }).getByRole('button').allInnerTexts(), ['1 h', '24 h', '7 days', '30 days']);
 
   await range('30 days').click();
   await page.waitForFunction(() => /in 30 days/.test(document.querySelector('.row[data-vm="quill"]').innerText));
@@ -239,9 +253,12 @@ test('The popover opens on the tab asked for, switches tabs and keeps each one\'
   assert.equal(await range('1 h').getAttribute('aria-pressed'), 'true');
   await range('6 h').click();
   await page.waitForFunction(() => /peak [\d.]+ cores in 6 h/.test(document.querySelector('.legend').innerText));
-  // Hovering a VM's row brings its band forward.
+  // Hovering a VM's row brings its band forward, and everything else's its own.
   await page.locator('.row[data-vm="harbor"]').hover();
   assert.equal(await page.locator('svg path.band.vm.hl').count(), 1);
+  await page.locator('.row[data-part="rest"]').hover();
+  assert.equal(await page.locator('svg path.band.hl').count(), 1);
+  assert.equal(await page.locator('svg path.band.rest.hl').count(), 1);
 
   // Each tab's range is kept for next time.
   await page.reload();
@@ -258,24 +275,34 @@ test('The popover opens on the tab asked for, switches tabs and keeps each one\'
   await close();
 });
 
-test('The popover is told its tab when shown again, and fetches nothing while hidden', async () => {
-  // Every fetch the page makes.
+test('The popover is told its tab when shown again, watches 2 min move, and fetches nothing while hidden', async () => {
+  // Every fetch the page makes, with when (the clock runs, though Date.now is fixed).
   const count = () => {
     const invoke = window.__TAURI_INTERNALS__.invoke;
     window.__asked = [];
     window.__TAURI_INTERNALS__.invoke = (cmd, args) => {
-      if (cmd === 'host_stack' || cmd === 'snapshot') window.__asked.push({ cmd, args });
+      if (cmd === 'host_stack' || cmd === 'snapshot') window.__asked.push({ cmd, args, at: performance.now() });
       return invoke(cmd, args);
     };
   };
   const { page, errors, close } = await open('/menubar?tab=mem', { width: 360, height: 560, init: count });
   const tab = (name) => page.getByRole('tab', { name });
+  const range = (name) => page.getByRole('group', { name: 'Over the last' }).getByRole('button', { name });
   await page.locator('.legend .row[data-vm]').first().waitFor();
+  assert.deepEqual(await page.getByRole('group', { name: 'Over the last' }).getByRole('button').allInnerTexts(), ['2 min', '15 min', '1 h', '6 h', '24 h']);
 
   // Shown again under the CPU item, with Settings now dark: the same page, on that tab.
   await page.evaluate(() => window.__fakeEmit('popover-shown', { tab: 'cpu', theme: 'dark' }));
   await page.waitForFunction(() => document.querySelector('[role=tab][aria-selected=true]')?.textContent === 'CPU');
   assert.equal(await page.evaluate(() => document.documentElement.dataset.theme), 'dark');
+
+  // 2 min moves a column a second: fetched again each second.
+  await range('2 min').click();
+  await page.waitForFunction(() => /peak [\d.]+ cores in 2 min/.test(document.querySelector('.legend').innerText));
+  const stacks = () => page.evaluate(() => window.__asked.filter((a) => a.cmd === 'host_stack' && a.args.to - a.args.from === 120_000).length);
+  const before = await stacks();
+  await page.waitForTimeout(3200);
+  assert.ok((await stacks()) - before >= 2, 'fetched again about every second');
 
   // Hidden, it fetches nothing; shown again, it fetches at once.
   const asked = () => page.evaluate(() => window.__asked.length);
@@ -295,6 +322,24 @@ test('The popover is told its tab when shown again, and fetches nothing while hi
   assert.deepEqual(errors, []);
   await close();
 });
+
+for (const dark of [false, true]) {
+  test(`The popover's hover${dark ? ', dark' : ''}: a VM, wired memory and everything else come forward`, async () => {
+    const { page, errors, close } = await open('/menubar?tab=mem', { dark, width: 360, height: 560 });
+    await page.locator('svg path.band.wired').waitFor();
+    // Pointing at a band lights its row too.
+    await page.locator('svg path.band.wired').dispatchEvent('pointermove');
+    await page.waitForFunction(() => document.querySelector('.row[data-part="wired"]')?.classList.contains('hl'));
+    assert.equal(await page.locator('svg path.band.hl').count(), 1);
+    await page.locator('.row[data-part="rest"]').hover();
+    assert.equal(await page.locator('svg path.band.rest.hl').count(), 1);
+    await shoot(page, `menubar-hover${dark ? '-dark' : ''}`);
+    await page.locator('.row[data-vm="atlas"]').hover();
+    assert.equal(await page.locator('svg path.band.vm.hl').count(), 1);
+    assert.deepEqual(errors, []);
+    await close();
+  });
+}
 
 test('Settings chooses each menu bar item\'s drawing and figure, and whether closing the window keeps recording', async () => {
   const { page, errors, close } = await open('/settings');

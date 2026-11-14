@@ -12,14 +12,14 @@
   import { inOrder } from '$lib/inOrder';
   import {
     agoLabel, amount, chartLabel, layerAside, layerFigure, layers, ofSentence, parseTab, parseTabRange, percentFigure, rangeLabel,
-    recordingPhrase, shares, stackChart, stalledTip, SHADES, STACK_POINTS, TAB_RANGES, TABS, type Tab,
+    recordingPhrase, shares, stackChart, stackRefreshMs, stalledTip, SHADES, STACK_POINTS, TAB_RANGES, TABS, WIRED, type Tab,
   } from '$lib/menubar';
-  import { followsLive, historyRefreshMs, rangeMs, type RangeKey } from '$lib/ranges';
+  import { followsLive, rangeMs, type AnyRangeKey } from '$lib/ranges';
   import { theme } from '$lib/theme.svelte';
 
   const HEIGHT = 130;
   const rangeKey = (t: Tab) => `menubar-range-${t}`;
-  function remembered(t: Tab): RangeKey {
+  function remembered(t: Tab): AnyRangeKey {
     try {
       return parseTabRange(t, localStorage.getItem(rangeKey(t)));
     } catch {
@@ -37,8 +37,8 @@
     });
     return () => void stop.then((f) => f(), () => {});
   });
-  let over = $state<Record<Tab, RangeKey>>({ mem: remembered('mem'), cpu: remembered('cpu'), disk: remembered('disk') });
-  function choose(k: RangeKey) {
+  let over = $state<Record<Tab, AnyRangeKey>>({ mem: remembered('mem'), cpu: remembered('cpu'), disk: remembered('disk') });
+  function choose(k: AnyRangeKey) {
     over[tab] = k;
     try {
       localStorage.setItem(rangeKey(tab), k);
@@ -72,13 +72,15 @@
     };
   });
 
-  // The stack over the tab's range: fetched as either is chosen, then as a new column comes due (at
-  // most once a minute) while the range moves on with the clock.
-  type Fetched = { tab: Tab; over: RangeKey; from: number; to: number; stack: Stack };
+  // The stack over the tab's range: fetched as either is chosen, then as each new column comes due
+  // (but not more often than the computer is measured) while the range moves on with the clock.
+  type Fetched = { tab: Tab; over: AnyRangeKey; from: number; to: number; stack: Stack };
   let fetched = $state<Fetched | null>(null);
-  let stackError = $state<{ tab: Tab; over: RangeKey; message: string } | null>(null);
+  let stackError = $state<{ tab: Tab; over: AnyRangeKey; message: string } | null>(null);
   const ordered = inOrder();
-  function fetchStack(t: Tab, k: RangeKey) {
+  // Only a change of interval starts the timer again, not every snapshot.
+  const intervalSecs = $derived(snapshot?.intervalSecs);
+  function fetchStack(t: Tab, k: AnyRangeKey) {
     const to = Date.now();
     const from = to - rangeMs(k);
     ordered(api.hostStack(t, from, to, STACK_POINTS)).then(
@@ -95,7 +97,7 @@
     if (!visible) return;
     fetchStack(t, k);
     if (!followsLive(k)) return;
-    const every = setInterval(() => fetchStack(t, k), historyRefreshMs(k));
+    const every = setInterval(() => fetchStack(t, k), stackRefreshMs(k, intervalSecs));
     return () => clearInterval(every);
   });
 
@@ -112,7 +114,11 @@
   );
   const failed = $derived(stackError?.tab === tab && stackError.over === range ? stackError.message : null);
 
+  // What's pointed at, in the chart or the legend, is drawn forward in both: a VM ("vm:" and its
+  // name, as a VM could be called "wired"), wired memory or everything else.
   let lit = $state<string | null>(null);
+  const vmLit = (name: string) => `vm:${name}`;
+  const point = (e: PointerEvent) => (lit = (e.target as Element).closest('[data-lit]')?.getAttribute('data-lit') ?? null);
 
   // The window is as tall as the page: the backend sizes it when asked.
   let root = $state<HTMLElement>();
@@ -143,31 +149,42 @@
 
   <div role="tabpanel" aria-label={TABS.find((t) => t.key === tab)?.label}>
     <div class="top">
-      <div>
-        <div class="big num" class:hot={now?.hot}>{percentFigure(now)}</div>
-        <p class="of">{ofSentence(tab, now)}</p>
-      </div>
+      <div class="big num" class:hot={now?.hot}>{percentFigure(now)}</div>
       <div class="ranges" role="group" aria-label="Over the last">
         {#each TAB_RANGES[tab] as k (k)}
           <button aria-pressed={range === k} onclick={() => choose(k)}>{rangeLabel(k)}</button>
         {/each}
       </div>
+      <p class="of">{ofSentence(tab, now)}</p>
     </div>
 
     <div class="chart" bind:clientWidth={width}>
-      <svg viewBox="0 0 {width || 1} {HEIGHT}" role="img" aria-label={chartLabel(tab, range)} class:lit={lit != null}>
+      <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+      <svg viewBox="0 0 {width || 1} {HEIGHT}" role="img" aria-label={chartLabel(tab, range, chart?.wired != null)} class:lit={lit != null}
+        onpointermove={point} onpointerleave={() => (lit = null)}>
         <defs>
           <pattern id="hatch" width="4" height="4" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
             <rect width="4" height="4" style="fill: var(--track)" />
             <line x1="0" y1="0" x2="0" y2="4" style="stroke: var(--soft)" stroke-width="2" />
           </pattern>
+          <pattern id="cross" width="4" height="4" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+            <rect width="4" height="4" style="fill: var(--track)" />
+            <path d="M0,0V4M0,0H4" style="stroke: var(--soft)" stroke-width="2" />
+          </pattern>
+          <pattern id="hatch-lit" width="4" height="4" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+            <rect width="4" height="4" style="fill: var(--track)" />
+            <line x1="0" y1="0" x2="0" y2="4" style="stroke: var(--accent)" stroke-width="2" />
+          </pattern>
         </defs>
         <rect class="free" width={width || 1} height={HEIGHT} />
         {#if chart}
           {#each chart.bands as b (b.name)}
-            <path class="band vm shade-{b.shade}" class:hl={lit === b.name} d={b.d} data-tip={b.name} />
+            <path class="band vm shade-{b.shade}" class:hl={lit === vmLit(b.name)} d={b.d} data-tip={b.name} data-lit={vmLit(b.name)} />
           {/each}
-          <path class="band rest" d={chart.rest} data-tip="everything else" />
+          {#if chart.wired}
+            <path class="band wired" class:hl={lit === 'wired'} d={chart.wired} data-tip="{WIRED.name}: {WIRED.aside}" data-lit="wired" />
+          {/if}
+          <path class="band rest" class:hl={lit === 'rest'} d={chart.rest} data-tip="everything else" data-lit="rest" />
           <path class="line" d={chart.top} />
         {/if}
       </svg>
@@ -180,14 +197,24 @@
     <ul class="legend">
       {#each stacked as l, i (l.name)}
         <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-        <li class="row" data-vm={l.name} onmouseenter={() => (lit = l.name)} onmouseleave={() => (lit = null)}>
+        <li class="row" class:hl={lit === vmLit(l.name)} data-vm={l.name} onmouseenter={() => (lit = vmLit(l.name))} onmouseleave={() => (lit = null)}>
           <span class="sw shade-{i % SHADES}"></span>
           <span class="name serif" class:hot={l.stalled} title={l.stalled ? stalledTip(l.name) : null}>{l.name}</span>
           <span class="fig num" class:muted={l.now == null}>{layerFigure(tab, l)}</span>
           <span class="aside num">{current ? layerAside(tab, l, range) : ''}</span>
         </li>
       {/each}
-      <li class="row other">
+      {#if tab === 'mem' && now?.wired != null}
+        <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+        <li class="row other" class:hl={lit === 'wired'} data-part="wired" onmouseenter={() => (lit = 'wired')} onmouseleave={() => (lit = null)}>
+          <span class="sw wired"></span>
+          <span class="name serif" title={WIRED.tip}>{WIRED.name}</span>
+          <span class="fig num">{amount(tab, now.wired)}</span>
+          <span class="aside">{WIRED.aside}</span>
+        </li>
+      {/if}
+      <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+      <li class="row other" class:hl={lit === 'rest'} data-part="rest" onmouseenter={() => (lit = 'rest')} onmouseleave={() => (lit = null)}>
         <span class="sw hatched"></span>
         <span class="name serif">everything else</span>
         <span class="fig num">{amount(tab, now?.rest)}</span>
@@ -238,10 +265,11 @@
   }
   .seg button[aria-selected='true'] { background: var(--bg); color: var(--fg); box-shadow: 0 1px 2px rgba(0, 0, 0, 0.15); }
 
-  .top { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; }
+  /* The figure and the ranges side by side, what the figure is of under both, across the popover. */
+  .top { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; column-gap: 10px; }
   .big { font-weight: 600; font-size: 2.4rem; line-height: 1; letter-spacing: -0.02em; }
   .big.hot { color: var(--warn); }
-  .of { font-size: 0.8rem; line-height: 1.35; color: var(--muted); margin: 4px 0 0; }
+  .of { grid-column: 1 / -1; font-size: 0.8rem; line-height: 1.35; color: var(--muted); margin: 4px 0 0; }
   .ranges { display: flex; gap: 2px; flex: none; }
   .ranges button {
     height: auto; border: 0; padding: 2px 6px; border-radius: 999px; color: var(--muted); font-weight: 500; font-size: 0.78rem;
@@ -253,10 +281,15 @@
   .free { fill: var(--track); }
   .band { stroke: var(--bg); stroke-width: 0.6; transition: opacity 0.15s; }
   .band.vm { fill: var(--shade); }
+  /* Wired memory is part of what isn't the VMs: everything else's hatch, crossed, not a VM's shade. */
+  .band.wired { fill: url(#cross); }
   .band.rest { fill: url(#hatch); }
-  svg.lit .band.vm { opacity: 0.3; }
-  svg.lit .band.vm.hl { opacity: 1; fill: var(--accent); }
-  .line { fill: none; stroke: var(--fg); stroke-width: 1; vector-effect: non-scaling-stroke; }
+  /* What's pointed at comes forward in the accent colour, the rest of the stack recedes. */
+  svg.lit .band { opacity: 0.3; }
+  svg.lit .band.hl { opacity: 1; }
+  .band.vm.hl, .band.wired.hl { fill: var(--accent); }
+  .band.rest.hl { fill: url(#hatch-lit); }
+  .line { fill: none; stroke: var(--fg); stroke-width: 1; vector-effect: non-scaling-stroke; pointer-events: none; }
   .chart .error { position: absolute; inset: auto 0 6px; padding: 0 8px; font-size: 0.8rem; }
   .axis { display: flex; justify-content: space-between; font-size: 0.74rem; color: var(--muted); }
 
@@ -267,8 +300,13 @@
     padding: 4px 2px; border-bottom: 1px solid var(--border); font-size: 0.86rem;
   }
   .row:last-child { border-bottom: 0; }
-  .row[data-vm]:hover { background: var(--wash); }
+  .row.hl { background: var(--wash); }
   .sw { width: 9px; height: 9px; align-self: center; background: var(--shade); }
+  .sw.wired {
+    background:
+      repeating-linear-gradient(135deg, var(--soft) 0 2px, transparent 2px 4px),
+      repeating-linear-gradient(45deg, var(--soft) 0 2px, var(--track) 2px 4px);
+  }
   .sw.hatched { background: repeating-linear-gradient(135deg, var(--soft) 0 2px, var(--track) 2px 4px); }
   .sw.free { background: var(--track); }
   .name { font-weight: 500; font-size: 1.05rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

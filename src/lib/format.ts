@@ -13,6 +13,23 @@ export function bytes(n: number | undefined | null, digits = 1): string {
   return `${v.toFixed(i === 0 ? 0 : digits)} ${UNITS[i]}`;
 }
 
+const DECIMAL_UNITS = ['B', 'kB', 'MB', 'GB', 'TB'];
+
+/**
+ * In powers of 1000, as Finder says a disk's size (994.7 GB, where the binary units say 926.4 GiB):
+ * for figures put beside what Finder shows of the same disk.
+ */
+export function decimalBytes(n: number | undefined | null, digits = 1): string {
+  if (n == null || n < 0) return '–';
+  let i = 0;
+  let v = n;
+  while (v >= 1000 && i < DECIMAL_UNITS.length - 1) {
+    v /= 1000;
+    i++;
+  }
+  return `${v.toFixed(i === 0 ? 0 : digits)} ${DECIMAL_UNITS[i]}`;
+}
+
 export function rate(n: number | undefined | null): string {
   return n == null || n < 0 ? '–' : `${bytes(n)}/s`;
 }
