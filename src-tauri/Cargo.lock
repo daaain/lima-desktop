@@ -2095,6 +2095,7 @@ dependencies = [
  "objc2-core-foundation",
  "objc2-core-graphics",
  "objc2-core-text",
+ "objc2-foundation",
  "rusqlite",
  "serde",
  "serde_json",
