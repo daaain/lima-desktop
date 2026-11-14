@@ -111,11 +111,12 @@ Four, each a component, each with its scale said in words nearby.
   reads one moment ("13:32 · this container 12.0 GiB (25 % of the VM) · VM 38.4 GiB of 48.0 GiB in
   use"; past a day, the moment's day too). Its geometry is `almanac.shareChart`, redrawn only when
   the history is.
-- **Sketch** (`Sketch.svelte`): the range above a bar, as about a hundred hairline columns
-  on a ground that rises to the highest value reached, on the bar's scale. Hairlines that stop
-  short of the ground show how far below its peak something usually sits. On hover it becomes the
-  distribution instead: one hairline per percent of the scale, as tall as the time spent there,
-  with a tick at the maximum. The data is the same hundred points either way (`almanac.sketch`),
+- **Sketch** (`Sketch.svelte`): the range above a bar, as about a hundred columns side by side
+  with no gaps between them, on a ground that rises to the highest value reached, on the bar's
+  scale. Where the columns stop short of the ground shows how far below its peak something usually
+  sits. On hover it becomes the distribution instead: one column per percent of the scale, again
+  touching, as tall as the time spent there, with a tick at the maximum. Each is drawn as one
+  stepped outline, so touching columns leave no faint seams between them. The data is the same hundred points either way (`almanac.sketch`),
   fetched per entity when it appears or the range changes, then again as a new column comes due
   but at most once a minute: every minute up to 1 h, every 3.6 min at 6 h, every 14.4 min at 24 h
   (`history.svelte.ts`, `ranges.historyRefreshMs`).
