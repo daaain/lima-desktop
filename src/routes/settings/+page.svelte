@@ -7,6 +7,7 @@
   import { live } from '$lib/live.svelte';
   import { intervalPhrase } from '$lib/almanac';
   import { theme } from '$lib/theme.svelte';
+  import { update } from '$lib/update.svelte';
 
   const THEME_LABELS: Record<Theme, string> = { system: 'System', light: 'Light', dark: 'Dark' };
   const DRAWING_LABELS: Record<Drawing, string> = { trace: 'Trace', bar: 'Bar', off: 'None' };
@@ -126,6 +127,16 @@
       Otherwise closing the window quits the app, and nothing is measured until it opens again. Quit (⌘Q, or Quit in
       the menu bar's popover) always stops the recording.
     </p>
+  </section>
+
+  <section class="panel">
+    <h2 class="head">New versions</h2>
+    <label class="check">
+      <input type="checkbox" checked={settings.checkUpdates} disabled={saving}
+        onchange={(e) => save({ checkUpdates: e.currentTarget.checked }).then(() => update.refresh())} />
+      Say when a new version is out
+    </label>
+    <p class="note">Once a day the app asks GitHub for its latest release, and sends nothing about you or this computer.</p>
   </section>
   {#if error}<p class="error">{error}</p>{/if}
 {/if}

@@ -15,6 +15,7 @@ pub mod stall;
 pub mod store;
 #[cfg(target_os = "macos")]
 pub mod typeset;
+pub mod updates;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -81,6 +82,9 @@ pub fn run() {
             app.manage(collector);
             app.manage(saved);
             menubar::start(app.handle());
+            let version = app.package_info().version.clone();
+            app.manage(updates::Updates::load(dir.join("updates.json"), version));
+            updates::start(app.handle());
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -121,6 +125,7 @@ pub fn run() {
             commands::open_main,
             commands::quit,
             commands::fit_popover,
+            commands::update_available,
         ])
         .build(ctx)
         .expect("error while building tauri application")

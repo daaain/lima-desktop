@@ -91,6 +91,8 @@ pub struct Settings {
     pub menu_bar: MenuBar,
     /// Closing the window leaves the app recording, in the menu bar; Quit stops it.
     pub keep_running: bool,
+    /// Ask GitHub once a day whether a newer version is out (`updates.rs`); off, nothing is asked.
+    pub check_updates: bool,
 }
 
 impl Default for Settings {
@@ -100,6 +102,7 @@ impl Default for Settings {
             theme: Theme::System,
             menu_bar: MenuBar::default(),
             keep_running: true,
+            check_updates: true,
         }
     }
 }
@@ -237,6 +240,18 @@ mod tests {
     }
 
     #[test]
+    fn new_versions_are_looked_for_unless_switched_off() {
+        let d = dir();
+        assert!(Settings::default().check_updates);
+        // From before it was a setting: looked for, the rest as it was.
+        std::fs::write(d.join("v3.json"), r#"{"intervalSecs": 2, "keepRunning": false}"#).unwrap();
+        let v3 = Settings::load(&d.join("v3.json"));
+        assert_eq!((v3.interval_secs, v3.keep_running, v3.check_updates), (2, false, true));
+        std::fs::write(d.join("off.json"), r#"{"checkUpdates": false}"#).unwrap();
+        assert!(!Settings::load(&d.join("off.json")).check_updates);
+    }
+
+    #[test]
     fn a_choice_is_saved_and_read_back() {
         let d = dir();
         let saved = Saved::load(d.join("settings.json"));
@@ -260,6 +275,7 @@ mod tests {
                 names: false,
             },
             keep_running: false,
+            check_updates: false,
         };
         saved.set(chosen).unwrap();
         assert_eq!(saved.get().interval_secs, 5);

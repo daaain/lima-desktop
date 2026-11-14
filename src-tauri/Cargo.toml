@@ -37,6 +37,12 @@ log = "0.4.35"
 env_logger = "0.11.11"
 sysinfo = "0.40.1"
 tauri-plugin-window-state = "2"
+# Comparing GitHub's latest release with this app's version (`updates.rs`); Tauri's own version type.
+semver = "1.0.28"
+# Asking GitHub once a day whether a newer version is out (`updates.rs`). Nothing in the tree speaks
+# TLS on macOS or Linux (Tauri's reqwest is only for iOS and Android): ureq is small and blocking,
+# and rustls with ring and Mozilla's roots needs nothing from the system to build or run.
+ureq = { version = "3.5.2", default-features = false, features = ["rustls"] }
 
 # On macOS: the menu bar's items are drawn whole, their text included, in the system font
 # (CoreText), past three quarters their names in the menu bar's own colour (AppKit says which); the

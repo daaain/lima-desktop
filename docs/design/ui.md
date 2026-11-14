@@ -169,6 +169,15 @@ under the sentence, figures and bar it explains, with the allocation as a dashed
   or not; an item with neither is left out; and whether each is named "mem", "cpu", "disk", small
   under the figure, or on its side beside a drawing alone); then whether closing the window keeps
   recording, in the menu bar. Each choice is saved as it's made.
+- **A new version** (`UpdateNotice.svelte`): when the backend's daily look at GitHub finds a newer
+  release, one muted line beside the masthead's status line, "Lima Desktop 0.3.0 is out ·
+  Download ×", Download in `--accent`. It isn't a sentence, so no full stop, and nothing about it
+  warns: a new version is news, not a problem. Download opens the release page in the browser;
+  nothing is installed. × puts that version away for good, and a later one shows again. It sits in
+  a row that is there anyway, so on a wide window the page doesn't move; on a narrow one it takes a
+  line of its own under the status line. Settings ends with **New versions**, a checkbox ("Say when a new version is out")
+  and one sentence saying GitHub is asked once a day and sent nothing about the person. Off, nothing
+  is asked and nothing is shown.
 - **The menu bar's popover** (`routes/menubar`, a borderless window of its own that the backend
   builds on the first click, at `?tab=mem|cpu|disk`, then hides when it loses the focus and shows
   again under the item clicked, telling the page its tab with an event rather than loading it

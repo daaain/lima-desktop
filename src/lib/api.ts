@@ -189,6 +189,8 @@ export interface Settings {
   menuBar: MenuBar;
   /** Closing the window leaves the app recording, in the menu bar; Quit (⌘Q, or the popover's) stops it. */
   keepRunning: boolean;
+  /** Ask GitHub once a day whether a newer version is out; off, nothing is asked. */
+  checkUpdates: boolean;
 }
 /** How often a running VM can be measured, in seconds (settings::INTERVALS). */
 export const INTERVALS = [1, 2, 5, 10] as const;
@@ -362,7 +364,15 @@ export const api = {
   /** VM stalls overlapping [from, to] (one going on included), newest first; every VM's when `vm` is null. */
   stalls: (vm: string | null, from: number, to: number, limit = 500) =>
     invoke<VmStall[]>('stalls', { vm, from, to, limit }),
+  /** A newer version than this one, if the last daily check found one (null with the check off). */
+  updateAvailable: () => invoke<Update | null>('update_available'),
 };
+
+/** A newer Lima Desktop (updates.rs): its version ("0.3.0") and its release page on GitHub. */
+export interface Update {
+  version: string;
+  url: string;
+}
 
 /** Is `action` locked by the instance's marker (or `limactl protect`)? */
 export function locked(inst: Instance, action: string): boolean {

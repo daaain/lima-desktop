@@ -43,6 +43,15 @@ pub fn set_settings(
     Ok(saved.get())
 }
 
+/// A newer version than this one, if the last check found one and Settings still allows checking.
+#[tauri::command]
+pub fn update_available(
+    saved: State<'_, Saved>,
+    updates: State<'_, crate::updates::Updates>,
+) -> Option<crate::updates::Update> {
+    if saved.get().check_updates { updates.available() } else { None }
+}
+
 /// One of the computer's resources ("mem", "cpu", "disk") over [from, to], for the menu bar's
 /// stacked chart: the computer's use and size and each VM's part, on the same buckets.
 #[tauri::command]

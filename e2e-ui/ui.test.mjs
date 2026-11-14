@@ -379,6 +379,74 @@ test('Settings chooses each menu bar item\'s drawing and figure, and whether clo
   await close();
 });
 
+const V030 = { version: '0.3.0', url: 'https://github.com/daaain/lima-desktop/releases/tag/v0.3.0' };
+const V040 = { version: '0.4.0', url: 'https://github.com/daaain/lima-desktop/releases/tag/v0.4.0' };
+
+/** Two frames: long enough for an answer the fake backend has just given to be drawn. */
+const settle = (page) => page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+/** Waits until the app has asked about new versions `n` times in all, and the answer is drawn. */
+async function asked(page, n) {
+  await page.waitForFunction((n) => window.__fakeCalls.filter((c) => c.cmd === 'update_available').length >= n, n);
+  await settle(page);
+}
+
+for (const dark of [false, true]) {
+  test(`A newer version is said beside the status line${dark ? ', dark' : ''}`, async () => {
+    const { page, errors, close } = await open('/', { dark, init: `window.__fakeUpdate = ${JSON.stringify(V030)};` });
+    const notice = page.locator('.update');
+    await notice.waitFor();
+    assert.equal((await notice.textContent()).replace(/\s+/g, ' ').trim(), 'Lima Desktop 0.3.0 is out · Download ×');
+    await page.locator('.status').waitFor();
+    await page.evaluate(() => document.fonts.ready);
+    await page.mouse.move(0, 0);
+    await page.screenshot({ path: join(shots, `update-notice${dark ? '-dark' : ''}.png`), clip: { x: 0, y: 0, width: 1320, height: 150 }, animations: 'disabled' });
+    assert.deepEqual(errors, []);
+    await close();
+  });
+}
+
+test('The new version opens its release page, stays dismissed, and a later one shows again', async () => {
+  const { page, errors, close } = await open('/', { init: `window.__fakeUpdate = ${JSON.stringify(V030)};` });
+  const notice = page.locator('.update');
+  await notice.getByRole('button', { name: 'Download' }).click();
+  await page.waitForFunction(() => window.__fakeCalls.some((c) => c.cmd === 'open_url'));
+  assert.equal((await page.evaluate(() => window.__fakeCalls.find((c) => c.cmd === 'open_url'))).args.url, V030.url);
+
+  await notice.getByRole('button', { name: 'Dismiss' }).click();
+  await notice.waitFor({ state: 'detached' });
+  // Remembered: the next time the window opens, 0.3.0 stays put away.
+  await page.reload();
+  await asked(page, 1);
+  assert.equal(await notice.count(), 0);
+
+  // A later version is out: it shows, once the app next asks (here, as the check is switched back on).
+  await page.evaluate((v) => (window.__fakeUpdate = v), V040);
+  await page.getByRole('link', { name: 'Settings' }).click();
+  const check = page.getByRole('checkbox', { name: 'Say when a new version is out' });
+  assert.equal(await check.isChecked(), true);
+  await check.click();
+  await page.waitForFunction(async () => !(await window.__TAURI_INTERNALS__.invoke('settings')).checkUpdates);
+  await asked(page, 2);
+  assert.equal(await notice.count(), 0, 'nothing is said with the check off');
+  await check.click();
+  await page.waitForFunction(async () => (await window.__TAURI_INTERNALS__.invoke('settings')).checkUpdates);
+  await notice.getByText('Lima Desktop 0.4.0 is out').waitFor();
+  assert.deepEqual(errors, []);
+  await close();
+});
+
+test('With the check switched off, no new version is said', async () => {
+  const init = `window.__fakeUpdate = ${JSON.stringify(V030)}; window.__fakeSettings.checkUpdates = false;`;
+  const { page, errors, close } = await open('/settings', { init });
+  const check = page.getByRole('checkbox', { name: 'Say when a new version is out' });
+  await check.waitFor();
+  assert.equal(await check.isChecked(), false);
+  await asked(page, 1);
+  assert.equal(await page.locator('.update').count(), 0);
+  assert.deepEqual(errors, []);
+  await close();
+});
+
 test('A VM that has stopped responding says so on the overview and on its page', async () => {
   const { page, errors, close } = await open('/');
   const ember = page.locator('article', { hasText: 'ember' }).first();

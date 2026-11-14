@@ -306,6 +306,10 @@
     },
     keepRunning: true,
   };
+  // Looking for new versions is on unless switched off; a test can switch it off before the app
+  // loads through __fakeSettings.
+  settings.checkUpdates = true;
+  window.__fakeSettings = settings;
   const ITEMS = ['memory', 'cpu', 'disk'];
   const copyMenuBar = (m) => ({ ...m, ...Object.fromEntries(ITEMS.map((k) => [k, { ...m[k] }])) });
   const copy = () => ({ ...settings, menuBar: copyMenuBar(settings.menuBar) });
@@ -318,6 +322,7 @@
       if (typeof item.figure !== 'boolean') throw 'invalid type: expected a boolean';
     }
     if (typeof s.menuBar.names !== 'boolean' || typeof s.keepRunning !== 'boolean') throw 'invalid type: expected a boolean';
+    if (typeof s.checkUpdates !== 'boolean') throw 'invalid type: expected a boolean';
     Object.assign(settings, s, { menuBar: copyMenuBar(s.menuBar) });
     return copy();
   }
@@ -554,6 +559,15 @@
     guest_file: (args) => later(guestFile(args)),
     container_logs: ({ id }) => containerLogs(id),
     container_inspect: ({ id }) => ({ Id: id, State: { Status: 'running' } }),
+    // A newer version only when a test sets __fakeUpdate ({ version, url }), so the gallery's
+    // pictures don't carry the notice; none with the check off, as updates.rs. Each asking is in
+    // __fakeCalls, so a test can wait for an answer that shows nothing.
+    update_available: (args) => {
+      calls.push({ cmd: 'update_available', args });
+      return settings.checkUpdates ? (window.__fakeUpdate ?? null) : null;
+    },
+    // The opener plugin's command (a link opened in the browser): a test reads it from __fakeCalls.
+    'plugin:opener|open_url': (args) => void calls.push({ cmd: 'open_url', args }),
     vm_action: () => later(),
     vm_resize: () => later(),
     container_action: () => later(),
