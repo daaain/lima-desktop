@@ -159,11 +159,30 @@ export interface HostLive {
 export type Theme = 'system' | 'light' | 'dark';
 export const THEMES: readonly Theme[] = ['system', 'light', 'dark'];
 
+/** How one of the menu bar's items shows (settings::Look): not at all, as a moving trace, as an upright bar, or as its figure alone. */
+export type Look = 'off' | 'trace' | 'bar' | 'figure';
+export const LOOKS: readonly Look[] = ['trace', 'bar', 'figure', 'off'];
+
+/**
+ * The menu bar's items (settings::MenuBar): one per resource, each the whole computer's use as a figure,
+ * the VMs' part drawn solid and everything else pale. With all three off, the app's own icon stays as the
+ * way back in. `names` puts "mem", "cpu", "disk" before each figure.
+ */
+export interface MenuBar {
+  memory: Look;
+  cpu: Look;
+  disk: Look;
+  names: boolean;
+}
+
 /** What's chosen in Settings (settings.rs). */
 export interface Settings {
   /** One of `INTERVALS`. */
   intervalSecs: number;
   theme: Theme;
+  menuBar: MenuBar;
+  /** Closing the window leaves the app recording, in the menu bar; Quit (⌘Q, or the popover's) stops it. */
+  keepRunning: boolean;
 }
 /** How often a running VM can be measured, in seconds (settings::INTERVALS). */
 export const INTERVALS = [1, 2, 5, 10] as const;
@@ -268,6 +287,23 @@ export interface Pruned {
   errors: string[];
 }
 
+/** Which of the computer's resources a stack is of: memory (bytes), CPU (millicores), the disk Lima uses (bytes). */
+export type StackMetric = 'mem' | 'cpu' | 'disk';
+
+/**
+ * One resource over a range, for the menu bar's stacked chart (commands::host_stack): the whole computer's
+ * use and size, and each VM's own part (what its processes hold on the host: memory footprint, CPU, disk
+ * image), all on the same buckets `ts` (bucket starts, unix ms). A bucket's value is the average of its
+ * samples; null where nothing was measured. A VM's `peak` is the most it reached in the range.
+ * Everything else is `used` less the VMs.
+ */
+export interface Stack {
+  ts: number[];
+  used: (number | null)[];
+  total: (number | null)[];
+  vms: { name: string; avg: (number | null)[]; peak: number | null }[];
+}
+
 export type VmAction = 'start' | 'stop' | 'restart' | 'delete';
 export type ContainerAction = 'start' | 'stop' | 'restart' | 'remove';
 
@@ -275,6 +311,13 @@ export const api = {
   snapshot: () => invoke<Snapshot>('snapshot'),
   settings: () => invoke<Settings>('settings'),
   setSettings: (settings: Settings) => invoke<Settings>('set_settings', { settings }),
+  /** The menu bar popover's chart: `metric` over [from, to] in about `points` buckets. */
+  hostStack: (metric: StackMetric, from: number, to: number, points = 120) =>
+    invoke<Stack>('host_stack', { metric, from, to, points }),
+  /** Shows the main window, making it again if it was closed. */
+  openMain: () => invoke<void>('open_main'),
+  /** Quits the app, and with it the recording. */
+  quit: () => invoke<void>('quit'),
   vmAction: (name: string, action: VmAction) => invoke<void>('vm_action', { name, action }),
   vmResize: (name: string, resize: { cpus?: number; memory?: number; disk?: number }) =>
     invoke<void>('vm_resize', { name, resize }),
