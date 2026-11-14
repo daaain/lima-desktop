@@ -222,6 +222,56 @@
     vm(instance('relic', 'Broken', 2, 2, 20)),
   ];
 
+  // The whole computer (collector.rs HostLive): 128 GiB, 16 cores and a 994 GiB disk, as `host` says.
+  // Its use is the VMs' own costs on it (each VM's host_* readings, a stopped VM's disk image too)
+  // and everything else this computer does: a steady 19 GiB or so of memory, a few busy cores now and
+  // then, and the rest of a disk past three quarters, so the disk tab warns.
+  const HOST = { cpus: 16, memory: 128 * GiB, disk: 994 * GiB };
+  const runningFleet = () => fleet.filter((v) => v.entity);
+  const vmCost = (key, t) => runningFleet().reduce((sum, v) => sum + metricsOf.get(v.entity)[key](t), 0);
+  const imagesAtRest = () => fleet.filter((v) => !v.entity).reduce((sum, v) => sum + (v.latest.host_disk_alloc ?? 0), 0);
+  const rest = {
+    mem: scaled(shapes.flat(0.15, 0.04), HOST.memory),
+    cpu: scaled(shapes.bursty(0.1, 0.3, 0.2), HOST.cpus * 1000),
+    disk: scaled(shapes.filling(0.53, 0.545, NOW), HOST.disk),
+  };
+  let hostEntity;
+  const hostMetrics = () => ({
+    mem_used: (t, id) => vmCost('host_rss', t) + rest.mem(t, id),
+    mem_total: HOST.memory,
+    mem_wired: 5.2 * GiB,
+    mem_compressed: (t, id) => 1.4 * GiB + rest.mem(t, id) * 0.05,
+    cpu_mc: (t, id) => vmCost('host_cpu_mc', t) + rest.cpu(t, id),
+    cpu_total_mc: HOST.cpus * 1000,
+    disk_used: (t, id) => vmCost('host_disk_alloc', t) + imagesAtRest() + rest.disk(t, id),
+    disk_total: HOST.disk,
+  });
+
+  // The menu bar's stack (commands::host_stack): the computer's use and size and each running VM's
+  // own cost, averaged over the same buckets; a stopped VM has no history.
+  const STACK_KEYS = { mem: ['mem_used', 'mem_total', 'host_rss'], cpu: ['cpu_mc', 'cpu_total_mc', 'host_cpu_mc'], disk: ['disk_used', 'disk_total', 'host_disk_alloc'] };
+  hostEntity = entity(hostMetrics());
+
+  function hostStack({ metric, from, to, points = 120 }) {
+    const [usedKey, totalKey, vmKey] = STACK_KEYS[metric];
+    const lo = Math.max(from, START);
+    const step = Math.max(60_000, (to - lo) / points);
+    const ts = [];
+    for (let t = lo; t + step <= to + 1; t += step) ts.push(Math.round(t));
+    const samples = (f, t) => [0, 1, 2, 3, 4].map((i) => f(t + (step * i) / 5));
+    const avg = (f) => ts.map((t) => Math.round(samples(f, t).reduce((a, b) => a + b, 0) / 5));
+    const host = metricsOf.get(hostEntity);
+    return {
+      ts,
+      used: avg(host[usedKey]),
+      total: avg(host[totalKey]),
+      vms: runningFleet().map((v) => {
+        const f = metricsOf.get(v.entity)[vmKey];
+        return { name: v.instance.name, avg: avg(f), peak: Math.round(Math.max(...ts.flatMap((t) => samples(f, t)))) };
+      }),
+    };
+  }
+
   function snapshot() {
     const t = Date.now();
     return {
@@ -230,22 +280,30 @@
         latest: v.entity ? latest(v.entity, t) : v.latest,
         containers: v.containers.map((c) => ({ ...c, latest: c.state === 'running' ? latest(c.entity, t) : {} })),
       })),
-      host: { cpus: 16, memory: 128 * GiB, disk: 994 * GiB },
+      host: HOST,
       limaProblem: null,
       updated: t,
       storeBytes: 412 * MiB,
       retention: { rawDays: 7, rollupDays: 365 },
       intervalSecs: settings.intervalSecs,
+      hostUse: { entity: hostEntity, latest: latest(hostEntity, t) },
     };
   }
 
   // As settings.rs: one of the intervals offered, or refused.
-  const settings = { intervalSecs: 1, theme: 'system' };
+  const settings = {
+    intervalSecs: 1, theme: 'system', menuBar: { memory: 'trace', cpu: 'trace', disk: 'bar', names: true }, keepRunning: true,
+  };
+  const copy = () => ({ ...settings, menuBar: { ...settings.menuBar } });
   function setSettings({ settings: s }) {
     if (![1, 2, 5, 10].includes(s.intervalSecs)) throw `${s.intervalSecs} s isn't one of the intervals offered (1 s, 2 s, 5 s, 10 s)`;
     if (!['system', 'light', 'dark'].includes(s.theme)) throw `unknown variant \`${s.theme}\``;
-    Object.assign(settings, s);
-    return { ...settings };
+    for (const k of ['memory', 'cpu', 'disk']) {
+      if (!['off', 'trace', 'bar', 'figure'].includes(s.menuBar?.[k])) throw `unknown variant \`${s.menuBar?.[k]}\``;
+    }
+    if (typeof s.menuBar.names !== 'boolean' || typeof s.keepRunning !== 'boolean') throw 'invalid type: expected a boolean';
+    Object.assign(settings, s, { menuBar: { ...s.menuBar } });
+    return copy();
   }
 
   // Each point's band: five sub-samples spread across the point's span, leaving out those taken
@@ -451,7 +509,7 @@
   const later = (value) => new Promise((resolve) => setTimeout(() => resolve(value), 150));
   const commands = {
     snapshot,
-    settings: () => ({ ...settings }),
+    settings: () => copy(),
     set_settings: (args) => later(setSettings(args)),
     // A test can set __fakeSeries to stand between the app and an answer: to change it, or have it
     // land late (a promise), so answers arrive out of order.
@@ -487,7 +545,13 @@
     images_prune: () => later({ removed: 1, reclaimed: 2.5 * GiB, errors: [] }),
     volume_remove: () => later(),
     volumes_prune: () => later({ removed: 1, reclaimed: 1260 * MiB, errors: [] }),
+    host_stack: (args) => hostStack(args),
+    // The window commands do nothing here; a test reads what was asked from __fakeCalls.
+    open_main: (args) => void calls.push({ cmd: 'open_main', args }),
+    quit: (args) => void calls.push({ cmd: 'quit', args }),
+    fit_popover: (args) => void calls.push({ cmd: 'fit_popover', args }),
   };
+  const calls = (window.__fakeCalls = []);
 
   window.__TAURI_INTERNALS__ = {
     invoke: async (cmd, args = {}) => {

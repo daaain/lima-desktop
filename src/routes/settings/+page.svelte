@@ -1,13 +1,21 @@
 <script lang="ts">
   // What can be chosen about the app itself: how often each running VM is measured (the backend
-  // and the polls follow at once), and the theme. settings.rs keeps both beside the history.
+  // and the polls follow at once), the theme, the menu bar's items and whether closing the window
+  // leaves the app recording. settings.rs keeps them beside the history.
   import { onMount } from 'svelte';
-  import { api, INTERVALS, THEMES, type Settings, type Theme } from '$lib/api';
+  import { api, INTERVALS, LOOKS, THEMES, type Look, type MenuBar, type Settings, type Theme } from '$lib/api';
   import { live } from '$lib/live.svelte';
   import { intervalPhrase } from '$lib/almanac';
   import { theme } from '$lib/theme.svelte';
 
   const THEME_LABELS: Record<Theme, string> = { system: 'System', light: 'Light', dark: 'Dark' };
+  const LOOK_LABELS: Record<Look, string> = { trace: 'Trace', bar: 'Bar', figure: 'Figure only', off: 'Off' };
+  const ITEMS: { key: 'memory' | 'cpu' | 'disk'; label: string }[] = [
+    { key: 'memory', label: 'Memory' },
+    { key: 'cpu', label: 'CPU' },
+    { key: 'disk', label: 'Disk' },
+  ];
+  const menuBar = (change: Partial<MenuBar>) => save({ menuBar: { ...settings!.menuBar, ...change } });
 
   let settings = $state<Settings | null>(null);
   let saving = $state(false);
@@ -69,6 +77,44 @@
     </div>
     <p class="note">System is light or dark as this computer is, and follows it when it changes.</p>
   </section>
+
+  <section class="panel">
+    <h2 class="head">In the menu bar</h2>
+    <div class="items">
+      {#each ITEMS as item (item.key)}
+        <div class="item">
+          <span class="serif name">{item.label}</span>
+          <div class="choices" role="group" aria-label="{item.label} in the menu bar">
+            {#each LOOKS as look}
+              <button class="choice small" class:active={settings.menuBar[item.key] === look} aria-pressed={settings.menuBar[item.key] === look}
+                disabled={saving} onclick={() => settings!.menuBar[item.key] !== look && menuBar({ [item.key]: look })}>{LOOK_LABELS[look]}</button>
+            {/each}
+          </div>
+        </div>
+      {/each}
+    </div>
+    <label class="check">
+      <input type="checkbox" checked={settings.menuBar.names} disabled={saving} onchange={(e) => menuBar({ names: e.currentTarget.checked })} />
+      Name each one (“mem”, “cpu”, “disk”)
+    </label>
+    <p class="note">
+      Each item is the whole computer's memory, CPU or disk in use, as a figure, with the VMs' part drawn solid and
+      everything else pale. A trace draws it moving over time, a bar as it is now. Clicking one opens the VMs' part over time.
+      With all three off, the app's own icon stays in the menu bar as the way back in.
+    </p>
+  </section>
+
+  <section class="panel">
+    <h2 class="head">When the window is closed</h2>
+    <label class="check">
+      <input type="checkbox" checked={settings.keepRunning} disabled={saving} onchange={(e) => save({ keepRunning: e.currentTarget.checked })} />
+      Keep recording, in the menu bar
+    </label>
+    <p class="note">
+      Otherwise closing the window quits the app, and nothing is measured until it opens again. Quit (⌘Q, or Quit in
+      the menu bar's popover) always stops the recording.
+    </p>
+  </section>
   {#if error}<p class="error">{error}</p>{/if}
 {/if}
 
@@ -76,5 +122,14 @@
   .panel { display: grid; gap: 0.9rem; justify-items: start; }
   .choices { display: flex; gap: 0.3rem; flex-wrap: wrap; }
   .choice { min-width: 3.4rem; }
+  .items { display: grid; width: 100%; max-width: 46rem; }
+  .item {
+    display: flex; align-items: center; justify-content: space-between; gap: 0.6rem 1rem; flex-wrap: wrap;
+    padding: 0.5rem 0; border-bottom: 1px solid var(--border);
+  }
+  .item .name { font-size: 1.25rem; font-weight: 500; }
+  .choice.small { height: 2rem; padding: 0 0.85rem; font-size: 0.85rem; }
+  .check { display: inline-flex; align-items: center; gap: 0.5rem; font-size: 0.95rem; cursor: pointer; }
+  .check input { accent-color: var(--fg); width: 15px; height: 15px; margin: 0; }
   .note { max-width: 46rem; }
 </style>

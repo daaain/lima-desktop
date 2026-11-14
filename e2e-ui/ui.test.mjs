@@ -187,7 +187,99 @@ for (const dark of [false, true]) {
     assert.deepEqual(errors, []);
     await close();
   });
+
+  test(`Menu bar popover${suffix}`, async () => {
+    // As the backend opens it: a window 360 px wide, under the memory item.
+    const { page, errors, close } = await open('/menubar?tab=mem', { dark, width: 360, height: 560 });
+    await page.locator('.legend .row[data-vm]').first().waitFor();
+    // Only the page: none of the main window's chrome.
+    assert.equal(await page.getByRole('link', { name: 'Settings' }).count(), 0);
+    assert.equal(await page.getByRole('tab', { name: 'Memory' }).getAttribute('aria-selected'), 'true');
+    assert.match(await page.locator('.big').innerText(), /^\d+ %$/);
+    assert.match(await page.locator('.of').innerText(), /^of this computer's 128\.0 GiB in use: the VMs \d+\.\d GiB, everything else \d+\.\d GiB$/);
+    // A row per running VM, the largest first, each with its peak over the range it opens on.
+    assert.deepEqual(await page.locator('.legend .row[data-vm] .name').allInnerTexts(), ['atlas', 'harbor', 'quill', 'lantern', 'ember']);
+    await page.waitForFunction(() => /peak \d+\.\d GiB in 1 h/.test(document.querySelector('.legend').innerText));
+    assert.equal(await page.getByRole('group', { name: 'Over the last' }).getByRole('button', { name: '1 h' }).getAttribute('aria-pressed'), 'true');
+    // ember has stopped answering.
+    assert.match(await page.locator('.row[data-vm="ember"] .name').getAttribute('class'), /\bhot\b/);
+    assert.match(await page.locator('.legend').innerText(), /everything else[\s\S]*free/);
+    assert.equal(await page.locator('svg path.band.vm').count(), 5);
+    assert.match(await page.locator('footer').innerText(), /Recording every 1 s/);
+    // The window is asked to fit the page.
+    await page.waitForFunction(() => window.__fakeCalls.some((c) => c.cmd === 'fit_popover' && c.args.height > 200));
+    await shoot(page, `menubar${suffix}`);
+    assert.deepEqual(errors, []);
+    await close();
+  });
 }
+
+test('The popover opens on the tab asked for, switches tabs and keeps each one\'s range', async () => {
+  const { page, errors, close } = await open('/menubar?tab=disk', { width: 360, height: 560 });
+  const tab = (name) => page.getByRole('tab', { name });
+  const range = (name) => page.getByRole('group', { name: 'Over the last' }).getByRole('button', { name });
+  await page.locator('.legend .row[data-vm]').first().waitFor();
+  assert.equal(await tab('Disk').getAttribute('aria-selected'), 'true');
+  assert.equal(await range('7 days').getAttribute('aria-pressed'), 'true');
+  // Past three quarters of the disk: the figure warns.
+  assert.match(await page.locator('.big').getAttribute('class'), /\bhot\b/);
+  // A stopped VM's disk image counts, drawn at its size now.
+  const foundry = page.locator('.row[data-vm="foundry"]');
+  assert.match(await foundry.innerText(), /61\.0 GiB\s+not running/);
+  await page.waitForFunction(() => /grew [\d.]+ GiB in 7 days/.test(document.querySelector('.row[data-vm="quill"]').innerText));
+  assert.equal(await page.locator('svg path.band.vm').count(), 9);
+
+  await range('30 days').click();
+  await page.waitForFunction(() => /in 30 days/.test(document.querySelector('.row[data-vm="quill"]').innerText));
+  await tab('CPU').click();
+  assert.equal(await tab('CPU').getAttribute('aria-selected'), 'true');
+  assert.match(await page.locator('.of').innerText(), /^of this computer's 16 cores in use: the VMs \d+\.\d cores, everything else \d+\.\d cores$/);
+  assert.equal(await range('1 h').getAttribute('aria-pressed'), 'true');
+  await range('6 h').click();
+  await page.waitForFunction(() => /peak [\d.]+ cores in 6 h/.test(document.querySelector('.legend').innerText));
+  // Hovering a VM's row brings its band forward.
+  await page.locator('.row[data-vm="harbor"]').hover();
+  assert.equal(await page.locator('svg path.band.vm.hl').count(), 1);
+
+  // Each tab's range is kept for next time.
+  await page.reload();
+  await tab('Disk').waitFor();
+  assert.equal(await range('30 days').getAttribute('aria-pressed'), 'true');
+  await tab('CPU').click();
+  assert.equal(await range('6 h').getAttribute('aria-pressed'), 'true');
+
+  await page.getByRole('button', { name: 'Open Lima Desktop' }).click();
+  await page.getByRole('button', { name: 'Quit' }).click();
+  const calls = await page.evaluate(() => window.__fakeCalls.map((c) => c.cmd).filter((c) => c !== 'fit_popover'));
+  assert.deepEqual(calls, ['open_main', 'quit']);
+  assert.deepEqual(errors, []);
+  await close();
+});
+
+test('Settings chooses how each menu bar item looks, and whether closing the window keeps recording', async () => {
+  const { page, errors, close } = await open('/settings');
+  const stored = () => page.evaluate(() => window.__TAURI_INTERNALS__.invoke('settings'));
+  const memory = page.getByRole('group', { name: 'Memory in the menu bar' });
+  await memory.waitFor();
+  assert.equal(await memory.getByRole('button', { name: 'Trace' }).getAttribute('aria-pressed'), 'true');
+  assert.equal(await page.getByRole('group', { name: 'Disk in the menu bar' }).getByRole('button', { name: 'Bar' }).getAttribute('aria-pressed'), 'true');
+  await memory.getByRole('button', { name: 'Figure only' }).click();
+  await page.waitForFunction(() => document.querySelector('[aria-label="Memory in the menu bar"] [aria-pressed="true"]')?.textContent === 'Figure only');
+  assert.deepEqual((await stored()).menuBar, { memory: 'figure', cpu: 'trace', disk: 'bar', names: true });
+
+  const names = page.getByRole('checkbox', { name: /Name each one/ });
+  assert.equal(await names.isChecked(), true);
+  await names.click();
+  await page.waitForFunction(async () => !(await window.__TAURI_INTERNALS__.invoke('settings')).menuBar.names);
+
+  const keep = page.getByRole('checkbox', { name: 'Keep recording, in the menu bar' });
+  assert.equal(await keep.isChecked(), true);
+  await keep.click();
+  await page.waitForFunction(async () => !(await window.__TAURI_INTERNALS__.invoke('settings')).keepRunning);
+  assert.equal(await keep.isChecked(), false);
+  assert.deepEqual(errors, []);
+  await close();
+});
 
 test('A VM that has stopped responding says so on the overview and on its page', async () => {
   const { page, errors, close } = await open('/');

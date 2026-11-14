@@ -162,7 +162,29 @@ under the sentence, figures and bar it explains, with the allocation as a dashed
   The page always shows its scrollbar (disabled when there's nothing to scroll), so going from a
   short page to a long one doesn't shift everything sideways.
 - **Settings**: the headline says how often each running VM is measured; the choices (1, 2, 5,
-  10 s) and what a slower one costs and saves; then the theme: System, Light or Dark.
+  10 s) and what a slower one costs and saves; then the theme: System, Light or Dark; then what is
+  in the menu bar (Memory, CPU and Disk, each as a Trace, a Bar, its Figure only, or Off, and
+  whether each is named "mem", "cpu", "disk"); then whether closing the window keeps recording, in
+  the menu bar. Each choice is saved as it's made.
+- **The menu bar's popover** (`routes/menubar`, a borderless window of its own that the backend
+  opens under the item clicked, at `?tab=mem|cpu|disk`): only the page, none of the main window's
+  chrome, and no card or shadow of its own; it fills the window, which it asks the backend to fit
+  to its height (`fit_popover`). Tabs for Memory, CPU and Disk; the whole computer's use now as
+  the big figure ("70 %", in `--warn` past three quarters) and under it what it is of ("of this
+  computer's 64.0 GiB in use: the VMs 35.0 GiB, everything else 9.8 GiB"); its own range picker
+  (15 min to 24 h for memory and CPU, opening on 1 h; 24 h to 30 days for the disk, opening on 7
+  days; each tab's kept in the webview's storage), not the app's range, as it answers a different
+  question. Then the range as a stacked area: a band per VM, the largest now at the bottom, in
+  shades of `--bar` (of `--warn` when the computer is past three quarters); everything else
+  hatched above them; the computer's total is the top. A gap is where the computer wasn't
+  measured. A stopped VM's disk image has no history, so it's drawn at its size now throughout,
+  and a disk's gaps hold its nearest reading. The legend is the list: each VM's name (in `--warn`
+  while it isn't answering), its figure now and, in grey, its peak in the range ("peak 16.6 GiB in
+  1 h"), or for a disk, which only grows between clean-ups, what it grew ("grew 4.2 GiB in 7
+  days"); then everything else and what's free. Hovering a row brings its band forward. It polls
+  at the measuring interval while it's shown, and fetches the stack as a tab or range is chosen,
+  then as the history views do (`ranges.historyRefreshMs`) for a range up to 6 h. Its words and
+  geometry are `lib/menubar.ts`.
 - **A VM**: the headline verdict; four figures (Memory, CPU, Pressure, Disk), each a verdict
   sentence, three numbers, a bar and its chart; the resize sentence; "Out of memory" when there
   is anything to list: OOM kills, and stalls, where the VM stopped responding without the kernel
