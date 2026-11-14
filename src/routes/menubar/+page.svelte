@@ -1,17 +1,21 @@
 <script lang="ts">
-  // The menu bar's popover, a window of its own (opened by the backend under the item clicked, at
-  // ?tab=mem|cpu|disk): the whole computer's memory, CPU or disk now, the VMs' part of it and
-  // everything else, then the same stacked over a range, and a legend that is the list of VMs.
-  // What it says and draws comes from lib/menubar.ts. While the window is hidden it fetches nothing;
-  // shown again, it fetches at once.
+  // The menu bar's popover, a window of its own: the whole computer's memory, CPU or disk now, the
+  // VMs' part of it and everything else, then the same stacked over a range, and a legend that is
+  // the list of VMs. What it says and draws comes from lib/menubar.ts. The backend builds the window
+  // once, at ?tab=mem|cpu|disk, and from then on hides it and shows it again under the item clicked,
+  // saying which tab with an event, so the page isn't loaded again. While the window is hidden it
+  // fetches nothing; shown again, it fetches at once.
+  import { onMount } from 'svelte';
+  import { listen } from '@tauri-apps/api/event';
   import { page } from '$app/state';
-  import { api, type Snapshot, type Stack } from '$lib/api';
+  import { api, type Snapshot, type Stack, type Theme } from '$lib/api';
   import { inOrder } from '$lib/inOrder';
   import {
     agoLabel, amount, chartLabel, layerAside, layerFigure, layers, ofSentence, parseTab, parseTabRange, percentFigure, rangeLabel,
     recordingPhrase, shares, stackChart, stalledTip, SHADES, STACK_POINTS, TAB_RANGES, TABS, type Tab,
   } from '$lib/menubar';
   import { followsLive, historyRefreshMs, rangeMs, type RangeKey } from '$lib/ranges';
+  import { theme } from '$lib/theme.svelte';
 
   const HEIGHT = 130;
   const rangeKey = (t: Tab) => `menubar-range-${t}`;
@@ -24,10 +28,14 @@
   }
 
   let tab = $state<Tab>(parseTab(page.url.searchParams.get('tab')));
-  // Opened again at another item's tab (the same window, a new ?tab=), that one shows.
-  const asked = $derived(parseTab(page.url.searchParams.get('tab')));
-  $effect(() => {
-    tab = asked;
+  // Shown again under another item (menubar.rs): its tab, and the theme, which Settings may have
+  // changed while the popover was hidden.
+  onMount(() => {
+    const stop = listen<{ tab: string; theme: Theme }>('popover-shown', (e) => {
+      tab = parseTab(e.payload.tab);
+      theme.apply(e.payload.theme);
+    });
+    return () => void stop.then((f) => f(), () => {});
   });
   let over = $state<Record<Tab, RangeKey>>({ mem: remembered('mem'), cpu: remembered('cpu'), disk: remembered('disk') });
   function choose(k: RangeKey) {

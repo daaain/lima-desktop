@@ -565,10 +565,33 @@
   };
   const calls = (window.__fakeCalls = []);
 
+  // Events from the backend, as Tauri's event plugin delivers them: what the page listens for, and
+  // `__fakeEmit(event, payload)` for a test to send one (as the backend does the popover's tab).
+  const callbacks = new Map();
+  const listeners = new Map(); // id → { event, handler }
+  let nextId = 1;
+  Object.assign(commands, {
+    'plugin:event|listen': ({ event, handler }) => {
+      const id = nextId++;
+      listeners.set(id, { event, handler });
+      return id;
+    },
+    'plugin:event|unlisten': ({ eventId }) => void listeners.delete(eventId),
+  });
+  window.__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener: (_event, id) => listeners.delete(id) };
+  window.__fakeEmit = (event, payload) => {
+    for (const [id, l] of listeners) if (l.event === event) callbacks.get(l.handler)?.({ event, id, payload });
+  };
+
   window.__TAURI_INTERNALS__ = {
     invoke: async (cmd, args = {}) => {
       if (!(cmd in commands)) throw new Error(`fake backend: no command '${cmd}'`);
       return commands[cmd](args);
+    },
+    transformCallback: (callback) => {
+      const id = nextId++;
+      callbacks.set(id, callback);
+      return id;
     },
   };
 })();

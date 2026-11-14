@@ -33,3 +33,16 @@ describe('inline styles', () => {
     expect(computesCalc('<span class="fill" style:width={`${clamp(pct)}%`}></span>')).toBe(false);
   });
 });
+
+describe('the first paint', () => {
+  // app.html paints the page's background before the app's styles arrive with its script, or a
+  // window opened in the dark would flash white: its colours have to be the theme's --bg.
+  const html = (import.meta.glob<string>('../app.html', { query: '?raw', import: 'default', eager: true }) as Record<string, string>)['../app.html'];
+  const layout = components['../routes/+layout.svelte'];
+  it("is in the theme's own background, light and dark", () => {
+    const tokens = [...new Set([...layout.matchAll(/--bg: (#[0-9a-f]+)/g)].map((m) => m[1]))];
+    const painted = [...new Set([...html.matchAll(/background: (#[0-9a-f]+)/g)].map((m) => m[1]))];
+    expect(tokens).toHaveLength(2);
+    expect(painted).toEqual(tokens);
+  });
+});

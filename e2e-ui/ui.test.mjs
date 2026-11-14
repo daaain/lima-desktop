@@ -13,7 +13,8 @@ import { chromium } from 'playwright';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const shots = resolve(root, process.env.LD_SCREENSHOT_DIR ?? '.snapshots/ui');
-const PORT = 4173;
+// Another port where something else already serves on 4173 (another worktree's run), or the test would load that.
+const PORT = Number(process.env.LD_UI_PORT ?? 4173);
 const base = `http://127.0.0.1:${PORT}`;
 // A fixed moment, so the invented history (a function of time) draws the same picture every run.
 const NOW = new Date('2026-11-10T14:30:00Z');
@@ -23,6 +24,7 @@ let browser;
 
 before(async () => {
   await mkdir(shots, { recursive: true });
+  if (await fetch(base).then((r) => r.ok, () => false)) throw new Error(`something already serves ${base}: set LD_UI_PORT to another port`);
   server = spawn('pnpm', ['exec', 'vite', 'preview', '--port', String(PORT), '--strictPort', '--host', '127.0.0.1'], { cwd: root, stdio: 'pipe' });
   let log = '';
   server.stdout.on('data', (d) => (log += d));
@@ -252,6 +254,44 @@ test('The popover opens on the tab asked for, switches tabs and keeps each one\'
   await page.getByRole('button', { name: 'Quit' }).click();
   const calls = await page.evaluate(() => window.__fakeCalls.map((c) => c.cmd).filter((c) => c !== 'fit_popover'));
   assert.deepEqual(calls, ['open_main', 'quit']);
+  assert.deepEqual(errors, []);
+  await close();
+});
+
+test('The popover is told its tab when shown again, and fetches nothing while hidden', async () => {
+  // Every fetch the page makes.
+  const count = () => {
+    const invoke = window.__TAURI_INTERNALS__.invoke;
+    window.__asked = [];
+    window.__TAURI_INTERNALS__.invoke = (cmd, args) => {
+      if (cmd === 'host_stack' || cmd === 'snapshot') window.__asked.push({ cmd, args });
+      return invoke(cmd, args);
+    };
+  };
+  const { page, errors, close } = await open('/menubar?tab=mem', { width: 360, height: 560, init: count });
+  const tab = (name) => page.getByRole('tab', { name });
+  await page.locator('.legend .row[data-vm]').first().waitFor();
+
+  // Shown again under the CPU item, with Settings now dark: the same page, on that tab.
+  await page.evaluate(() => window.__fakeEmit('popover-shown', { tab: 'cpu', theme: 'dark' }));
+  await page.waitForFunction(() => document.querySelector('[role=tab][aria-selected=true]')?.textContent === 'CPU');
+  assert.equal(await page.evaluate(() => document.documentElement.dataset.theme), 'dark');
+
+  // Hidden, it fetches nothing; shown again, it fetches at once.
+  const asked = () => page.evaluate(() => window.__asked.length);
+  const visibility = (state) =>
+    page.evaluate((s) => {
+      Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => s });
+      document.dispatchEvent(new Event('visibilitychange'));
+    }, state);
+  await visibility('hidden');
+  await page.waitForTimeout(300);
+  const hidden = await asked();
+  await page.waitForTimeout(2500);
+  assert.equal(await asked(), hidden);
+  await visibility('visible');
+  await page.waitForFunction((n) => window.__asked.length >= n + 2, hidden);
+  assert.equal(await tab('CPU').getAttribute('aria-selected'), 'true');
   assert.deepEqual(errors, []);
   await close();
 });

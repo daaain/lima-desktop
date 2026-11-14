@@ -5,6 +5,18 @@
     <link rel="icon" href="%sveltekit.assets%/favicon.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Lima Desktop</title>
+    <meta name="color-scheme" content="light dark" />
+    <style>
+      /* The page's background before the app's own styles arrive with its script, so a window
+         opened in the dark (the menu bar's popover, most often) never shows white first. The same
+         colours as --bg in routes/+layout.svelte. */
+      html { background: #ffffff; }
+      @media (prefers-color-scheme: dark) {
+        html:not([data-theme='light']) { background: #111418; color-scheme: dark; }
+      }
+      html[data-theme='dark'] { background: #111418; color-scheme: dark; }
+      html[data-theme='light'] { color-scheme: light; }
+    </style>
     <script>
       // The theme chosen in Settings, before the first paint (lib/theme.svelte.ts keeps it here).
       try {

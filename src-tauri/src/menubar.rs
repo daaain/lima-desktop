@@ -467,12 +467,49 @@ pub fn glyph() -> Icon {
 
 // ---- in the app ---------------------------------------------------------------------------------
 
-/// Which tab the popover is open on, and when it last closed (on which): a click on an item first
-/// takes the focus from the popover, closing it, and mustn't then open it again.
-#[derive(Default, Clone, Copy)]
+/// Which tab the popover is open on, and when it was last hidden (on which): a click on an item
+/// first takes the focus from the popover, hiding it, and mustn't then show it again.
+#[derive(Debug, Default, Clone, Copy, PartialEq)]
 struct Popover {
     open_on: Option<Res>,
     closed: Option<(Res, Instant)>,
+}
+
+/// How soon after the popover was hidden a click on the same item is the one that hid it.
+const CLICK_HID_IT: Duration = Duration::from_millis(400);
+
+/// What a click on an item does to the popover.
+#[derive(Debug, PartialEq, Eq)]
+enum Click {
+    /// Under the item, on its tab: shown, or moved there from another item.
+    Show,
+    Hide,
+    /// It was this click that took the focus away and hid it: it stays hidden.
+    Nothing,
+}
+
+impl Popover {
+    /// A click on `res`'s item, the popover on screen or not: a second click on the same item
+    /// hides it.
+    fn click(self, res: Res, shown: bool, now: Instant) -> Click {
+        let just_hidden = self
+            .closed
+            .is_some_and(|(r, t)| r == res && now.saturating_duration_since(t) < CLICK_HID_IT);
+        match (shown, self.open_on == Some(res)) {
+            (true, true) => Click::Hide,
+            (true, false) => Click::Show,
+            (false, _) if just_hidden => Click::Nothing,
+            (false, _) => Click::Show,
+        }
+    }
+
+    /// Hidden now; when, and on which item, if it was showing.
+    fn hidden(self, now: Instant) -> Popover {
+        Popover {
+            open_on: None,
+            closed: self.open_on.map(|r| (r, now)).or(self.closed),
+        }
+    }
 }
 
 /// The menu bar's own state: each resource's recent shares, what each item shows, and the popover.
@@ -684,19 +721,81 @@ fn appearance(_: &tauri::tray::TrayIcon) -> Bar {
     Bar::default()
 }
 
-/// Opens the popover under the item clicked, on its tab; a second click on the same item closes it.
+/// Shows the popover under the item clicked, on its tab; a second click on the same item hides it.
+/// The window is built once and then only hidden and shown again, so its page isn't loaded again
+/// each time (in the dark, a new window flashed white first).
 fn toggle_popover(app: &AppHandle, res: Res, rect: tauri::Rect) {
     let state = app.state::<State>();
-    let Popover { open_on, closed } = *state.popover.lock().expect("popover lock");
-    if let Some(w) = app.get_webview_window(POPOVER) {
-        let _ = w.close();
-        if open_on == Some(res) {
-            return;
+    let window = app.get_webview_window(POPOVER);
+    let shown = window
+        .as_ref()
+        .is_some_and(|w| w.is_visible().unwrap_or(false));
+    let popover = *state.popover.lock().expect("popover lock");
+    match popover.click(res, shown, Instant::now()) {
+        Click::Nothing => {}
+        Click::Hide => hide_popover(app),
+        Click::Show => {
+            let w = match window.map_or_else(|| build_popover(app, res), Ok) {
+                Ok(w) => w,
+                Err(e) => {
+                    log::warn!("can't open the menu bar's popover: {e}");
+                    return;
+                }
+            };
+            show_popover(app, &w, res, rect);
         }
-    } else if closed.is_some_and(|(r, t)| r == res && t.elapsed() < Duration::from_millis(400)) {
-        // This click is what took the focus away and closed it.
-        return;
     }
+}
+
+/// The popover's window, hidden until it's put under an item. Its page opens on `res`'s tab; it's
+/// told another tab with an event each time it's shown.
+fn build_popover(app: &AppHandle, res: Res) -> tauri::Result<tauri::WebviewWindow> {
+    let theme = app.state::<Saved>().get().theme.native();
+    let url = WebviewUrl::App(format!("menubar?tab={}", res.id()).into());
+    let w = WebviewWindowBuilder::new(app, POPOVER, url)
+        .title("Lima Desktop")
+        .inner_size(POPOVER_WIDTH, 560.0)
+        .decorations(false)
+        .resizable(false)
+        .always_on_top(true)
+        .skip_taskbar(true)
+        .shadow(true)
+        .visible(false)
+        .theme(theme)
+        // Until the page paints, in the theme's background (the page's --bg), not white. The system's
+        // light or dark is only known once there's a window: `show_popover` sets it again.
+        .background_color(background(theme.unwrap_or(tauri::Theme::Light)))
+        .build()?;
+    let handle = app.clone();
+    w.on_window_event(move |e| {
+        if let tauri::WindowEvent::Focused(false) = e {
+            hide_popover(&handle);
+        }
+    });
+    Ok(w)
+}
+
+/// The page's background (`--bg` in routes/+layout.svelte), light or dark.
+fn background(theme: tauri::Theme) -> tauri::window::Color {
+    match theme {
+        tauri::Theme::Dark => tauri::window::Color(0x11, 0x14, 0x18, 0xff),
+        _ => tauri::window::Color(0xff, 0xff, 0xff, 0xff),
+    }
+}
+
+/// What the popover's page is told as it's shown: which tab, and the theme Settings has now.
+#[derive(Clone, serde::Serialize)]
+struct PopoverShown {
+    tab: &'static str,
+    theme: crate::settings::Theme,
+}
+
+/// Puts the popover under the item at `rect`, on `res`'s tab, and gives it the focus: losing it
+/// hides the popover again, and WebKit follows the pointer (for hover) only in the key window of
+/// the active app. `set_focus` makes it key and asks for the app to be activated; macOS may say no
+/// to an activation that doesn't follow the person's own click.
+fn show_popover(app: &AppHandle, w: &tauri::WebviewWindow, res: Res, rect: tauri::Rect) {
+    use tauri::Emitter as _;
     let scale = app
         .primary_monitor()
         .ok()
@@ -706,37 +805,35 @@ fn toggle_popover(app: &AppHandle, res: Res, rect: tauri::Rect) {
     let size = rect.size.to_logical::<f64>(scale);
     let x = pos.x + size.width / 2.0 - POPOVER_WIDTH / 2.0;
     let y = pos.y + size.height + 4.0;
-    let theme = app.state::<Saved>().get().theme.native();
-    let url = WebviewUrl::App(format!("menubar?tab={}", res.id()).into());
-    let built = WebviewWindowBuilder::new(app, POPOVER, url)
-        .title("Lima Desktop")
-        .inner_size(POPOVER_WIDTH, 560.0)
-        .position(x.max(0.0), y)
-        .decorations(false)
-        .resizable(false)
-        .always_on_top(true)
-        .skip_taskbar(true)
-        .shadow(true)
-        .focused(true)
-        .theme(theme)
-        .build();
-    match built {
-        Ok(w) => {
-            state.popover.lock().expect("popover lock").open_on = Some(res);
-            let app = app.clone();
-            w.on_window_event(move |e| {
-                if let tauri::WindowEvent::Focused(false) = e {
-                    if let Some(w) = app.get_webview_window(POPOVER) {
-                        let _ = w.close();
-                    }
-                    let state = app.state::<State>();
-                    let mut p = state.popover.lock().expect("popover lock");
-                    *p = Popover { open_on: None, closed: Some((res, Instant::now())) };
-                }
-            });
-        }
-        Err(e) => log::warn!("can't open the menu bar's popover: {e}"),
+    let _ = w.set_position(tauri::LogicalPosition::new(x.max(0.0), y));
+    if let Ok(t) = w.theme() {
+        let _ = w.set_background_color(Some(background(t)));
     }
+    let shown = PopoverShown {
+        tab: res.id(),
+        theme: app.state::<Saved>().get().theme,
+    };
+    if let Err(e) = w.emit_to(POPOVER, "popover-shown", shown) {
+        log::warn!("can't tell the popover its tab: {e}");
+    }
+    // Before it's shown: should it lose the focus at once, it's hidden as open on this item.
+    app.state::<State>()
+        .popover
+        .lock()
+        .expect("popover lock")
+        .open_on = Some(res);
+    let _ = w.show();
+    let _ = w.set_focus();
+}
+
+/// Hides the popover (its page stops fetching while it's hidden), remembering on which item.
+fn hide_popover(app: &AppHandle) {
+    if let Some(w) = app.get_webview_window(POPOVER) {
+        let _ = w.hide();
+    }
+    let state = app.state::<State>();
+    let mut p = state.popover.lock().expect("popover lock");
+    *p = p.hidden(Instant::now());
 }
 
 /// Sizes the popover to its page (which knows how tall it came out).
@@ -913,6 +1010,29 @@ mod tests {
         assert_eq!(&px(&trace(&[hot]), 0, 0)[..3], &HOT);
         assert_eq!(&px(&bar(hot), 0, 0)[..3], &HOT);
         assert_eq!(&trace(&[Share { whole: 0.7, vms: 0.5 }]).rgba[..3], &INK);
+    }
+
+    #[test]
+    fn a_click_shows_the_popover_and_a_second_on_the_same_item_hides_it() {
+        let t = Instant::now();
+        let none = Popover::default();
+        assert_eq!(none.click(Res::Mem, false, t), Click::Show);
+        let on_mem = Popover { open_on: Some(Res::Mem), closed: None };
+        assert_eq!(on_mem.click(Res::Mem, true, t), Click::Hide);
+        // Another item's click moves it there, on that tab.
+        assert_eq!(on_mem.click(Res::Cpu, true, t), Click::Show);
+    }
+
+    #[test]
+    fn the_click_that_took_the_focus_away_leaves_it_hidden() {
+        let t = Instant::now();
+        let hidden = Popover { open_on: Some(Res::Mem), closed: None }.hidden(t);
+        assert_eq!(hidden, Popover { open_on: None, closed: Some((Res::Mem, t)) });
+        assert_eq!(hidden.click(Res::Mem, false, t + Duration::from_millis(50)), Click::Nothing);
+        assert_eq!(hidden.click(Res::Cpu, false, t + Duration::from_millis(50)), Click::Show);
+        assert_eq!(hidden.click(Res::Mem, false, t + CLICK_HID_IT), Click::Show);
+        // Hidden again while hidden (it loses the focus as it's hidden): still the first time.
+        assert_eq!(hidden.hidden(t + Duration::from_secs(1)), hidden);
     }
 
     #[test]
