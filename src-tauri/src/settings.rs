@@ -30,6 +30,40 @@ impl Theme {
     }
 }
 
+/// How one of the menu bar's items shows: not at all, as a moving trace, as an upright bar, or
+/// as its figure alone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Look {
+    Off,
+    Trace,
+    Bar,
+    Figure,
+}
+
+/// The menu bar's items, one per resource: the whole computer's use as a figure, the VMs' part
+/// drawn solid. With all three off the app's own icon stays, as the way back in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct MenuBar {
+    pub memory: Look,
+    pub cpu: Look,
+    pub disk: Look,
+    /// "mem", "cpu", "disk" before each figure.
+    pub names: bool,
+}
+
+impl Default for MenuBar {
+    fn default() -> Self {
+        MenuBar {
+            memory: Look::Trace,
+            cpu: Look::Trace,
+            disk: Look::Bar,
+            names: true,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Settings {
@@ -37,6 +71,9 @@ pub struct Settings {
     /// the UI's polls of them.
     pub interval_secs: u64,
     pub theme: Theme,
+    pub menu_bar: MenuBar,
+    /// Closing the window leaves the app recording, in the menu bar; Quit stops it.
+    pub keep_running: bool,
 }
 
 impl Default for Settings {
@@ -44,6 +81,8 @@ impl Default for Settings {
         Settings {
             interval_secs: 1,
             theme: Theme::System,
+            menu_bar: MenuBar::default(),
+            keep_running: true,
         }
     }
 }
@@ -148,9 +187,18 @@ mod tests {
             Settings::load(&d.join("v1.json")),
             Settings {
                 interval_secs: 10,
-                theme: Theme::System
+                ..Settings::default()
             }
         );
+        // From before the menu bar: it gets the default items, and keeps running when closed.
+        std::fs::write(d.join("v2.json"), r#"{"intervalSecs": 5, "theme": "dark"}"#).unwrap();
+        let v2 = Settings::load(&d.join("v2.json"));
+        assert_eq!((v2.interval_secs, v2.theme), (5, Theme::Dark));
+        assert_eq!(v2.menu_bar, MenuBar::default());
+        assert!(v2.keep_running);
+        // An item that isn't offered is refused as a whole, like any other value.
+        std::fs::write(d.join("look.json"), r#"{"menuBar": {"memory": "pie"}}"#).unwrap();
+        assert_eq!(Settings::load(&d.join("look.json")), Settings::default());
         std::fs::write(
             d.join("theme.json"),
             r#"{"intervalSecs": 1, "theme": "sepia"}"#,
@@ -164,15 +212,15 @@ mod tests {
         let d = dir();
         let saved = Saved::load(d.join("settings.json"));
         assert_eq!(saved.get().interval_secs, 1);
-        saved
-            .set(Settings {
-                interval_secs: 5,
-                theme: Theme::Dark,
-            })
-            .unwrap();
+        let chosen = Settings {
+            interval_secs: 5,
+            theme: Theme::Dark,
+            menu_bar: MenuBar { memory: Look::Bar, cpu: Look::Off, disk: Look::Figure, names: false },
+            keep_running: false,
+        };
+        saved.set(chosen).unwrap();
         assert_eq!(saved.get().interval_secs, 5);
-        let again = Saved::load(d.join("settings.json")).get();
-        assert_eq!((again.interval_secs, again.theme), (5, Theme::Dark));
+        assert_eq!(Saved::load(d.join("settings.json")).get(), chosen);
     }
 
     #[test]

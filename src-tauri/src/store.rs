@@ -292,6 +292,35 @@ pub struct Series {
     pub metrics: HashMap<String, Band>,
 }
 
+/// One of the computer's resources over a range, for the menu bar's stacked chart: the whole
+/// computer's use and size, and each VM's own part, all on the computer's buckets (`ts`, bucket
+/// starts). Values are bucket averages; `None` where nothing was measured.
+#[derive(Debug, Default, Serialize)]
+pub struct Stack {
+    pub ts: Vec<i64>,
+    pub used: Vec<Option<i64>>,
+    pub total: Vec<Option<i64>>,
+    pub vms: Vec<StackVm>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct StackVm {
+    pub name: String,
+    pub avg: Vec<Option<i64>>,
+    /// The most it reached in the range.
+    pub peak: Option<i64>,
+}
+
+/// For a resource of a stack: the computer's used and total columns, and a VM's own part.
+pub fn stack_columns(metric: &str) -> Option<(&'static str, &'static str, &'static str)> {
+    match metric {
+        "mem" => Some(("mem_used", "mem_total", "host_rss")),
+        "cpu" => Some(("cpu_mc", "cpu_total_mc", "host_cpu_mc")),
+        "disk" => Some(("disk_used", "disk_total", "host_disk_alloc")),
+        _ => None,
+    }
+}
+
 #[derive(Debug, Default, Serialize)]
 pub struct Band {
     pub min: Vec<Option<i64>>,
@@ -621,6 +650,58 @@ impl Store {
 
     /// Chart data for `entity` in [from, to], at most `points` buckets. Raw samples for spans up
     /// to 6 h, minute rollups beyond; a bucket keeps the min, max and average of what fell in it.
+    /// `metric` ("mem", "cpu" or "disk") over [from, to]: the computer's use and size, and the part
+    /// of every VM measured in the range, on the computer's buckets. Empty before the computer
+    /// has been measured.
+    pub fn stack(
+        &mut self,
+        metric: &str,
+        from: i64,
+        to: i64,
+        points: usize,
+    ) -> rusqlite::Result<Stack> {
+        let Some((used, total, part)) = stack_columns(metric) else {
+            return Ok(Stack::default());
+        };
+        let host: Option<i64> = self
+            .db
+            .query_row("SELECT id FROM entity WHERE kind='host' LIMIT 1", [], |r| r.get(0))
+            .optional()?;
+        let Some(host) = host else {
+            return Ok(Stack::default());
+        };
+        let mut h = self.series(host, from, to, points)?;
+        let band = |s: &mut Series, col: &str| s.metrics.remove(col).unwrap_or_default();
+        let (used, total) = (band(&mut h, used).avg, band(&mut h, total).avg);
+        let at: HashMap<i64, usize> = h.ts.iter().enumerate().map(|(i, &t)| (t, i)).collect();
+        let vms: Vec<(i64, String)> = {
+            let mut st = self.db.prepare(
+                "SELECT id, name FROM entity WHERE kind='vm' AND last_seen >= ?1 ORDER BY name",
+            )?;
+            st.query_map(params![from], |r| Ok((r.get(0)?, r.get(1)?)))?
+                .collect::<Result<_, _>>()?
+        };
+        let mut out = Vec::new();
+        for (id, name) in vms {
+            let mut s = self.series(id, from, to, points)?;
+            let b = band(&mut s, part);
+            let mut avg = vec![None; h.ts.len()];
+            for (i, t) in s.ts.iter().enumerate() {
+                // The same buckets, unless this VM was measured at another pace: then the
+                // computer's bucket it falls in.
+                let j = at.get(t).copied().or_else(|| h.ts.partition_point(|&x| x <= *t).checked_sub(1));
+                if let (Some(j), Some(v)) = (j, b.avg.get(i).copied().flatten()) {
+                    avg[j] = Some(v);
+                }
+            }
+            if avg.iter().any(Option::is_some) {
+                let peak = b.max.iter().flatten().copied().max();
+                out.push(StackVm { name, avg, peak });
+            }
+        }
+        Ok(Stack { ts: h.ts, used, total, vms: out })
+    }
+
     pub fn series(
         &mut self,
         entity: i64,
@@ -1134,6 +1215,49 @@ mod tests {
         let sum = s.summary(e[0].id, t, t + MINUTE, 0).unwrap();
         assert_eq!(sum["disk_total"].max, Some(729));
         assert_eq!(sum["mem_used"].samples, 30);
+    }
+
+    #[test]
+    fn a_stack_puts_each_vm_on_the_computer_s_buckets() {
+        let mut s = Store::in_memory().unwrap();
+        let t = 10 * MINUTE;
+        let host = s.entity(Kind::Host, "", "host", "this computer", 0).unwrap();
+        let web = s.entity(Kind::Vm, "web", "web", "web", 0).unwrap();
+        let db = s.entity(Kind::Vm, "db", "db", "db", 0).unwrap();
+        let rss = VM_METRICS.iter().position(|m| *m == "host_rss").unwrap();
+        for i in 0..60 {
+            let mut h = vec![ABSENT; HOST_METRICS.len()];
+            h[0] = 50 + i; // mem_used
+            h[1] = 100; // mem_total
+            s.ingest(host, t + i * 1000, h);
+            let mut v = vec![ABSENT; VM_METRICS.len()];
+            v[rss] = 20 + i % 3;
+            s.ingest(web, t + i * 1000, v);
+            // db only for the second half.
+            if i >= 30 {
+                let mut v = vec![ABSENT; VM_METRICS.len()];
+                v[rss] = 10;
+                s.ingest(db, t + i * 1000, v);
+            }
+        }
+        let st = s.stack("mem", t, t + MINUTE, 6).unwrap();
+        assert_eq!(st.ts.len(), 6);
+        assert_eq!(st.total, vec![Some(100); 6]);
+        assert_eq!(st.used[0], Some(54));
+        let names: Vec<&str> = st.vms.iter().map(|v| v.name.as_str()).collect();
+        assert_eq!(names, ["db", "web"]);
+        assert_eq!(st.vms[0].avg, [None, None, None, Some(10), Some(10), Some(10)]);
+        assert!(st.vms[1].avg.iter().all(|v| v.is_some_and(|v| (20..=22).contains(&v))));
+        assert_eq!(st.vms[1].peak, Some(22));
+        assert!(s.stack("swap", t, t + MINUTE, 6).unwrap().ts.is_empty());
+    }
+
+    #[test]
+    fn no_stack_before_the_computer_is_measured() {
+        let mut s = Store::in_memory().unwrap();
+        s.entity(Kind::Vm, "web", "web", "web", 0).unwrap();
+        let st = s.stack("cpu", 0, MINUTE, 6).unwrap();
+        assert!(st.ts.is_empty() && st.vms.is_empty());
     }
 
     #[test]

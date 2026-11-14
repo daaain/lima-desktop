@@ -10,7 +10,7 @@ use crate::podman::{ContainerAction, Image, Layer, Libpod, Pruned, Volume};
 use crate::guest_files::{self, Folder, Listing, Peek};
 use serde::Deserialize;
 use crate::settings::{Saved, Settings};
-use crate::store::{Entity, OomRecord, Series, StallRecord, Summary};
+use crate::store::{Entity, OomRecord, Series, Stack, StallRecord, Summary};
 
 type C<'a> = State<'a, Arc<Collector>>;
 
@@ -39,7 +39,41 @@ pub fn set_settings(
     saved.set(settings)?;
     c.set_interval(settings.interval_secs);
     crate::apply_theme(&app, settings.theme);
+    crate::menubar::apply(&app);
     Ok(saved.get())
+}
+
+/// One of the computer's resources ("mem", "cpu", "disk") over [from, to], for the menu bar's
+/// stacked chart: the computer's use and size and each VM's part, on the same buckets.
+#[tauri::command]
+pub fn host_stack(
+    c: C<'_>,
+    metric: String,
+    from: i64,
+    to: i64,
+    points: Option<usize>,
+) -> Result<Stack, String> {
+    c.store()
+        .stack(&metric, from, to, points.unwrap_or(120).clamp(10, 2000))
+        .map_err(err)
+}
+
+/// Shows the main window, making it again if it was closed.
+#[tauri::command]
+pub fn open_main(app: tauri::AppHandle) {
+    crate::menubar::open_main(&app);
+}
+
+/// Quits the app, and with it the recording.
+#[tauri::command]
+pub fn quit(app: tauri::AppHandle) {
+    app.exit(0);
+}
+
+/// The menu bar's popover, sized to its page.
+#[tauri::command]
+pub fn fit_popover(app: tauri::AppHandle, height: f64) {
+    crate::menubar::fit_popover(&app, height);
 }
 
 #[tauri::command]
