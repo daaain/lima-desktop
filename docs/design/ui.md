@@ -175,7 +175,7 @@ under the sentence, figures and bar it explains, with the allocation as a dashed
   warns: a new version is news, not a problem. Download opens the release page in the browser;
   nothing is installed. × puts that version away for good, and a later one shows again. It sits in
   a row that is there anyway, so on a wide window the page doesn't move; on a narrow one it takes a
-  line of its own under the status line. Settings ends with **New versions**, a checkbox ("Say when a new version is out")
+  line of its own under the status line. The menu bar's popover says it too, on a line above its footer; put away in either window, it's put away in both. Settings ends with **New versions**, a checkbox ("Say when a new version is out")
   and one sentence saying GitHub is asked once a day and sent nothing about the person. Off, nothing
   is asked and nothing is shown.
 - **The menu bar's popover** (`routes/menubar`, a borderless window of its own that the backend

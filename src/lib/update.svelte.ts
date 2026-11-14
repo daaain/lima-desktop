@@ -33,6 +33,11 @@ class UpdateState {
     this.#following = true;
     this.refresh();
     setInterval(() => this.refresh(), ASK_EVERY_MS);
+    // Dismissed in another window (the main one or the menu bar's popover, which share this
+    // storage): put away here too.
+    addEventListener('storage', (e) => {
+      if (e.key === KEY) this.dismissed = e.newValue;
+    });
   }
 
   async refresh() {

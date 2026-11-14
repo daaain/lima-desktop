@@ -16,6 +16,7 @@
   } from '$lib/menubar';
   import { followsLive, rangeMs, type AnyRangeKey } from '$lib/ranges';
   import { theme } from '$lib/theme.svelte';
+  import UpdateNotice from '$lib/UpdateNotice.svelte';
 
   const HEIGHT = 130;
   const rangeKey = (t: Tab) => `menubar-range-${t}`;
@@ -231,6 +232,8 @@
 
   {#if error}<p class="error">{error}</p>{/if}
 
+  <div class="newer"><UpdateNotice /></div>
+
   <footer>
     <span>{recordingPhrase(snapshot?.intervalSecs)}</span>
     <span class="buttons">
@@ -319,6 +322,9 @@
     display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-top: 12px; padding-top: 10px;
     border-top: 1px solid var(--border); font-size: 0.8rem; color: var(--muted);
   }
+  /* A newer version, when one is out: its own line above the footer; nothing at all otherwise. */
+  .newer { margin-top: 10px; font-size: 0.85rem; }
+  .newer:empty { display: none; }
   .buttons { display: flex; gap: 6px; }
   .buttons button { height: 1.9rem; padding: 0 0.8rem; font-size: 0.82rem; }
   .error { margin-top: 8px; }

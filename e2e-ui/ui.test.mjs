@@ -269,7 +269,7 @@ test('The popover opens on the tab asked for, switches tabs and keeps each one\'
 
   await page.getByRole('button', { name: 'Open Lima Desktop' }).click();
   await page.getByRole('button', { name: 'Quit' }).click();
-  const calls = await page.evaluate(() => window.__fakeCalls.map((c) => c.cmd).filter((c) => c !== 'fit_popover'));
+  const calls = await page.evaluate(() => window.__fakeCalls.map((c) => c.cmd).filter((c) => c !== 'fit_popover' && c !== 'update_available'));
   assert.deepEqual(calls, ['open_main', 'quit']);
   assert.deepEqual(errors, []);
   await close();
@@ -431,6 +431,18 @@ test('The new version opens its release page, stays dismissed, and a later one s
   await check.click();
   await page.waitForFunction(async () => (await window.__TAURI_INTERNALS__.invoke('settings')).checkUpdates);
   await notice.getByText('Lima Desktop 0.4.0 is out').waitFor();
+  assert.deepEqual(errors, []);
+  await close();
+});
+
+test('The popover says a newer version too, above its footer', async () => {
+  const { page, errors, close } = await open('/menubar?tab=mem', { width: 360, height: 560, init: `window.__fakeUpdate = ${JSON.stringify(V030)};` });
+  const notice = page.locator('.newer .update');
+  await notice.waitFor();
+  assert.equal((await notice.textContent()).replace(/\s+/g, ' ').trim(), 'Lima Desktop 0.3.0 is out · Download ×');
+  await notice.getByRole('button', { name: 'Dismiss' }).click();
+  await notice.waitFor({ state: 'detached' });
+  assert.equal(await page.locator('.newer').isVisible(), false, 'nothing is left of it');
   assert.deepEqual(errors, []);
   await close();
 });
