@@ -55,6 +55,8 @@ The pictures in this guide and the README are drawn from invented data by the UI
 - **No all-caps labels.** A label is either a serif head over a column ("Memory", "CPU") or a small
   grey line under a figure saying what it is ("peak", "cores, 95th percentile").
 - Units stay on the figure (`38.9 GiB of 45.8 GiB`), in the binary units the rest of the app uses.
+  The one exception is the menu bar popover's Disk tab, in powers of 1000 (`994.7 GB`), so it says
+  the same as Finder does of the same disk (`format.decimalBytes`).
 
 ## Type
 
@@ -168,23 +170,33 @@ under the sentence, figures and bar it explains, with the allocation as a dashed
   under the figure, or on its side beside a drawing alone); then whether closing the window keeps
   recording, in the menu bar. Each choice is saved as it's made.
 - **The menu bar's popover** (`routes/menubar`, a borderless window of its own that the backend
-  opens under the item clicked, at `?tab=mem|cpu|disk`): only the page, none of the main window's
-  chrome, and no card or shadow of its own; it fills the window, which it asks the backend to fit
-  to its height (`fit_popover`). Tabs for Memory, CPU and Disk; the whole computer's use now as
-  the big figure ("70 %", in `--warn` past three quarters) and under it what it is of ("of this
-  computer's 64.0 GiB in use: the VMs 35.0 GiB, everything else 9.8 GiB"); its own range picker
-  (15 min to 24 h for memory and CPU, opening on 1 h; 24 h to 30 days for the disk, opening on 7
-  days; each tab's kept in the webview's storage), not the app's range, as it answers a different
-  question. Then the range as a stacked area: a band per VM, the largest now at the bottom, in
-  shades of `--bar` (of `--warn` when the computer is past three quarters); everything else
-  hatched above them; the computer's total is the top. A gap is where the computer wasn't
-  measured. A stopped VM's disk image has no history, so it's drawn at its size now throughout,
-  and a disk's gaps hold its nearest reading. The legend is the list: each VM's name (in `--warn`
-  while it isn't answering), its figure now and, in grey, its peak in the range ("peak 16.6 GiB in
-  1 h"), or for a disk, which only grows between clean-ups, what it grew ("grew 4.2 GiB in 7
-  days"); then everything else and what's free. Hovering a row brings its band forward. It polls
-  at the measuring interval while it's shown, and fetches the stack as a tab or range is chosen,
-  then as the history views do (`ranges.historyRefreshMs`) for a range up to 6 h. Its words and
+  builds on the first click, at `?tab=mem|cpu|disk`, then hides when it loses the focus and shows
+  again under the item clicked, telling the page its tab with an event rather than loading it
+  again): only the page, none of the main window's chrome, and no card or shadow of its own; it
+  fills the window, which it asks the backend to fit to its height (`fit_popover`). The window and
+  `app.html` paint the theme's background before the page does, so it never flashes white. Tabs
+  for Memory, CPU and Disk; the whole computer's use now as the big figure ("70 %", in `--warn`
+  past three quarters) and beside it its own range picker (2 min to 24 h for memory and CPU,
+  opening on 1 h; 1 h to 30 days for the disk, opening on 7 days; each tab's kept in the webview's
+  storage), not the app's range, as it answers a different question; 2 min is the popover's alone,
+  to watch memory and CPU move second by second. Under both, what the figure is of, its parts in
+  the order they're stacked ("of this computer's 64.0 GiB in use: the VMs 35.0 GiB, wired 4.0 GiB,
+  everything else 5.8 GiB"). Then the range as a stacked area: a band per VM, the largest now at
+  the bottom, in shades of `--bar` (of `--warn` when the computer is past three quarters); on
+  memory, the computer's wired memory (the kernel's, the GPU's and drivers', never paged out or
+  compressed; no VM's process has any, so it's part of what the VMs leave and kept inside it) in
+  everything else's hatch, crossed; everything else hatched above; the computer's total is the
+  top. A gap is where the computer wasn't measured. A stopped VM's disk image has no history, so
+  it's drawn at its size now throughout, and a disk's gaps hold its nearest reading. The legend is
+  the list: each VM's name (in `--warn` while it isn't answering), its figure now and, in grey, its
+  peak in the range ("peak 16.6 GiB in 1 h"), or for a disk, which only grows between clean-ups,
+  what it grew ("grew 4.5 GB in 7 days"); then wired memory with a few words on what it is
+  ("kernel, GPU and drivers", more in its tooltip), everything else, and what's free. Pointing at a
+  row or a band, a VM's, wired memory's or everything else's, brings that band forward in
+  `--accent` and lights its row. It polls at the measuring interval while it's shown and fetches
+  nothing while it's hidden; it fetches the stack as a tab or range is chosen, then, for a range up
+  to 6 h, again as each of its 120 columns comes due, but not more often than the computer is
+  measured (`menubar.stackRefreshMs`): every second at 2 min, every 7.5 s at 15 min. Its words and
   geometry are `lib/menubar.ts`.
 - **A VM**: the headline verdict; four figures (Memory, CPU, Pressure, Disk), each a verdict
   sentence, three numbers, a bar and its chart; the resize sentence; "Out of memory" when there
