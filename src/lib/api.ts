@@ -318,6 +318,8 @@ export const api = {
   openMain: () => invoke<void>('open_main'),
   /** Quits the app, and with it the recording. */
   quit: () => invoke<void>('quit'),
+  /** Sizes the menu bar's popover window to its page: `height` in logical px (the backend keeps it to 200–900). */
+  fitPopover: (height: number) => invoke<void>('fit_popover', { height }),
   vmAction: (name: string, action: VmAction) => invoke<void>('vm_action', { name, action }),
   vmResize: (name: string, resize: { cpus?: number; memory?: number; disk?: number }) =>
     invoke<void>('vm_resize', { name, resize }),
