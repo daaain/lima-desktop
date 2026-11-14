@@ -140,6 +140,19 @@ export interface Snapshot {
   retention?: { rawDays: number; rollupDays: number };
   /** Seconds between measurements of each running VM; the UI polls at the same pace. */
   intervalSecs?: number;
+  /** What the whole computer is using now (collector.rs `HostLive`); absent before its first reading. */
+  hostUse?: HostLive | null;
+}
+
+/**
+ * The whole computer's latest reading, named as `store::HOST_METRICS`: memory in bytes (`mem_used` as
+ * Activity Monitor counts it, `mem_total`, `mem_wired`, `mem_compressed`), CPU in millicores (`cpu_mc`
+ * busy, `cpu_total_mc` all the cores) and the disk Lima's instances are on (`disk_used`, `disk_total`).
+ * A value that couldn't be read is absent. `entity` is its history's, for `series`.
+ */
+export interface HostLive {
+  entity?: number | null;
+  latest: Record<string, number>;
 }
 
 /** Light or dark: as the computer is, or always one (settings::Theme). */

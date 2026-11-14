@@ -32,6 +32,8 @@ const RAW_QUERY_SPAN: i64 = 6 * HOUR;
 pub enum Kind {
     Vm,
     Container,
+    /// The computer itself (`host_use.rs`): one entity.
+    Host,
 }
 
 impl Kind {
@@ -39,10 +41,15 @@ impl Kind {
         match self {
             Kind::Vm => "vm",
             Kind::Container => "container",
+            Kind::Host => "host",
         }
     }
     fn parse(s: &str) -> Kind {
-        if s == "vm" { Kind::Vm } else { Kind::Container }
+        match s {
+            "vm" => Kind::Vm,
+            "host" => Kind::Host,
+            _ => Kind::Container,
+        }
     }
     /// Column names, in storage order. Only ever APPEND to these: old chunks decode with the
     /// columns they had, the rest read as absent.
@@ -50,6 +57,7 @@ impl Kind {
         match self {
             Kind::Vm => VM_METRICS,
             Kind::Container => CT_METRICS,
+            Kind::Host => HOST_METRICS,
         }
     }
 }
@@ -87,6 +95,20 @@ pub const CT_METRICS: &[&str] = &[
     "net_tx_bps",
     "blk_r_bps",
     "blk_w_bps",
+];
+
+/// The whole computer (`host_use.rs`): memory in bytes (used as Activity Monitor counts it, total,
+/// wired, compressed), cpu in millicores (busy, and all the cores), and the disk Lima's instances
+/// are on in bytes (used, total).
+pub const HOST_METRICS: &[&str] = &[
+    "mem_used",
+    "mem_total",
+    "mem_wired",
+    "mem_compressed",
+    "cpu_mc",
+    "cpu_total_mc",
+    "disk_used",
+    "disk_total",
 ];
 
 /// Decoded chunk rows: `(ts_ms, values)`.
@@ -1090,6 +1112,28 @@ mod tests {
         let sum = s.summary(id, t, t + MINUTE, 0).unwrap();
         assert_eq!(sum["mem_used"].samples, 60);
         assert_eq!(sum["mem_used"].max, Some(59));
+    }
+
+    #[test]
+    fn the_computer_keeps_its_own_columns_across_a_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("m.db");
+        let t = 7 * MINUTE;
+        let row = |i: i64| (0..HOST_METRICS.len() as i64).map(|c| c * 100 + i).collect::<Vec<_>>();
+        {
+            let mut s = Store::open(&path).unwrap();
+            let id = s.entity(Kind::Host, "", "host", "this computer", 0).unwrap();
+            for i in 0..30 {
+                s.ingest(id, t + i * 1000, row(i));
+            }
+            s.flush(t + MINUTE).unwrap();
+        }
+        let mut s = Store::open(&path).unwrap();
+        let e = s.entities(None).unwrap();
+        assert_eq!((e.len(), e[0].kind), (1, Kind::Host));
+        let sum = s.summary(e[0].id, t, t + MINUTE, 0).unwrap();
+        assert_eq!(sum["disk_total"].max, Some(729));
+        assert_eq!(sum["mem_used"].samples, 30);
     }
 
     #[test]
