@@ -159,19 +159,25 @@ export interface HostLive {
 export type Theme = 'system' | 'light' | 'dark';
 export const THEMES: readonly Theme[] = ['system', 'light', 'dark'];
 
-/** How one of the menu bar's items shows (settings::Look): not at all, as a moving trace, as an upright bar, or as its figure alone. */
-export type Look = 'off' | 'trace' | 'bar' | 'figure';
-export const LOOKS: readonly Look[] = ['trace', 'bar', 'figure', 'off'];
+/** What one of the menu bar's items draws (settings::Drawing): a moving trace, an upright bar, or nothing. */
+export type Drawing = 'off' | 'trace' | 'bar';
+export const DRAWINGS: readonly Drawing[] = ['trace', 'bar', 'off'];
+
+/** One of the menu bar's items (settings::Item): its drawing, and whether its figure is beside it. With neither, it isn't there. */
+export interface MenuBarItem {
+  drawing: Drawing;
+  figure: boolean;
+}
 
 /**
  * The menu bar's items (settings::MenuBar): one per resource, each the whole computer's use as a figure,
  * the VMs' part drawn solid and everything else pale. With all three off, the app's own icon stays as the
- * way back in. `names` puts "mem", "cpu", "disk" before each figure.
+ * way back in. `names` puts "mem", "cpu", "disk" small under each figure, or on its side beside a drawing alone.
  */
 export interface MenuBar {
-  memory: Look;
-  cpu: Look;
-  disk: Look;
+  memory: MenuBarItem;
+  cpu: MenuBarItem;
+  disk: MenuBarItem;
   names: boolean;
 }
 

@@ -292,17 +292,29 @@
 
   // As settings.rs: one of the intervals offered, or refused.
   const settings = {
-    intervalSecs: 1, theme: 'system', menuBar: { memory: 'trace', cpu: 'trace', disk: 'bar', names: true }, keepRunning: true,
+    intervalSecs: 1,
+    theme: 'system',
+    menuBar: {
+      memory: { drawing: 'trace', figure: true },
+      cpu: { drawing: 'trace', figure: true },
+      disk: { drawing: 'bar', figure: true },
+      names: true,
+    },
+    keepRunning: true,
   };
-  const copy = () => ({ ...settings, menuBar: { ...settings.menuBar } });
+  const ITEMS = ['memory', 'cpu', 'disk'];
+  const copyMenuBar = (m) => ({ ...m, ...Object.fromEntries(ITEMS.map((k) => [k, { ...m[k] }])) });
+  const copy = () => ({ ...settings, menuBar: copyMenuBar(settings.menuBar) });
   function setSettings({ settings: s }) {
     if (![1, 2, 5, 10].includes(s.intervalSecs)) throw `${s.intervalSecs} s isn't one of the intervals offered (1 s, 2 s, 5 s, 10 s)`;
     if (!['system', 'light', 'dark'].includes(s.theme)) throw `unknown variant \`${s.theme}\``;
-    for (const k of ['memory', 'cpu', 'disk']) {
-      if (!['off', 'trace', 'bar', 'figure'].includes(s.menuBar?.[k])) throw `unknown variant \`${s.menuBar?.[k]}\``;
+    for (const k of ITEMS) {
+      const item = s.menuBar?.[k];
+      if (!['off', 'trace', 'bar'].includes(item?.drawing)) throw `unknown variant \`${item?.drawing}\``;
+      if (typeof item.figure !== 'boolean') throw 'invalid type: expected a boolean';
     }
     if (typeof s.menuBar.names !== 'boolean' || typeof s.keepRunning !== 'boolean') throw 'invalid type: expected a boolean';
-    Object.assign(settings, s, { menuBar: { ...s.menuBar } });
+    Object.assign(settings, s, { menuBar: copyMenuBar(s.menuBar) });
     return copy();
   }
 

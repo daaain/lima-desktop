@@ -30,15 +30,28 @@ impl Theme {
     }
 }
 
-/// How one of the menu bar's items shows: not at all, as a moving trace, as an upright bar, or
-/// as its figure alone.
+/// What one of the menu bar's items draws: nothing, a moving trace, or an upright bar.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
-pub enum Look {
+pub enum Drawing {
     Off,
     Trace,
     Bar,
-    Figure,
+}
+
+/// One of the menu bar's items: its drawing, and whether its figure is written beside it. With
+/// neither, it isn't in the menu bar.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Item {
+    pub drawing: Drawing,
+    pub figure: bool,
+}
+
+impl Item {
+    pub fn shown(self) -> bool {
+        self.drawing != Drawing::Off || self.figure
+    }
 }
 
 /// The menu bar's items, one per resource: the whole computer's use as a figure, the VMs' part
@@ -46,19 +59,23 @@ pub enum Look {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct MenuBar {
-    pub memory: Look,
-    pub cpu: Look,
-    pub disk: Look,
-    /// "mem", "cpu", "disk" before each figure.
+    pub memory: Item,
+    pub cpu: Item,
+    pub disk: Item,
+    /// "mem", "cpu", "disk": small under each figure, or on its side beside a drawing alone.
     pub names: bool,
 }
 
 impl Default for MenuBar {
     fn default() -> Self {
+        let item = |drawing| Item {
+            drawing,
+            figure: true,
+        };
         MenuBar {
-            memory: Look::Trace,
-            cpu: Look::Trace,
-            disk: Look::Bar,
+            memory: item(Drawing::Trace),
+            cpu: item(Drawing::Trace),
+            disk: item(Drawing::Bar),
             names: true,
         }
     }
@@ -197,8 +214,20 @@ mod tests {
         assert_eq!(v2.menu_bar, MenuBar::default());
         assert!(v2.keep_running);
         // An item that isn't offered is refused as a whole, like any other value.
-        std::fs::write(d.join("look.json"), r#"{"menuBar": {"memory": "pie"}}"#).unwrap();
+        std::fs::write(
+            d.join("look.json"),
+            r#"{"menuBar": {"memory": {"drawing": "pie", "figure": true}}}"#,
+        )
+        .unwrap();
         assert_eq!(Settings::load(&d.join("look.json")), Settings::default());
+        // From before an item's drawing and figure were apart (never released): an item as one
+        // word is a value no longer offered, so the file is refused the same way.
+        std::fs::write(
+            d.join("looks.json"),
+            r#"{"intervalSecs": 5, "menuBar": {"memory": "figure", "cpu": "trace", "disk": "off", "names": false}}"#,
+        )
+        .unwrap();
+        assert_eq!(Settings::load(&d.join("looks.json")), Settings::default());
         std::fs::write(
             d.join("theme.json"),
             r#"{"intervalSecs": 1, "theme": "sepia"}"#,
@@ -215,12 +244,87 @@ mod tests {
         let chosen = Settings {
             interval_secs: 5,
             theme: Theme::Dark,
-            menu_bar: MenuBar { memory: Look::Bar, cpu: Look::Off, disk: Look::Figure, names: false },
+            menu_bar: MenuBar {
+                memory: Item {
+                    drawing: Drawing::Bar,
+                    figure: false,
+                },
+                cpu: Item {
+                    drawing: Drawing::Off,
+                    figure: false,
+                },
+                disk: Item {
+                    drawing: Drawing::Off,
+                    figure: true,
+                },
+                names: false,
+            },
             keep_running: false,
         };
         saved.set(chosen).unwrap();
         assert_eq!(saved.get().interval_secs, 5);
         assert_eq!(Saved::load(d.join("settings.json")).get(), chosen);
+    }
+
+    #[test]
+    fn by_default_memory_and_cpu_are_traces_and_the_disk_a_bar_each_with_its_figure_and_name() {
+        let m = MenuBar::default();
+        assert_eq!(
+            m.memory,
+            Item {
+                drawing: Drawing::Trace,
+                figure: true
+            }
+        );
+        assert_eq!(
+            m.cpu,
+            Item {
+                drawing: Drawing::Trace,
+                figure: true
+            }
+        );
+        assert_eq!(
+            m.disk,
+            Item {
+                drawing: Drawing::Bar,
+                figure: true
+            }
+        );
+        assert!(m.names);
+        assert_eq!(
+            serde_json::to_value(m).unwrap(),
+            serde_json::json!({
+                "memory": {"drawing": "trace", "figure": true},
+                "cpu": {"drawing": "trace", "figure": true},
+                "disk": {"drawing": "bar", "figure": true},
+                "names": true,
+            })
+        );
+    }
+
+    #[test]
+    fn an_item_is_shown_unless_both_its_drawing_and_figure_are_off() {
+        assert!(
+            Item {
+                drawing: Drawing::Off,
+                figure: true
+            }
+            .shown()
+        );
+        assert!(
+            Item {
+                drawing: Drawing::Bar,
+                figure: false
+            }
+            .shown()
+        );
+        assert!(
+            !Item {
+                drawing: Drawing::Off,
+                figure: false
+            }
+            .shown()
+        );
     }
 
     #[test]

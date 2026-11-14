@@ -163,9 +163,10 @@ under the sentence, figures and bar it explains, with the allocation as a dashed
   short page to a long one doesn't shift everything sideways.
 - **Settings**: the headline says how often each running VM is measured; the choices (1, 2, 5,
   10 s) and what a slower one costs and saves; then the theme: System, Light or Dark; then what is
-  in the menu bar (Memory, CPU and Disk, each as a Trace, a Bar, its Figure only, or Off, and
-  whether each is named "mem", "cpu", "disk"); then whether closing the window keeps recording, in
-  the menu bar. Each choice is saved as it's made.
+  in the menu bar (Memory, CPU and Disk, each drawn as a Trace, a Bar or None, and with its Figure
+  or not; an item with neither is left out; and whether each is named "mem", "cpu", "disk", small
+  under the figure, or on its side beside a drawing alone); then whether closing the window keeps
+  recording, in the menu bar. Each choice is saved as it's made.
 - **The menu bar's popover** (`routes/menubar`, a borderless window of its own that the backend
   opens under the item clicked, at `?tab=mem|cpu|disk`): only the page, none of the main window's
   chrome, and no card or shadow of its own; it fills the window, which it asks the backend to fit

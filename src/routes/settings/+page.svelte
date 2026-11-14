@@ -3,19 +3,21 @@
   // and the polls follow at once), the theme, the menu bar's items and whether closing the window
   // leaves the app recording. settings.rs keeps them beside the history.
   import { onMount } from 'svelte';
-  import { api, INTERVALS, LOOKS, THEMES, type Look, type MenuBar, type Settings, type Theme } from '$lib/api';
+  import { api, DRAWINGS, INTERVALS, THEMES, type Drawing, type MenuBar, type MenuBarItem, type Settings, type Theme } from '$lib/api';
   import { live } from '$lib/live.svelte';
   import { intervalPhrase } from '$lib/almanac';
   import { theme } from '$lib/theme.svelte';
 
   const THEME_LABELS: Record<Theme, string> = { system: 'System', light: 'Light', dark: 'Dark' };
-  const LOOK_LABELS: Record<Look, string> = { trace: 'Trace', bar: 'Bar', figure: 'Figure only', off: 'Off' };
-  const ITEMS: { key: 'memory' | 'cpu' | 'disk'; label: string }[] = [
+  const DRAWING_LABELS: Record<Drawing, string> = { trace: 'Trace', bar: 'Bar', off: 'None' };
+  type ItemKey = 'memory' | 'cpu' | 'disk';
+  const ITEMS: { key: ItemKey; label: string }[] = [
     { key: 'memory', label: 'Memory' },
     { key: 'cpu', label: 'CPU' },
     { key: 'disk', label: 'Disk' },
   ];
   const menuBar = (change: Partial<MenuBar>) => save({ menuBar: { ...settings!.menuBar, ...change } });
+  const menuItem = (key: ItemKey, change: Partial<MenuBarItem>) => menuBar({ [key]: { ...settings!.menuBar[key], ...change } });
 
   let settings = $state<Settings | null>(null);
   let saving = $state(false);
@@ -82,13 +84,21 @@
     <h2 class="head">In the menu bar</h2>
     <div class="items">
       {#each ITEMS as item (item.key)}
+        {@const chosen = settings.menuBar[item.key]}
         <div class="item">
           <span class="serif name">{item.label}</span>
-          <div class="choices" role="group" aria-label="{item.label} in the menu bar">
-            {#each LOOKS as look}
-              <button class="choice small" class:active={settings.menuBar[item.key] === look} aria-pressed={settings.menuBar[item.key] === look}
-                disabled={saving} onclick={() => settings!.menuBar[item.key] !== look && menuBar({ [item.key]: look })}>{LOOK_LABELS[look]}</button>
-            {/each}
+          <div class="parts">
+            <div class="choices" role="group" aria-label="{item.label} drawn in the menu bar as">
+              {#each DRAWINGS as d}
+                <button class="choice small" class:active={chosen.drawing === d} aria-pressed={chosen.drawing === d}
+                  disabled={saving} onclick={() => chosen.drawing !== d && menuItem(item.key, { drawing: d })}>{DRAWING_LABELS[d]}</button>
+              {/each}
+            </div>
+            <label class="check">
+              <input type="checkbox" checked={chosen.figure} disabled={saving} aria-label="{item.label} figure"
+                onchange={(e) => menuItem(item.key, { figure: e.currentTarget.checked })} />
+              Figure
+            </label>
           </div>
         </div>
       {/each}
@@ -98,9 +108,11 @@
       Name each one (“mem”, “cpu”, “disk”)
     </label>
     <p class="note">
-      Each item is the whole computer's memory, CPU or disk in use, as a figure, with the VMs' part drawn solid and
-      everything else pale. A trace draws it moving over time, a bar as it is now. Clicking one opens the VMs' part over time.
-      With all three off, the app's own icon stays in the menu bar as the way back in.
+      Each item is the whole computer's memory, CPU or disk in use, with the VMs' part drawn solid and everything else
+      pale. A trace draws it moving over time, a bar as it is now; the figure is the percent in use. A name goes small
+      under the figure, or on its side beside a drawing alone. Clicking an item opens the VMs' part over time. An item
+      with neither a drawing nor a figure is left out, and with all three left out, the app's own icon stays in the menu
+      bar as the way back in.
     </p>
   </section>
 
@@ -128,6 +140,7 @@
     padding: 0.5rem 0; border-bottom: 1px solid var(--border);
   }
   .item .name { font-size: 1.25rem; font-weight: 500; }
+  .parts { display: flex; align-items: center; gap: 0.6rem 1.4rem; flex-wrap: wrap; }
   .choice.small { height: 2rem; padding: 0 0.85rem; font-size: 0.85rem; }
   .check { display: inline-flex; align-items: center; gap: 0.5rem; font-size: 0.95rem; cursor: pointer; }
   .check input { accent-color: var(--fg); width: 15px; height: 15px; margin: 0; }

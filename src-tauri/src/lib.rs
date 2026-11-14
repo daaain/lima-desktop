@@ -13,6 +13,8 @@ pub mod probe;
 pub mod settings;
 pub mod stall;
 pub mod store;
+#[cfg(target_os = "macos")]
+pub mod typeset;
 
 use std::path::PathBuf;
 use std::sync::Arc;

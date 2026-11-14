@@ -4,12 +4,14 @@
 //! borderless window under it) on that resource; its menu (right click) opens the app or quits.
 //! With all three off the app's own icon stays, as the way back in when the window is closed.
 //!
-//! The drawings are template images (macOS tints them for a light or dark menu bar), except past
-//! three quarters, when they're drawn in the warning colour instead.
+//! On macOS each item is one image, its figure and name set in it beside the drawing (`typeset`),
+//! a template image that macOS tints for a light or dark menu bar, except past three quarters,
+//! when it's drawn in the warning colour instead. Elsewhere the image is the drawing alone and the
+//! figure its title.
 
 use std::collections::VecDeque;
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::time::{Duration, Instant};
 
 use tauri::image::Image;
@@ -18,7 +20,7 @@ use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent}
 use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
 
 use crate::collector::{Collector, Snapshot};
-use crate::settings::{Look, MenuBar, Saved};
+use crate::settings::{Drawing, Item, MenuBar, Saved};
 
 /// The popover window's label, and its width in points.
 pub const POPOVER: &str = "popover";
@@ -37,7 +39,7 @@ pub enum Res {
 pub const RESOURCES: [Res; 3] = [Res::Mem, Res::Cpu, Res::Disk];
 
 impl Res {
-    /// The item's id, the popover's `?tab=`, and what `names` puts before the figure.
+    /// The item's id, the popover's `?tab=`, and its name in the menu bar.
     pub fn id(self) -> &'static str {
         match self {
             Res::Mem => "mem",
@@ -48,7 +50,7 @@ impl Res {
     fn from_id(id: &str) -> Option<Res> {
         RESOURCES.into_iter().find(|r| r.id() == id)
     }
-    fn look(self, m: &MenuBar) -> Look {
+    fn item(self, m: &MenuBar) -> Item {
         match self {
             Res::Mem => m.memory,
             Res::Cpu => m.cpu,
@@ -100,10 +102,42 @@ pub fn shares(s: &Snapshot) -> [Option<Share>; 3] {
     ]
 }
 
-/// What's written beside the drawing: the whole computer's use, as a percent.
-pub fn title(res: Res, share: Share, names: bool) -> String {
-    let pct = (share.whole * 100.0).round() as u32;
-    if names { format!("{} {pct}%", res.id()) } else { format!("{pct}%") }
+/// The figure: the whole computer's use, as a percent; a dash before the first measurement.
+pub fn figure(now: Option<Share>) -> String {
+    match now {
+        Some(s) => format!("{}%", (s.whole * 100.0).round() as u32),
+        None => "–".into(),
+    }
+}
+
+/// The title where the figure can't be drawn into the image (not macOS): the name before it.
+pub fn title(res: Res, now: Option<Share>, names: bool) -> String {
+    if names { format!("{} {}", res.id(), figure(now)) } else { figure(now) }
+}
+
+pub fn tooltip(res: Res, now: Share) -> String {
+    format!("{}: this computer {:.0} % in use, the VMs {:.0} %", res.id(), now.whole * 100.0, now.vms * 100.0)
+}
+
+/// What an item is made of, left to right.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Parts {
+    /// The name, tiny and on its side, left of the drawing: named, with no figure to put it under.
+    pub side_name: bool,
+    pub drawing: Drawing,
+    pub figure: bool,
+    /// The name, small, under the figure.
+    pub name_under: bool,
+}
+
+/// An item's parts as Settings has it; `None` when it isn't in the menu bar.
+pub fn parts(item: Item, names: bool) -> Option<Parts> {
+    item.shown().then_some(Parts {
+        side_name: names && !item.figure,
+        drawing: item.drawing,
+        figure: item.figure,
+        name_under: names && item.figure,
+    })
 }
 
 // ---- drawing ------------------------------------------------------------------------------------
@@ -116,6 +150,15 @@ pub struct Icon {
     pub rgba: Vec<u8>,
 }
 
+/// What's drawn, before it's coloured: each pixel's coverage, 0 to 255, top row first. An item is
+/// one colour throughout, so the drawing and the text are laid into one mask and painted at the end.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Mask {
+    pub width: u32,
+    pub height: u32,
+    pub alpha: Vec<u8>,
+}
+
 const H: u32 = 36;
 const FRAME: u32 = 2;
 /// Columns in a trace, each this wide, touching.
@@ -125,81 +168,260 @@ const TRACE_WIDTH: u32 = 2 * FRAME + COLUMNS as u32 * COLUMN;
 const BAR_WIDTH: u32 = 10;
 const SOLID: u8 = 255;
 const PALE: u8 = 95;
-/// The warning colour, legible on a light or a dark menu bar.
-const WARN: [u8; 3] = [240, 110, 20];
+/// The warning colour: macOS's orange for a dark menu bar, which still reads on a light one.
+const HOT: [u8; 3] = [255, 159, 10];
 const INK: [u8; 3] = [0, 0, 0];
 
-impl Icon {
-    fn new(width: u32, height: u32) -> Icon {
-        Icon { width, height, rgba: vec![0; (width * height * 4) as usize] }
+impl Mask {
+    pub fn new(width: u32, height: u32) -> Mask {
+        Mask { width, height, alpha: vec![0; (width * height) as usize] }
     }
-    /// Paints rows `y0..y1` of columns `x0..x1` (clipped), replacing what was there.
-    fn fill(&mut self, x0: u32, x1: u32, y0: u32, y1: u32, rgb: [u8; 3], alpha: u8) {
+    pub fn at(&self, x: u32, y: u32) -> u8 {
+        self.alpha[(y * self.width + x) as usize]
+    }
+    /// Covers rows `y0..y1` of columns `x0..x1` (clipped) by `alpha`, replacing what was there.
+    fn fill(&mut self, x0: u32, x1: u32, y0: u32, y1: u32, alpha: u8) {
         for y in y0.min(self.height)..y1.min(self.height) {
             for x in x0.min(self.width)..x1.min(self.width) {
-                let i = ((y * self.width + x) * 4) as usize;
-                self.rgba[i..i + 4].copy_from_slice(&[rgb[0], rgb[1], rgb[2], alpha]);
+                self.alpha[(y * self.width + x) as usize] = alpha;
             }
         }
     }
-    fn frame(&mut self, rgb: [u8; 3]) {
-        let (w, h) = (self.width, self.height);
-        self.fill(0, w, 0, FRAME, rgb, SOLID);
-        self.fill(0, w, h - FRAME, h, rgb, SOLID);
-        self.fill(0, FRAME, 0, h, rgb, SOLID);
-        self.fill(w - FRAME, w, 0, h, rgb, SOLID);
+    /// A frame round columns `x0..x1`.
+    fn frame(&mut self, x0: u32, x1: u32) {
+        let h = self.height;
+        self.fill(x0, x1, 0, FRAME, SOLID);
+        self.fill(x0, x1, h - FRAME, h, SOLID);
+        self.fill(x0, x0 + FRAME, 0, h, SOLID);
+        self.fill(x1 - FRAME, x1, 0, h, SOLID);
     }
     /// A column inside the frame, from the bottom: the VMs solid, the rest of the whole pale.
-    fn column(&mut self, x0: u32, x1: u32, s: Share, rgb: [u8; 3]) {
+    fn column(&mut self, x0: u32, x1: u32, s: Share) {
         let inside = self.height - 2 * FRAME;
         let bottom = self.height - FRAME;
         let px = |f: f32| (f.clamp(0.0, 1.0) * inside as f32).round() as u32;
         let (whole, vms) = (px(s.whole), px(s.vms).min(px(s.whole)));
-        self.fill(x0, x1, bottom - whole, bottom - vms, rgb, PALE);
-        self.fill(x0, x1, bottom - vms, bottom, rgb, SOLID);
+        self.fill(x0, x1, bottom - whole, bottom - vms, PALE);
+        self.fill(x0, x1, bottom - vms, bottom, SOLID);
+    }
+    /// The last [`COLUMNS`] measurements from `x`, oldest first, the newest at the right; columns
+    /// touch.
+    fn trace(&mut self, x: u32, history: &[Share]) {
+        self.frame(x, x + TRACE_WIDTH);
+        let recent = &history[history.len().saturating_sub(COLUMNS)..];
+        let first = COLUMNS - recent.len();
+        for (i, s) in recent.iter().enumerate() {
+            let x0 = x + FRAME + (first + i) as u32 * COLUMN;
+            self.column(x0, x0 + COLUMN, *s);
+        }
+    }
+    /// Now, from `x`, as an upright bar notched at quarters.
+    fn bar(&mut self, x: u32, now: Option<Share>) {
+        self.frame(x, x + BAR_WIDTH);
+        if let Some(now) = now {
+            self.column(x + FRAME, x + BAR_WIDTH - FRAME, now);
+        }
+        let inside = self.height - 2 * FRAME;
+        for q in 1..4 {
+            let y = self.height - FRAME - inside * q / 4;
+            self.fill(x + FRAME, x + BAR_WIDTH - FRAME, y - 1, y + 1, 0);
+        }
+    }
+    /// The whole mask in one colour.
+    pub fn paint(&self, rgb: [u8; 3]) -> Icon {
+        let rgba = self.alpha.iter().flat_map(|&a| [rgb[0], rgb[1], rgb[2], a]).collect();
+        Icon { width: self.width, height: self.height, rgba }
     }
 }
 
-fn ink(hot: bool) -> [u8; 3] {
-    if hot { WARN } else { INK }
+/// The colour an item is painted, and whether it's a template image for macOS to tint: the warning
+/// colour past three quarters.
+pub fn ink(now: Option<Share>) -> ([u8; 3], bool) {
+    if now.is_some_and(|s| s.hot()) { (HOT, false) } else { (INK, true) }
+}
+
+fn drawing_width(d: Drawing) -> u32 {
+    match d {
+        Drawing::Off => 0,
+        Drawing::Trace => TRACE_WIDTH,
+        Drawing::Bar => BAR_WIDTH,
+    }
+}
+
+/// The drawing alone, with nothing set beside it.
+pub fn drawing(d: Drawing, history: &[Share]) -> Option<Icon> {
+    let mut m = Mask::new(drawing_width(d), H);
+    match d {
+        Drawing::Off => return None,
+        Drawing::Trace => m.trace(0, history),
+        Drawing::Bar => m.bar(0, history.last().copied()),
+    }
+    Some(m.paint(ink(history.last().copied()).0))
 }
 
 /// The last [`COLUMNS`] measurements, oldest first, the newest at the right; columns touch.
 pub fn trace(history: &[Share]) -> Icon {
-    let hot = history.last().is_some_and(|s| s.hot());
-    let rgb = ink(hot);
-    let mut icon = Icon::new(TRACE_WIDTH, H);
-    icon.frame(rgb);
-    let recent = &history[history.len().saturating_sub(COLUMNS)..];
-    let first = COLUMNS - recent.len();
-    for (i, s) in recent.iter().enumerate() {
-        let x0 = FRAME + (first + i) as u32 * COLUMN;
-        icon.column(x0, x0 + COLUMN, *s, rgb);
-    }
-    icon
+    drawing(Drawing::Trace, history).expect("a trace")
 }
 
 /// Now, as an upright bar notched at quarters.
 pub fn bar(now: Share) -> Icon {
-    let rgb = ink(now.hot());
-    let mut icon = Icon::new(BAR_WIDTH, H);
-    icon.frame(rgb);
-    icon.column(FRAME, BAR_WIDTH - FRAME, now, rgb);
-    let inside = H - 2 * FRAME;
-    for q in 1..4 {
-        let y = H - FRAME - inside * q / 4;
-        icon.fill(FRAME, BAR_WIDTH - FRAME, y - 1, y + 1, rgb, 0);
-    }
-    icon
+    drawing(Drawing::Bar, &[now]).expect("a bar")
 }
 
-/// The app's own glyph: three bars, the shortest on top.
-pub fn glyph() -> Icon {
-    let mut icon = Icon::new(30, H);
-    for (y, w) in [(7, 16), (15, 30), (23, 22)] {
-        icon.fill(0, w, y, y + 6, INK, SOLID);
+// ---- an item's layout ---------------------------------------------------------------------------
+
+/// How an item's type measures, in pixels (CoreText's measures, on macOS).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Measures {
+    /// The room for the figure: "100%" as it's set, so an item keeps its width as the figure
+    /// changes.
+    pub figure: f64,
+    /// The name under the figure.
+    pub name: f64,
+    /// The name on its side: its length, and how far it reaches across the item, its cap height
+    /// one side of its baseline and its descent the other.
+    pub side: f64,
+    pub side_cap: f64,
+    pub side_descent: f64,
+}
+
+/// Where a line of type starts: the left end of its baseline, in pixels from the top left. On its
+/// side, the bottom end.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Pen {
+    pub x: f64,
+    pub y: f64,
+}
+
+/// Where each part of an item goes, and how wide the item is, in pixels.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Layout {
+    pub width: u32,
+    pub side_name: Option<Pen>,
+    /// The drawing's left edge.
+    pub drawing: Option<u32>,
+    pub figure: Option<Pen>,
+    pub name_under: Option<Pen>,
+}
+
+/// Type sizes in pixels (half that in points): the figure with its name under it, and alone; the
+/// name under it; the name on its side.
+pub const FIGURE_NAMED_PX: f64 = 22.0;
+pub const FIGURE_ALONE_PX: f64 = 24.0;
+pub const NAME_PX: f64 = 14.0;
+pub const SIDE_PX: f64 = 13.0;
+/// Baselines from the top: the figure over its name, the name, the figure alone (its digits
+/// centred).
+const FIGURE_NAMED_BASELINE: f64 = 17.0;
+const NAME_BASELINE: f64 = 31.0;
+const FIGURE_ALONE_BASELINE: f64 = 26.5;
+/// Between the name on its side and the drawing, and between the drawing and the figure.
+const SIDE_GAP: u32 = 3;
+const FIGURE_GAP: u32 = 5;
+
+pub fn layout(p: Parts, m: Measures) -> Layout {
+    let mut x = 0;
+    let side_name = p.side_name.then(|| {
+        x = (m.side_cap + m.side_descent).ceil() as u32 + SIDE_GAP;
+        Pen { x: m.side_cap, y: (H as f64 + m.side) / 2.0 }
+    });
+    let drawing = (p.drawing != Drawing::Off).then(|| {
+        let at = x;
+        x += drawing_width(p.drawing);
+        at
+    });
+    let (mut figure, mut name_under) = (None, None);
+    if p.figure {
+        if drawing.is_some() {
+            x += FIGURE_GAP;
+        }
+        let at = x as f64;
+        if p.name_under {
+            figure = Some(Pen { x: at, y: FIGURE_NAMED_BASELINE });
+            name_under = Some(Pen { x: at, y: NAME_BASELINE });
+            x += m.figure.max(m.name).ceil() as u32;
+        } else {
+            figure = Some(Pen { x: at, y: FIGURE_ALONE_BASELINE });
+            x += m.figure.ceil() as u32;
+        }
     }
-    icon
+    Layout { width: x, side_name, drawing, figure, name_under }
+}
+
+/// The whole item as one image, its figure and name set beside the drawing.
+#[cfg(target_os = "macos")]
+pub fn item(res: Res, p: Parts, history: &[Share]) -> Icon {
+    use crate::typeset::Face;
+    let fig = if p.name_under {
+        Face::system(FIGURE_NAMED_PX, FIGURE_WEIGHT)
+    } else {
+        Face::system(FIGURE_ALONE_PX, FIGURE_WEIGHT)
+    };
+    let name = Face::system(NAME_PX, NAME_WEIGHT);
+    let side = Face::system(SIDE_PX, NAME_WEIGHT);
+    let l = layout(
+        p,
+        Measures {
+            figure: fig.width("100%"),
+            name: name.width(res.id()),
+            side: side.width(res.id()),
+            side_cap: side.cap_height(),
+            side_descent: side.descent(),
+        },
+    );
+    let now = history.last().copied();
+    let mut m = Mask::new(l.width, H);
+    match (l.drawing, p.drawing) {
+        (Some(x), Drawing::Trace) => m.trace(x, history),
+        (Some(x), Drawing::Bar) => m.bar(x, now),
+        _ => {}
+    }
+    if let Some(pen) = l.figure {
+        fig.draw(&mut m, &figure(now), pen.x, pen.y, false);
+    }
+    if let Some(pen) = l.name_under {
+        name.draw(&mut m, res.id(), pen.x, pen.y, false);
+    }
+    if let Some(pen) = l.side_name {
+        side.draw(&mut m, res.id(), pen.x, pen.y, true);
+    }
+    m.paint(ink(now).0)
+}
+
+/// Font weights, on CoreText's scale (0 regular, 0.23 medium, 0.3 semibold).
+#[cfg(target_os = "macos")]
+const FIGURE_WEIGHT: f64 = 0.23;
+#[cfg(target_os = "macos")]
+const NAME_WEIGHT: f64 = 0.0;
+
+/// The app's own glyph, for when no item is chosen: the icon's serif L, as a template image.
+#[cfg(target_os = "macos")]
+pub fn glyph() -> Icon {
+    use crate::typeset::Face;
+    let l = Face::named(GLYPH_FONT, GLYPH_PX);
+    let mut m = Mask::new(l.width("L").ceil() as u32, H);
+    // Its capital centred top to bottom.
+    l.draw(&mut m, "L", 0.0, (H as f64 + l.cap_height()) / 2.0, false);
+    m.paint(INK)
+}
+
+/// The icon's L is Newsreader's, which only the webview has; Georgia's bold is the nearest serif
+/// every Mac has, with the same bracketed serifs (macOS's own serif, New York, can't be had by
+/// name). About 13 pt to the top of the capital, as tall as the menu bar's own symbols.
+#[cfg(target_os = "macos")]
+const GLYPH_FONT: &str = "Georgia-Bold";
+#[cfg(target_os = "macos")]
+const GLYPH_PX: f64 = 38.0;
+
+/// The app's own glyph, for when no item is chosen: an L, as a template image (a plain one: no
+/// font is to hand to set it in).
+#[cfg(not(target_os = "macos"))]
+pub fn glyph() -> Icon {
+    let mut m = Mask::new(20, H);
+    m.fill(3, 9, 6, 30, SOLID);
+    m.fill(3, 18, 25, 30, SOLID);
+    m.paint(INK)
 }
 
 // ---- in the app ---------------------------------------------------------------------------------
@@ -212,10 +434,14 @@ struct Popover {
     closed: Option<(Res, Instant)>,
 }
 
-/// The menu bar's own state: each resource's recent shares, and the popover.
+/// The menu bar's own state: each resource's recent shares, what each item shows, and the popover.
 #[derive(Default)]
 pub struct State {
     history: Mutex<[VecDeque<Share>; 3]>,
+    /// What each item was last drawn showing, and when it was put in the menu bar (`added`).
+    drawn: Mutex<[Option<(u32, Shown)>; 3]>,
+    /// Counts each time an item is put in the menu bar, so one that's new is drawn whole.
+    added: [AtomicU32; 3],
     popover: Mutex<Popover>,
     /// Whether the menu bar could be used here (Linux needs an app indicator library): without it,
     /// closing the window mustn't leave an app with no way back in.
@@ -242,17 +468,20 @@ pub fn start(app: &AppHandle) {
     });
 }
 
-/// Adds and removes items as Settings says, then draws them.
+/// Adds and removes items as Settings says, then draws them (on another thread: see `draw`).
 pub fn apply(app: &AppHandle) {
     let chosen = app.state::<Saved>().get().menu_bar;
     let state = app.state::<State>();
     let mut ok = true;
-    let none = RESOURCES.iter().all(|r| r.look(&chosen) == Look::Off);
+    let none = RESOURCES.iter().all(|r| !r.item(&chosen).shown());
     // Added right to left, so they read memory, CPU, disk.
     for res in RESOURCES.into_iter().rev() {
-        let want = res.look(&chosen) != Look::Off;
+        let want = res.item(&chosen).shown();
         match (want, app.tray_by_id(res.id()).is_some()) {
-            (true, false) => ok &= add(app, res.id(), None).is_ok(),
+            (true, false) => {
+                state.added[res.index()].fetch_add(1, Ordering::Relaxed);
+                ok &= add(app, res.id(), None).is_ok();
+            }
             (false, true) => {
                 app.remove_tray_by_id(res.id());
             }
@@ -267,7 +496,8 @@ pub fn apply(app: &AppHandle) {
         _ => {}
     }
     state.available.store(ok, Ordering::Relaxed);
-    draw(app);
+    let app = app.clone();
+    tauri::async_runtime::spawn_blocking(move || draw(&app));
 }
 
 fn add(app: &AppHandle, id: &str, icon: Option<Icon>) -> tauri::Result<()> {
@@ -327,43 +557,63 @@ fn tick(app: &AppHandle) {
     draw(app);
 }
 
+/// What an item shows, kept so that a tick changes only what has changed.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Shown {
+    pub icon: Option<Icon>,
+    pub template: bool,
+    pub title: Option<String>,
+    pub tooltip: Option<String>,
+}
+
+/// What an item shows, from its recent shares: on macOS one image, the figure and name in it.
+pub fn shown(res: Res, p: Parts, history: &[Share]) -> Shown {
+    let now = history.last().copied();
+    #[cfg(target_os = "macos")]
+    let (icon, title) = (Some(item(res, p, history)), None);
+    #[cfg(not(target_os = "macos"))]
+    let (icon, title) = (drawing(p.drawing, history), p.figure.then(|| title(res, now, p.name_under)));
+    Shown { icon, template: ink(now).1, title, tooltip: now.map(|s| tooltip(res, s)) }
+}
+
+/// Redraws every item, changing only what has changed. Never on the main thread: each change
+/// waits for it, so the lock on what's shown would deadlock with an `apply` there.
 fn draw(app: &AppHandle) {
     let chosen = app.state::<Saved>().get().menu_bar;
     let state = app.state::<State>();
     let history = state.history.lock().expect("menu bar lock").clone();
+    let mut drawn = state.drawn.lock().expect("menu bar lock");
     for res in RESOURCES {
-        let look = res.look(&chosen);
-        let Some(tray) = app.tray_by_id(res.id()) else {
+        let (Some(tray), Some(p)) = (app.tray_by_id(res.id()), parts(res.item(&chosen), chosen.names)) else {
             continue;
         };
         let h: Vec<Share> = history[res.index()].iter().copied().collect();
-        let Some(&now) = h.last() else {
-            let _ = tray.set_title(Some(if chosen.names { format!("{} –", res.id()) } else { "–".into() }));
-            continue;
-        };
-        let icon = match look {
-            Look::Trace => Some(trace(&h)),
-            Look::Bar => Some(bar(now)),
-            Look::Figure | Look::Off => None,
+        let new = shown(res, p, &h);
+        // An item put in the menu bar again since it was last drawn starts empty.
+        let added = state.added[res.index()].load(Ordering::Relaxed);
+        let old = match drawn[res.index()].take() {
+            Some((at, old)) if at == added => old,
+            _ => Shown::default(),
         };
         let result = (|| -> tauri::Result<()> {
-            match icon {
-                Some(i) => {
-                    tray.set_icon(Some(Image::new_owned(i.rgba, i.width, i.height)))?;
-                    tray.set_icon_as_template(!now.hot())?;
-                }
-                None => tray.set_icon(None)?,
+            // The image and whether it's a template in one call: `set_icon` makes it not a
+            // template, and macOS can show it for a frame, untinted, before
+            // `set_icon_as_template` makes it one again (black on a dark menu bar: a flash).
+            if (&new.icon, new.template) != (&old.icon, old.template) {
+                let image = new.icon.clone().map(|i| Image::new_owned(i.rgba, i.width, i.height));
+                tray.set_icon_with_as_template(image, new.template)?;
             }
-            tray.set_title(Some(title(res, now, chosen.names)))?;
-            tray.set_tooltip(Some(format!(
-                "{}: this computer {:.0} % in use, the VMs {:.0} %",
-                res.id(),
-                now.whole * 100.0,
-                now.vms * 100.0
-            )))
+            if new.title != old.title {
+                tray.set_title(new.title.as_deref())?;
+            }
+            if new.tooltip != old.tooltip && new.tooltip.is_some() {
+                tray.set_tooltip(new.tooltip.as_deref())?;
+            }
+            Ok(())
         })();
-        if let Err(e) = result {
-            log::warn!("can't redraw {} in the menu bar: {e}", res.id());
+        match result {
+            Ok(()) => drawn[res.index()] = Some((added, new)),
+            Err(e) => log::warn!("can't redraw {} in the menu bar: {e}", res.id()),
         }
     }
 }
@@ -487,11 +737,77 @@ mod tests {
     }
 
     #[test]
-    fn the_title_is_the_whole_computer_as_a_percent() {
+    fn the_figure_is_the_whole_computer_as_a_percent() {
         let s = Share { whole: 0.704, vms: 0.5 };
-        assert_eq!(title(Res::Mem, s, false), "70%");
-        assert_eq!(title(Res::Cpu, s, true), "cpu 70%");
-        assert_eq!(title(Res::Disk, Share { whole: 1.0, vms: 0.0 }, true), "disk 100%");
+        assert_eq!(figure(Some(s)), "70%");
+        assert_eq!(figure(None), "–");
+        assert_eq!(title(Res::Mem, Some(s), false), "70%");
+        assert_eq!(title(Res::Cpu, Some(s), true), "cpu 70%");
+        assert_eq!(title(Res::Disk, Some(Share { whole: 1.0, vms: 0.0 }), true), "disk 100%");
+        assert_eq!(title(Res::Disk, None, true), "disk –");
+    }
+
+    fn item(drawing: Drawing, figure: bool) -> Item {
+        Item { drawing, figure }
+    }
+
+    #[test]
+    fn an_item_with_neither_a_drawing_nor_a_figure_is_not_there() {
+        assert_eq!(parts(item(Drawing::Off, false), true), None);
+        assert_eq!(parts(item(Drawing::Off, false), false), None);
+    }
+
+    #[test]
+    fn a_name_goes_under_the_figure_or_on_its_side_beside_a_drawing_alone() {
+        let p = |d, f, names| parts(item(d, f), names).unwrap();
+        let under = p(Drawing::Trace, true, true);
+        assert!(under.figure && under.name_under && !under.side_name);
+        let side = p(Drawing::Bar, false, true);
+        assert!(!side.figure && !side.name_under && side.side_name);
+        let figure_alone = p(Drawing::Off, true, true);
+        assert!(figure_alone.name_under && !figure_alone.side_name);
+        let unnamed = p(Drawing::Trace, true, false);
+        assert!(!unnamed.name_under && !unnamed.side_name);
+        assert!(!p(Drawing::Trace, false, false).side_name);
+    }
+
+    const MEASURES: Measures = Measures { figure: 51.3, name: 24.0, side: 20.0, side_cap: 9.1, side_descent: 2.6 };
+
+    #[test]
+    fn the_figure_has_the_room_of_a_hundred_percent_after_the_drawing() {
+        let l = layout(parts(item(Drawing::Trace, true), false).unwrap(), MEASURES);
+        assert_eq!(l.drawing, Some(0));
+        let fig = l.figure.unwrap();
+        assert_eq!(fig.x, (TRACE_WIDTH + FIGURE_GAP) as f64);
+        assert_eq!(l.width, TRACE_WIDTH + FIGURE_GAP + 52);
+        assert_eq!((l.name_under, l.side_name), (None, None));
+        // The digits centred top to bottom.
+        assert!(fig.y > H as f64 / 2.0 && fig.y < H as f64);
+    }
+
+    #[test]
+    fn a_name_under_the_figure_shares_its_left_edge_and_the_wider_one_sets_the_room() {
+        let l = layout(parts(item(Drawing::Bar, true), true).unwrap(), MEASURES);
+        let (fig, name) = (l.figure.unwrap(), l.name_under.unwrap());
+        assert_eq!(fig.x, name.x);
+        assert!(fig.y < name.y && name.y < H as f64);
+        assert_eq!(l.width, BAR_WIDTH + FIGURE_GAP + 52);
+        let wide = layout(parts(item(Drawing::Off, true), true).unwrap(), Measures { name: 60.2, ..MEASURES });
+        assert_eq!((wide.drawing, wide.figure.unwrap().x, wide.width), (None, 0.0, 61));
+    }
+
+    #[test]
+    fn a_name_on_its_side_comes_first_centred_top_to_bottom() {
+        let l = layout(parts(item(Drawing::Trace, false), true).unwrap(), MEASURES);
+        let side = l.side_name.unwrap();
+        // Its capitals reach left from the baseline, to the item's edge.
+        assert_eq!(side.x, MEASURES.side_cap);
+        // It reads upwards, from a start as far from the bottom as its end is from the top.
+        assert_eq!(side.y, (H as f64 + MEASURES.side) / 2.0);
+        let at = 12 + SIDE_GAP;
+        assert_eq!(l.drawing, Some(at));
+        assert_eq!(l.width, at + TRACE_WIDTH);
+        assert_eq!(l.figure, None);
     }
 
     #[test]
@@ -523,11 +839,13 @@ mod tests {
     }
 
     #[test]
-    fn past_three_quarters_it_is_drawn_in_the_warning_colour() {
-        let i = trace(&[Share { whole: 0.9, vms: 0.5 }]);
-        assert_eq!(&px(&i, 0, 0)[..3], &WARN);
-        let i = bar(Share { whole: 0.9, vms: 0.5 });
-        assert_eq!(&px(&i, 0, 0)[..3], &WARN);
+    fn past_three_quarters_it_is_drawn_in_the_warning_colour_and_not_tinted() {
+        let hot = Share { whole: 0.9, vms: 0.5 };
+        assert_eq!(ink(Some(hot)), (HOT, false));
+        assert_eq!(ink(Some(Share { whole: 0.7, vms: 0.5 })), (INK, true));
+        assert_eq!(ink(None), (INK, true));
+        assert_eq!(&px(&trace(&[hot]), 0, 0)[..3], &HOT);
+        assert_eq!(&px(&bar(hot), 0, 0)[..3], &HOT);
         assert_eq!(&trace(&[Share { whole: 0.7, vms: 0.5 }]).rgba[..3], &INK);
     }
 
@@ -539,5 +857,138 @@ mod tests {
         let notch = H - FRAME - inside / 2;
         assert_eq!(px(&i, BAR_WIDTH / 2, notch)[3], 0);
         assert_eq!(px(&i, BAR_WIDTH / 2, notch + 3)[3], SOLID);
+    }
+
+    #[test]
+    fn before_a_measurement_a_drawing_is_its_frame() {
+        let i = drawing(Drawing::Bar, &[]).unwrap();
+        assert_eq!(px(&i, 0, H / 2)[3], SOLID);
+        assert_eq!(px(&i, BAR_WIDTH / 2, H - FRAME - 1)[3], 0);
+        assert_eq!(drawing(Drawing::Off, &[]), None);
+    }
+
+    #[test]
+    fn the_app_glyph_is_a_template_image_that_fills_the_height() {
+        let g = glyph();
+        assert_eq!(g.height, H);
+        assert!(g.width > 8 && g.width < H);
+        assert!(g.rgba.chunks(4).all(|p| p[..3] == INK));
+        let rows: Vec<u32> = (0..H).filter(|&y| (0..g.width).any(|x| px(&g, x, y)[3] > 128)).collect();
+        assert!(rows.len() > 20, "{} rows inked", rows.len());
+    }
+
+    /// Covered pixels in a region of an item.
+    #[cfg(target_os = "macos")]
+    fn ink_in(i: &Icon, xs: std::ops::Range<u32>, ys: std::ops::Range<u32>) -> usize {
+        ys.flat_map(|y| xs.clone().map(move |x| (x, y))).filter(|&(x, y)| px(i, x, y)[3] > 64).count()
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn an_item_keeps_its_width_whatever_its_figure() {
+        let p = parts(item(Drawing::Trace, true), true).unwrap();
+        let at = |w: f32| shown(Res::Cpu, p, &[Share { whole: w, vms: 0.0 }]).icon.unwrap();
+        let (low, high) = (at(0.05), at(1.0));
+        assert_eq!(low.width, high.width);
+        assert_eq!(shown(Res::Cpu, p, &[]).icon.unwrap().width, low.width);
+        // The figure is set to the right of the trace, the name under it.
+        let fig = TRACE_WIDTH + FIGURE_GAP..low.width;
+        assert!(ink_in(&low, fig.clone(), 0..18) > 40);
+        assert!(ink_in(&low, fig, 20..36) > 20);
+        assert_eq!(ink_in(&low, TRACE_WIDTH..TRACE_WIDTH + FIGURE_GAP, 0..H), 0);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn an_item_is_one_image_its_figure_in_it_tinted_unless_hot() {
+        let p = parts(item(Drawing::Bar, true), false).unwrap();
+        let cool = shown(Res::Mem, p, &[Share { whole: 0.4, vms: 0.2 }]);
+        assert!(cool.template && cool.title.is_none());
+        assert_eq!(cool.tooltip.as_deref(), Some("mem: this computer 40 % in use, the VMs 20 %"));
+        let hot = shown(Res::Mem, p, &[Share { whole: 0.9, vms: 0.2 }]);
+        let icon = hot.icon.unwrap();
+        assert!(!hot.template);
+        // The text too.
+        let fig = BAR_WIDTH + FIGURE_GAP..icon.width;
+        assert!(ink_in(&icon, fig.clone(), 0..H) > 40);
+        let (x, y) = fig.flat_map(|x| (0..H).map(move |y| (x, y))).find(|&(x, y)| px(&icon, x, y)[3] == 255).unwrap();
+        assert_eq!(&px(&icon, x, y)[..3], &HOT);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_name_on_its_side_is_set_left_of_the_drawing() {
+        let p = parts(item(Drawing::Trace, false), true).unwrap();
+        let i = shown(Res::Disk, p, &[Share { whole: 0.4, vms: 0.2 }]).icon.unwrap();
+        let start = layout(p, Measures { figure: 0.0, name: 0.0, side: 0.0, side_cap: 0.0, side_descent: 0.0 });
+        assert_eq!(start.width, SIDE_GAP + TRACE_WIDTH);
+        let side = i.width - TRACE_WIDTH - SIDE_GAP;
+        assert!(side > 6 && side < 20, "{side}");
+        assert!(ink_in(&i, 0..side, 0..H) > 30);
+        // Taller than it's wide: on its side.
+        let rows = (0..H).filter(|&y| ink_in(&i, 0..side, y..y + 1) > 0).count();
+        assert!(rows as u32 > side, "{rows} rows");
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn elsewhere_the_image_is_the_drawing_and_the_figure_its_title() {
+        let now = [Share { whole: 0.4, vms: 0.2 }];
+        let s = shown(Res::Mem, parts(item(Drawing::Trace, true), true).unwrap(), &now);
+        assert_eq!(s.icon, Some(trace(&now)));
+        assert_eq!(s.title.as_deref(), Some("mem 40%"));
+        let s = shown(Res::Mem, parts(item(Drawing::Bar, false), true).unwrap(), &now);
+        assert_eq!((s.icon, s.title), (Some(bar(now[0])), None));
+        let s = shown(Res::Cpu, parts(item(Drawing::Off, true), false).unwrap(), &[]);
+        assert_eq!((s.icon, s.title.as_deref()), (None, Some("–")));
+    }
+
+    /// Writes every kind of item to `LD_MENUBAR_PREVIEW` (a directory), as raw RGBA with a
+    /// one-line header, for a look: `cargo test menubar_preview -- --ignored`.
+    #[test]
+    #[ignore]
+    fn menubar_preview() {
+        let Ok(dir) = std::env::var("LD_MENUBAR_PREVIEW") else { return };
+        let dir = std::path::PathBuf::from(dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let write = |name: &str, s: &Shown| {
+            let i = s.icon.as_ref().unwrap();
+            let mut out = format!("{} {} {}\n", i.width, i.height, s.template as u8).into_bytes();
+            out.extend_from_slice(&i.rgba);
+            std::fs::write(dir.join(format!("{name}.rgba")), out).unwrap();
+        };
+        let wave: Vec<Share> = (0..COLUMNS)
+            .map(|i| Share { whole: 0.3 + 0.25 * ((i as f32) * 0.7).sin().abs(), vms: 0.15 + 0.05 * (i % 3) as f32 })
+            .collect();
+        let hot: Vec<Share> = wave.iter().map(|s| Share { whole: s.whole + 0.3, vms: s.vms + 0.2 }).collect();
+        for (res, d) in [(Res::Mem, Drawing::Trace), (Res::Cpu, Drawing::Trace), (Res::Disk, Drawing::Bar)] {
+            for (tag, f, names) in
+                [("named", true, true), ("plain", true, false), ("side", false, true), ("bare", false, false)]
+            {
+                let p = parts(item(d, f), names).unwrap();
+                write(&format!("{}-{}-{tag}", res.id(), d_name(d)), &shown(res, p, &wave));
+                write(&format!("{}-{}-{tag}-hot", res.id(), d_name(d)), &shown(res, p, &hot));
+            }
+            let p = parts(item(Drawing::Off, true), true).unwrap();
+            write(&format!("{}-figure-named", res.id()), &shown(res, p, &wave));
+            write(&format!("{}-figure-named-empty", res.id()), &shown(res, p, &[]));
+            for w in [0.05, 1.0] {
+                let p = parts(item(d, true), true).unwrap();
+                write(
+                    &format!("{}-width-{}", res.id(), (w * 100.0) as u32),
+                    &shown(res, p, &[Share { whole: w, vms: 0.0 }]),
+                );
+            }
+        }
+        let g = glyph();
+        write("glyph", &Shown { icon: Some(g), template: true, ..Shown::default() });
+    }
+
+    fn d_name(d: Drawing) -> &'static str {
+        match d {
+            Drawing::Off => "off",
+            Drawing::Trace => "trace",
+            Drawing::Bar => "bar",
+        }
     }
 }

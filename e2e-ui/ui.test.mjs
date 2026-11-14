@@ -256,16 +256,29 @@ test('The popover opens on the tab asked for, switches tabs and keeps each one\'
   await close();
 });
 
-test('Settings chooses how each menu bar item looks, and whether closing the window keeps recording', async () => {
+test('Settings chooses each menu bar item\'s drawing and figure, and whether closing the window keeps recording', async () => {
   const { page, errors, close } = await open('/settings');
   const stored = () => page.evaluate(() => window.__TAURI_INTERNALS__.invoke('settings'));
-  const memory = page.getByRole('group', { name: 'Memory in the menu bar' });
+  const drawing = (label) => page.getByRole('group', { name: `${label} drawn in the menu bar as` });
+  const figure = (label) => page.getByRole('checkbox', { name: `${label} figure` });
+  const memory = drawing('Memory');
   await memory.waitFor();
   assert.equal(await memory.getByRole('button', { name: 'Trace' }).getAttribute('aria-pressed'), 'true');
-  assert.equal(await page.getByRole('group', { name: 'Disk in the menu bar' }).getByRole('button', { name: 'Bar' }).getAttribute('aria-pressed'), 'true');
-  await memory.getByRole('button', { name: 'Figure only' }).click();
-  await page.waitForFunction(() => document.querySelector('[aria-label="Memory in the menu bar"] [aria-pressed="true"]')?.textContent === 'Figure only');
-  assert.deepEqual((await stored()).menuBar, { memory: 'figure', cpu: 'trace', disk: 'bar', names: true });
+  assert.equal(await drawing('Disk').getByRole('button', { name: 'Bar' }).getAttribute('aria-pressed'), 'true');
+  for (const label of ['Memory', 'CPU', 'Disk']) assert.equal(await figure(label).isChecked(), true);
+
+  // The drawing and the figure are chosen apart: memory as its figure alone, the CPU as a trace alone.
+  await memory.getByRole('button', { name: 'None' }).click();
+  await page.waitForFunction(() => document.querySelector('[aria-label="Memory drawn in the menu bar as"] [aria-pressed="true"]')?.textContent === 'None');
+  await figure('CPU').click();
+  await page.waitForFunction(async () => !(await window.__TAURI_INTERNALS__.invoke('settings')).menuBar.cpu.figure);
+  assert.equal(await figure('CPU').isChecked(), false);
+  assert.deepEqual((await stored()).menuBar, {
+    memory: { drawing: 'off', figure: true },
+    cpu: { drawing: 'trace', figure: false },
+    disk: { drawing: 'bar', figure: true },
+    names: true,
+  });
 
   const names = page.getByRole('checkbox', { name: /Name each one/ });
   assert.equal(await names.isChecked(), true);
