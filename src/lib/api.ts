@@ -301,12 +301,15 @@ export type StackMetric = 'mem' | 'cpu' | 'disk';
  * use and size, and each VM's own part (what its processes hold on the host: memory footprint, CPU, disk
  * image), all on the same buckets `ts` (bucket starts, unix ms). A bucket's value is the average of its
  * samples; null where nothing was measured. A VM's `peak` is the most it reached in the range.
- * Everything else is `used` less the VMs.
+ * Memory has the computer's wired memory too (the kernel's, the GPU's and drivers': never paged out or
+ * compressed, and none of it the VMs'). Everything else is `used` less the VMs (and wired).
  */
 export interface Stack {
   ts: number[];
   used: (number | null)[];
   total: (number | null)[];
+  /** Memory only. */
+  wired?: (number | null)[];
   vms: { name: string; avg: (number | null)[]; peak: number | null }[];
 }
 

@@ -300,6 +300,10 @@ pub struct Stack {
     pub ts: Vec<i64>,
     pub used: Vec<Option<i64>>,
     pub total: Vec<Option<i64>>,
+    /// Memory only: the computer's wired memory (the kernel's, the GPU's and drivers'), which is
+    /// never paged out or compressed. No VM's process has any, so it's drawn on top of the VMs.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub wired: Option<Vec<Option<i64>>>,
     pub vms: Vec<StackVm>,
 }
 
@@ -311,14 +315,28 @@ pub struct StackVm {
     pub peak: Option<i64>,
 }
 
-/// For a resource of a stack: the computer's used and total columns, and a VM's own part.
-pub fn stack_columns(metric: &str) -> Option<(&'static str, &'static str, &'static str)> {
-    match metric {
-        "mem" => Some(("mem_used", "mem_total", "host_rss")),
-        "cpu" => Some(("cpu_mc", "cpu_total_mc", "host_cpu_mc")),
-        "disk" => Some(("disk_used", "disk_total", "host_disk_alloc")),
-        _ => None,
-    }
+/// What a stack of one resource reads: the computer's used and total columns, its wired one (memory
+/// only), and a VM's own part.
+pub struct StackColumns {
+    pub used: &'static str,
+    pub total: &'static str,
+    pub wired: Option<&'static str>,
+    pub part: &'static str,
+}
+
+pub fn stack_columns(metric: &str) -> Option<StackColumns> {
+    let (used, total, wired, part) = match metric {
+        "mem" => ("mem_used", "mem_total", Some("mem_wired"), "host_rss"),
+        "cpu" => ("cpu_mc", "cpu_total_mc", None, "host_cpu_mc"),
+        "disk" => ("disk_used", "disk_total", None, "host_disk_alloc"),
+        _ => return None,
+    };
+    Some(StackColumns {
+        used,
+        total,
+        wired,
+        part,
+    })
 }
 
 #[derive(Debug, Default, Serialize)]
@@ -660,7 +678,7 @@ impl Store {
         to: i64,
         points: usize,
     ) -> rusqlite::Result<Stack> {
-        let Some((used, total, part)) = stack_columns(metric) else {
+        let Some(cols) = stack_columns(metric) else {
             return Ok(Stack::default());
         };
         let host: Option<i64> = self
@@ -672,7 +690,8 @@ impl Store {
         };
         let mut h = self.series(host, from, to, points)?;
         let band = |s: &mut Series, col: &str| s.metrics.remove(col).unwrap_or_default();
-        let (used, total) = (band(&mut h, used).avg, band(&mut h, total).avg);
+        let (used, total) = (band(&mut h, cols.used).avg, band(&mut h, cols.total).avg);
+        let wired = cols.wired.map(|c| band(&mut h, c).avg);
         let at: HashMap<i64, usize> = h.ts.iter().enumerate().map(|(i, &t)| (t, i)).collect();
         let vms: Vec<(i64, String)> = {
             let mut st = self.db.prepare(
@@ -684,7 +703,7 @@ impl Store {
         let mut out = Vec::new();
         for (id, name) in vms {
             let mut s = self.series(id, from, to, points)?;
-            let b = band(&mut s, part);
+            let b = band(&mut s, cols.part);
             let mut avg = vec![None; h.ts.len()];
             for (i, t) in s.ts.iter().enumerate() {
                 // The same buckets, unless this VM was measured at another pace: then the
@@ -699,7 +718,13 @@ impl Store {
                 out.push(StackVm { name, avg, peak });
             }
         }
-        Ok(Stack { ts: h.ts, used, total, vms: out })
+        Ok(Stack {
+            ts: h.ts,
+            used,
+            total,
+            wired,
+            vms: out,
+        })
     }
 
     pub fn series(
@@ -1250,6 +1275,37 @@ mod tests {
         assert!(st.vms[1].avg.iter().all(|v| v.is_some_and(|v| (20..=22).contains(&v))));
         assert_eq!(st.vms[1].peak, Some(22));
         assert!(s.stack("swap", t, t + MINUTE, 6).unwrap().ts.is_empty());
+    }
+
+    #[test]
+    fn a_memory_stack_has_the_computer_s_wired_memory_too() {
+        let mut s = Store::in_memory().unwrap();
+        let t = 10 * MINUTE;
+        let host = s
+            .entity(Kind::Host, "", "host", "this computer", 0)
+            .unwrap();
+        let col = |m: &str| HOST_METRICS.iter().position(|c| *c == m).unwrap();
+        for i in 0..60 {
+            let mut h = vec![ABSENT; HOST_METRICS.len()];
+            h[col("mem_used")] = 50;
+            h[col("mem_total")] = 100;
+            // Not read for the first half.
+            if i >= 30 {
+                h[col("mem_wired")] = 8;
+            }
+            h[col("cpu_mc")] = 1;
+            h[col("cpu_total_mc")] = 4;
+            s.ingest(host, t + i * 1000, h);
+        }
+        let st = s.stack("mem", t, t + MINUTE, 6).unwrap();
+        assert_eq!(
+            st.wired,
+            Some(vec![None, None, None, Some(8), Some(8), Some(8)])
+        );
+        // Only memory has it.
+        assert_eq!(s.stack("cpu", t, t + MINUTE, 6).unwrap().wired, None);
+        let json = serde_json::to_value(s.stack("cpu", t, t + MINUTE, 6).unwrap()).unwrap();
+        assert!(json.get("wired").is_none());
     }
 
     #[test]
