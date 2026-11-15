@@ -78,10 +78,11 @@ pub async fn top_apps(
 ) -> Result<crate::top_apps::Top, String> {
     let metric = crate::top_apps::Metric::parse(&metric)?;
     let exclude = c.vm_host_pids();
+    let squeeze = c.squeeze();
     let sampler = sampler.inner().clone();
     // A few tens of ms of system calls and a `ps`: off the main thread.
     tauri::async_runtime::spawn_blocking(move || {
-        sampler.top(metric, n.unwrap_or(5).clamp(1, 50), &exclude)
+        sampler.top(metric, n.unwrap_or(5).clamp(1, 50), &exclude, squeeze)
     })
     .await
     .map_err(err)?

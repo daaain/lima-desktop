@@ -134,6 +134,7 @@ pub fn vm_row(prev: Option<&Block>, cur: &Block, ncpus: u32) -> Vec<i64> {
         ABSENT, // host_rss
         ABSENT, // host_cpu_mc
         ABSENT, // host_disk_alloc
+        ABSENT, // host_mem
     ]
 }
 

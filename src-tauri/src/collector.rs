@@ -404,6 +404,14 @@ impl Collector {
     /// The host processes each running VM's own cost is measured from (`host_columns`): its guest's
     /// process and Lima's host agent and driver. Their use is already the VMs' bands in the menu
     /// bar's popover, so its list of what else is running leaves them out.
+    /// The share of its size the compressor keeps what it holds in, as last read
+    /// (`host_use::squeeze`), so a process's memory can be counted as the computer's use counts it.
+    pub fn squeeze(&self) -> Option<f64> {
+        let host = self.host_use.lock().expect("lock");
+        let get = |k: &str| host.as_ref()?.latest.get(k).copied();
+        crate::host_use::squeeze(get("mem_compressed")?, get("mem_stored")?)
+    }
+
     pub fn vm_host_pids(&self) -> HashSet<u32> {
         let vms = self.vms.lock().expect("vms lock");
         vms.values()
@@ -499,7 +507,7 @@ impl Collector {
             let reading = probe::read_blocks(stdout, |block| {
                 let mut row = probe::vm_row(prev.as_ref(), &block, inst.cpus);
                 let vm_pid = vm_proc.as_mut().and_then(|p| p.pid(Instant::now()));
-                host_columns(&mut row, &inst, sys.as_mut(), vm_pid);
+                host_columns(&mut row, &inst, sys.as_mut(), vm_pid, me.squeeze());
                 let ts = now_ms();
                 if let Some(id) = entity {
                     me.store().ingest(id, ts, row.clone());
@@ -820,9 +828,17 @@ fn counter_events(vm: &str, pending: Vec<PendingKill>, reason: &str) -> Vec<OomE
 
 /// Host-side columns for a VM row: what it costs this computer in memory and CPU — the process the
 /// guest runs in (`host_proc`), plus Lima's host agent and driver — and the disk image's real,
-/// allocated size (a sparse file's blocks, not its virtual length). Memory is each process's
-/// physical footprint where the OS keeps one, else its resident memory.
-fn host_columns(row: &mut [i64], inst: &Instance, sys: Option<&mut sysinfo::System>, vm_pid: Option<u32>) {
+/// allocated size (a sparse file's blocks, not its virtual length). Memory twice: `host_rss`, each
+/// process's physical footprint where the OS keeps one (as Activity Monitor shows it), else its
+/// resident memory; and `host_mem`, its share of the computer's memory in use, its compressed
+/// memory counted at the compressor's `squeeze` (`host_proc::in_use`).
+fn host_columns(
+    row: &mut [i64],
+    inst: &Instance,
+    sys: Option<&mut sysinfo::System>,
+    vm_pid: Option<u32>,
+    squeeze: Option<f64>,
+) {
     let col = |name: &str| {
         VM_METRICS
             .iter()
@@ -846,16 +862,19 @@ fn host_columns(row: &mut [i64], inst: &Instance, sys: Option<&mut sysinfo::Syst
                     .with_memory()
                     .with_cpu(),
             );
-            let (mut rss, mut cpu, mut seen) = (0u64, 0f32, false);
+            let (mut rss, mut mem, mut cpu, mut seen) = (0u64, 0u64, 0f32, false);
             for pid in &pids {
                 if let Some(p) = sys.process(*pid) {
-                    rss += crate::host_proc::footprint(pid.as_u32()).unwrap_or_else(|| p.memory());
+                    let footprint = crate::host_proc::footprint(pid.as_u32());
+                    rss += footprint.unwrap_or_else(|| p.memory());
+                    mem += crate::host_proc::in_use(footprint, p.memory(), squeeze);
                     cpu += p.cpu_usage();
                     seen = true;
                 }
             }
             if seen {
                 row[col("host_rss")] = rss as i64;
+                row[col("host_mem")] = mem as i64;
                 row[col("host_cpu_mc")] = (cpu * 10.0).round() as i64;
             }
         }

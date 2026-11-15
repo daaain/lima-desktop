@@ -7,9 +7,11 @@
 //! app of its own inside Chrome's, add up to one "Google Chrome". Any other process goes by its
 //! name. The VMs' own host processes are left out, as they're already the VMs' bands.
 //!
-//! Memory is each process's physical footprint where it can be read (as Activity Monitor and the
-//! VMs' figures count it), else its resident memory. CPU is how much CPU time each used since the
-//! last call, over the time between, so the first call after a while has none to give yet.
+//! Memory is each process's share of the memory in use (`host_proc::in_use`): its resident memory,
+//! and what it has in the compressor at the size the compressor keeps it in, as the VMs' figures
+//! count it; beside it, its footprint as Activity Monitor shows it, where that can be read. CPU is
+//! how much CPU time each used since the last call, over the time between, so the first call after
+//! a while has none to give yet.
 
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
@@ -45,8 +47,10 @@ pub struct Proc {
     pub exe: Option<PathBuf>,
     /// Its name: the program's file name, or the system's name for it.
     pub name: String,
-    /// Bytes: its footprint, else its resident memory.
+    /// Bytes: its share of the memory in use.
     pub mem: Option<u64>,
+    /// Bytes: its footprint, as Activity Monitor shows it, where that can be read.
+    pub reported: Option<u64>,
     /// CPU time it has used since it started, in ms.
     pub cpu_ms: Option<u64>,
 }
@@ -60,6 +64,10 @@ pub struct App {
     pub value: u64,
     /// How many processes it is.
     pub processes: u32,
+    /// Memory only: what Activity Monitor says of it, its processes' footprints added up (those
+    /// whose footprint can't be read by their share); none if none can be read.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reported: Option<u64>,
 }
 
 /// The largest apps, the largest first; none while CPU waits for a second sample.
@@ -130,9 +138,20 @@ fn rank(
             name,
             value: 0,
             processes: 0,
+            reported: None,
         });
         app.value += value;
         app.processes += 1;
+        if let (Metric::Mem, Some(r)) = (metric, p.reported) {
+            *app.reported.get_or_insert(0) += r;
+        }
+    }
+    // A process whose footprint can't be read counts in what's reported by its share.
+    for p in procs.iter().filter(|p| metric == Metric::Mem && p.reported.is_none() && !exclude.contains(&p.pid)) {
+        let app = apps.get_mut(&app_name(p.exe.as_deref(), &p.name));
+        if let (Some(r), Some(mem)) = (app.and_then(|a| a.reported.as_mut()), p.mem) {
+            *r += mem;
+        }
     }
     let mut apps: Vec<App> = apps.into_values().filter(|a| a.value > 0).collect();
     apps.sort_by(|a, b| b.value.cmp(&a.value).then_with(|| a.name.cmp(&b.name)));
@@ -167,13 +186,14 @@ struct Inner {
 }
 
 impl TopApps {
-    /// The `n` largest apps by `metric` now, leaving out the processes in `exclude`.
-    pub fn top(&self, metric: Metric, n: usize, exclude: &HashSet<u32>) -> Result<Top, String> {
+    /// The `n` largest apps by `metric` now, leaving out the processes in `exclude`; memory counted
+    /// with the compressor's `squeeze` (`host_use::squeeze`).
+    pub fn top(&self, metric: Metric, n: usize, exclude: &HashSet<u32>, squeeze: Option<f64>) -> Result<Top, String> {
         let mut inner = self
             .inner
             .lock()
             .map_err(|_| "the sampler failed earlier".to_string())?;
-        let procs = sys::processes(&mut inner, metric)?;
+        let procs = sys::processes(&mut inner, metric, squeeze)?;
         let now = Instant::now();
         let top = rank(&procs, metric, inner.prev.as_ref(), now, exclude, n);
         inner.prev = Some(sample_of(&procs, now));
@@ -230,7 +250,7 @@ mod sys {
     /// may read all of them (it's setuid), gives each one's resident memory and CPU time; the
     /// program each runs is readable for any; and the footprint, where it can be read, takes the
     /// place of resident memory.
-    pub fn processes(_: &mut Inner, metric: Metric) -> Result<Vec<Proc>, String> {
+    pub fn processes(_: &mut Inner, metric: Metric, squeeze: Option<f64>) -> Result<Vec<Proc>, String> {
         let out = std::process::Command::new("/bin/ps")
             .args(["-axo", "pid=,rss=,cputime="])
             .output()
@@ -248,12 +268,14 @@ mod sys {
                 let exe = host_proc::exe(pid)?;
                 let name = exe.file_name()?.to_string_lossy().into_owned();
                 // Read only when it's asked for: one more call per process.
-                let mem = (metric == Metric::Mem).then(|| host_proc::footprint(pid).unwrap_or(rss));
+                let footprint = (metric == Metric::Mem).then(|| host_proc::footprint(pid)).flatten();
+                let mem = (metric == Metric::Mem).then(|| host_proc::in_use(footprint, rss, squeeze));
                 Some(Proc {
                     pid,
                     exe: Some(exe),
                     name,
                     mem,
+                    reported: footprint,
                     cpu_ms: Some(cpu_ms),
                 })
             })
@@ -267,7 +289,7 @@ mod sys {
 
     /// Every process, by name, with its resident memory: `/proc` (through sysinfo) has every
     /// user's.
-    pub fn processes(inner: &mut Inner, _: Metric) -> Result<Vec<Proc>, String> {
+    pub fn processes(inner: &mut Inner, _: Metric, _: Option<f64>) -> Result<Vec<Proc>, String> {
         if inner.sys.is_none() {
             inner.sys =
                 Some(sysinfo::System::new().map_err(|e| format!("can't list processes: {e}"))?);
@@ -289,6 +311,7 @@ mod sys {
                 exe: None,
                 name: p.name().to_string_lossy().into_owned(),
                 mem: Some(p.memory()),
+                reported: None,
                 cpu_ms: Some(p.accumulated_cpu_time()),
             })
             .collect())
@@ -355,6 +378,7 @@ mod tests {
             name: exe.file_name().unwrap().to_string_lossy().into_owned(),
             exe: Some(exe),
             mem: Some(mem),
+            reported: Some(mem),
             cpu_ms: Some(cpu_ms),
         }
     }
@@ -403,6 +427,23 @@ mod tests {
                 ("Finder", 90 * MB, 1),
             ]
         );
+    }
+
+    #[test]
+    fn an_app_s_memory_is_its_share_of_what_is_in_use_beside_what_activity_monitor_says() {
+        let squeezed = |pid, exe, mem, reported| Proc { reported: Some(reported), ..proc(pid, exe, mem, 0) };
+        let procs = [
+            squeezed(100, CHROME, 300 * MB, 500 * MB),
+            squeezed(101, RENDERER, 200 * MB, 200 * MB),
+            // Another user's, read by ps alone: no footprint to say.
+            Proc { reported: None, ..proc(300, WINDOWSERVER, 450 * MB, 0) },
+        ];
+        let top = rank(&procs, Metric::Mem, None, Instant::now(), &HashSet::new(), 5);
+        let got: Vec<_> = top.apps.iter().map(|a| (a.name.as_str(), a.value, a.reported)).collect();
+        assert_eq!(got, [("Google Chrome", 500 * MB, Some(700 * MB)), ("WindowServer", 450 * MB, None)]);
+        // CPU says nothing more.
+        let json = serde_json::to_value(&top.apps[1]).unwrap();
+        assert!(json.get("reported").is_none());
     }
 
     #[test]
@@ -530,7 +571,7 @@ mod tests {
         let s = TopApps::default();
         // The VMs' guests, as the collector would leave them out (not their host agents: this
         // has no `limactl list` to name them).
-        let vms: HashSet<u32> = sys::processes(&mut Inner::default(), Metric::Cpu)
+        let vms: HashSet<u32> = sys::processes(&mut Inner::default(), Metric::Cpu, None)
             .unwrap()
             .iter()
             .filter(|p| {
@@ -540,9 +581,12 @@ mod tests {
             })
             .map(|p| p.pid)
             .collect();
+        let host = crate::host_use::Reader::new().read(None);
+        let squeeze = crate::host_use::squeeze(host.mem_compressed, host.mem_stored);
+        println!("the compressor keeps what it holds in {squeeze:?} of its size");
         for metric in [Metric::Cpu, Metric::Mem, Metric::Cpu, Metric::Cpu] {
             let t = Instant::now();
-            let top = s.top(metric, 5, &vms).unwrap();
+            let top = s.top(metric, 5, &vms, squeeze).unwrap();
             let took = t.elapsed();
             println!("{metric:?} in {took:?}, pending: {}", top.pending);
             for a in &top.apps {
@@ -550,7 +594,9 @@ mod tests {
                     Metric::Mem => format!("{:.2} GiB", a.value as f64 / (1u64 << 30) as f64),
                     Metric::Cpu => format!("{:.2} cores", a.value as f64 / 1000.0),
                 };
-                println!("  {:<40} {v:>12}  ({} processes)", a.name, a.processes);
+                let gib = |b: u64| b as f64 / (1u64 << 30) as f64;
+                let reported = a.reported.map(|r| format!(", Activity Monitor {:.2} GiB", gib(r))).unwrap_or_default();
+                println!("  {:<40} {v:>12}  ({} processes{reported})", a.name, a.processes);
             }
             std::thread::sleep(Duration::from_secs(1));
         }

@@ -63,6 +63,18 @@ pub fn footprint(pid: u32) -> Option<u64> {
     sys::footprint(pid)
 }
 
+/// A process's share of the memory in use ("Memory Used"), in bytes. Its footprint, as Activity
+/// Monitor shows it, counts what it has in the compressor at the size it was before, while the
+/// computer's use counts the compressor at its own, smaller size: so the part of the footprint that
+/// isn't resident counts at the compressor's `squeeze` (`host_use::squeeze`). Without a footprint
+/// (another user's process) its resident memory; with no squeeze to go by, its footprint.
+pub fn in_use(footprint: Option<u64>, resident: u64, squeeze: Option<f64>) -> u64 {
+    let Some(footprint) = footprint else { return resident };
+    let Some(squeeze) = squeeze else { return footprint };
+    let held = resident.min(footprint);
+    held + ((footprint - held) as f64 * squeeze).round() as u64
+}
+
 /// One VM's guest process, remembered between measurements.
 pub struct VmProcess {
     dir: PathBuf,
@@ -306,6 +318,20 @@ mod sys {
 mod tests {
     use super::*;
     use std::cell::Cell;
+
+    const GIB: u64 = 1 << 30;
+
+    #[test]
+    fn a_process_s_share_of_memory_in_use_counts_what_it_has_compressed_at_its_compressed_size() {
+        // 10 GiB resident and 30 GiB more in the compressor, which keeps what it holds in half.
+        assert_eq!(in_use(Some(40 * GIB), 10 * GIB, Some(0.5)), 25 * GIB);
+        // Nothing compressed: its footprint, which leaves out the files it has mapped.
+        assert_eq!(in_use(Some(4 * GIB), 6 * GIB, Some(0.5)), 4 * GIB);
+        // No footprint (another user's process): its resident memory.
+        assert_eq!(in_use(None, 6 * GIB, Some(0.5)), 6 * GIB);
+        // The compressor's share not known: its footprint, as Activity Monitor says.
+        assert_eq!(in_use(Some(40 * GIB), 10 * GIB, None), 40 * GIB);
+    }
 
     #[test]
     fn the_guest_runs_in_apples_vm_service_or_qemu() {

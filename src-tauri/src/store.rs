@@ -81,6 +81,7 @@ pub const VM_METRICS: &[&str] = &[
     "host_rss",
     "host_cpu_mc",
     "host_disk_alloc",
+    "host_mem",
 ];
 /// cpu in millicores; memory in bytes (mem_peak: the cgroup's high-water mark since start);
 /// *_bps in bytes/s; oom_kills cumulative.
@@ -109,6 +110,7 @@ pub const HOST_METRICS: &[&str] = &[
     "cpu_total_mc",
     "disk_used",
     "disk_total",
+    "mem_stored",
 ];
 
 /// Decoded chunk rows: `(ts_ms, values)`.
@@ -316,12 +318,13 @@ pub struct StackVm {
 }
 
 /// What a stack of one resource reads: the computer's used and total columns, its wired one (memory
-/// only), and a VM's own part.
+/// only), and a VM's own part, and where that wasn't kept yet, what stands in for it.
 pub struct StackColumns {
     pub used: &'static str,
     pub total: &'static str,
     pub wired: Option<&'static str>,
     pub part: &'static str,
+    pub before: Option<&'static str>,
 }
 
 /// How many buckets in a row a VM may be missing a reading because it's late or lost, not because
@@ -350,10 +353,12 @@ fn unmeasured_vms(vms: &[StackVm], n: usize) -> Vec<usize> {
 }
 
 pub fn stack_columns(metric: &str) -> Option<StackColumns> {
-    let (used, total, wired, part) = match metric {
-        "mem" => ("mem_used", "mem_total", Some("mem_wired"), "host_rss"),
-        "cpu" => ("cpu_mc", "cpu_total_mc", None, "host_cpu_mc"),
-        "disk" => ("disk_used", "disk_total", None, "host_disk_alloc"),
+    // A VM's memory: its share of the computer's use (host_mem); before that was kept, its
+    // footprint (host_rss), which counts its compressed memory at full size.
+    let (used, total, wired, part, before) = match metric {
+        "mem" => ("mem_used", "mem_total", Some("mem_wired"), "host_mem", Some("host_rss")),
+        "cpu" => ("cpu_mc", "cpu_total_mc", None, "host_cpu_mc", None),
+        "disk" => ("disk_used", "disk_total", None, "host_disk_alloc", None),
         _ => return None,
     };
     Some(StackColumns {
@@ -361,6 +366,7 @@ pub fn stack_columns(metric: &str) -> Option<StackColumns> {
         total,
         wired,
         part,
+        before,
     })
 }
 
@@ -730,7 +736,17 @@ impl Store {
             // On the computer's buckets, not ones of its own: each VM is measured at its own
             // moment, with ssh's jitter, so its own would be wider and skip some of the computer's.
             let (mut s, _) = self.bucketed(id, from, to, points, Some(width))?;
-            let b = band(&mut s, cols.part);
+            let mut b = band(&mut s, cols.part);
+            if let Some(before) = cols.before {
+                let old = band(&mut s, before);
+                let or = |new: &mut Vec<Option<i64>>, old: Vec<Option<i64>>| {
+                    for (n, o) in new.iter_mut().zip(old) {
+                        *n = n.or(o);
+                    }
+                };
+                or(&mut b.avg, old.avg);
+                or(&mut b.max, old.max);
+            }
             let mut avg = vec![None; h.ts.len()];
             for (i, t) in s.ts.iter().enumerate() {
                 if let (Some(&j), Some(v)) = (at.get(t), b.avg.get(i).copied().flatten()) {
@@ -1426,6 +1442,32 @@ mod tests {
             }
         }
         assert!(st.used.iter().filter(|u| u.is_some()).count() > st.used.len() * 9 / 10);
+    }
+
+    #[test]
+    fn a_vm_s_memory_in_a_stack_is_its_share_of_the_use_or_its_footprint_before_that_was_kept() {
+        let mut s = Store::in_memory().unwrap();
+        let t = 10 * MINUTE;
+        let host = s.entity(Kind::Host, "", "host", "this computer", 0).unwrap();
+        let web = s.entity(Kind::Vm, "web", "web", "web", 0).unwrap();
+        let col = |m: &str| HOST_METRICS.iter().position(|c| *c == m).unwrap();
+        let vcol = |m: &str| VM_METRICS.iter().position(|c| *c == m).unwrap();
+        for i in 0..60 {
+            let mut h = vec![ABSENT; HOST_METRICS.len()];
+            h[col("mem_used")] = 50;
+            h[col("mem_total")] = 100;
+            s.ingest(host, t + i * 1000, h);
+            let mut v = vec![ABSENT; VM_METRICS.len()];
+            v[vcol("host_rss")] = 40;
+            // An older version kept only the footprint: the first half minute has no share.
+            if i >= 30 {
+                v[vcol("host_mem")] = 25;
+            }
+            s.ingest(web, t + i * 1000, v);
+        }
+        let st = s.stack("mem", t, t + MINUTE, 6).unwrap();
+        assert_eq!(st.vms[0].avg, [Some(40), Some(40), Some(40), Some(25), Some(25), Some(25)]);
+        assert_eq!(st.vms[0].peak, Some(40));
     }
 
     #[test]

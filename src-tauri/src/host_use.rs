@@ -22,6 +22,9 @@ pub struct HostUse {
     pub cpu_total_mc: i64,
     pub disk_used: i64,
     pub disk_total: i64,
+    /// What the compressor holds, at its size before it was compressed (macOS); ABSENT elsewhere.
+    /// Beside `mem_compressed`, how small it keeps what it holds: [`squeeze`].
+    pub mem_stored: i64,
 }
 
 impl HostUse {
@@ -36,8 +39,16 @@ impl HostUse {
             self.cpu_total_mc,
             self.disk_used,
             self.disk_total,
+            self.mem_stored,
         ]
     }
+}
+
+/// The share of its size the compressor keeps what it holds in (`compressed` of `stored`), so a
+/// process's compressed memory can be counted as "Memory Used" counts it (`host_proc::in_use`);
+/// `None` with nothing compressed or nothing read.
+pub fn squeeze(compressed: i64, stored: i64) -> Option<f64> {
+    (compressed >= 0 && stored > 0).then(|| (compressed as f64 / stored as f64).min(1.0))
 }
 
 /// The page counts Activity Monitor's memory figures are made of (`vm_statistics64`).
@@ -49,16 +60,28 @@ pub struct Pages {
     pub wired: u64,
     /// Pages the compressor occupies (`compressor_page_count`).
     pub compressor: u64,
+    /// Pages the compressor holds, uncompressed (`total_uncompressed_pages_in_compressor`).
+    pub stored: u64,
 }
 
-/// (used, wired, compressed) bytes as Activity Monitor counts them: "App Memory" is anonymous
-/// pages less purgeable ones, and "Memory Used" is that, wired and compressed. File cache isn't
-/// used memory: the system gives it back as soon as anything asks.
-pub fn memory_used(p: Pages, page_size: u64) -> (u64, u64, u64) {
+/// Memory as Activity Monitor counts it, in bytes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Memory {
+    /// "Memory Used": "App Memory" (anonymous pages less purgeable ones), wired and compressed.
+    /// File cache isn't used memory: the system gives it back as soon as anything asks.
+    pub used: u64,
+    pub wired: u64,
+    /// What the compressor occupies.
+    pub compressed: u64,
+    /// What it holds in that, uncompressed.
+    pub stored: u64,
+}
+
+pub fn memory_used(p: Pages, page_size: u64) -> Memory {
     let app = p.internal.saturating_sub(p.purgeable);
     let wired = p.wired * page_size;
     let compressed = p.compressor * page_size;
-    (app * page_size + wired + compressed, wired, compressed)
+    Memory { used: app * page_size + wired + compressed, wired, compressed, stored: p.stored * page_size }
 }
 
 /// Busy millicores from a share of all cores (sysinfo's global usage, in percent).
@@ -94,6 +117,7 @@ impl Reader {
             cpu_total_mc: ABSENT,
             disk_used: ABSENT,
             disk_total: ABSENT,
+            mem_stored: ABSENT,
         };
         if let Some(sys) = self.sys.as_mut() {
             sys.refresh_memory();
@@ -106,10 +130,11 @@ impl Reader {
                 u.cpu_total_mc = cpus as i64 * 1000;
             }
         }
-        if let Some((used, wired, compressed)) = sys::memory() {
-            u.mem_used = used as i64;
-            u.mem_wired = wired as i64;
-            u.mem_compressed = compressed as i64;
+        if let Some(m) = sys::memory() {
+            u.mem_used = m.used as i64;
+            u.mem_wired = m.wired as i64;
+            u.mem_compressed = m.compressed as i64;
+            u.mem_stored = m.stored as i64;
         }
         if let Some((used, total)) = lima_dir.and_then(|d| self.disk.read(d, Instant::now())) {
             u.disk_used = used as i64;
@@ -198,7 +223,7 @@ fn statvfs(path: &Path) -> Option<(u64, u64)> {
 
 #[cfg(target_os = "macos")]
 mod sys {
-    use super::{Pages, memory_used};
+    use super::{Memory, Pages, memory_used};
     use std::path::Path;
 
     /// (available, total) bytes of the volume `path` is on, as Finder counts them: available is
@@ -240,8 +265,8 @@ mod sys {
         *PORT.get_or_init(|| unsafe { libc::mach_host_self() })
     }
 
-    /// (used, wired, compressed) bytes, as Activity Monitor counts them.
-    pub fn memory() -> Option<(u64, u64, u64)> {
+    /// Memory, as Activity Monitor counts it.
+    pub fn memory() -> Option<Memory> {
         let mut st = std::mem::MaybeUninit::<libc::vm_statistics64>::zeroed();
         let mut count = libc::HOST_VM_INFO64_COUNT;
         // SAFETY: `st` is a zeroed vm_statistics64 and `count` its size in integers, as asked.
@@ -268,6 +293,7 @@ mod sys {
             purgeable: u64::from(st.purgeable_count),
             wired: u64::from(st.wire_count),
             compressor: u64::from(st.compressor_page_count),
+            stored: st.total_uncompressed_pages_in_compressor,
         };
         Some(memory_used(pages, page as u64))
     }
@@ -281,7 +307,7 @@ mod sys {
     }
 
     /// Only macOS splits memory this way; elsewhere used is total less available.
-    pub fn memory() -> Option<(u64, u64, u64)> {
+    pub fn memory() -> Option<super::Memory> {
         None
     }
 }
@@ -293,17 +319,29 @@ mod tests {
     #[test]
     fn used_memory_is_app_wired_and_compressed() {
         const PAGE: u64 = 16384;
-        let p = Pages { internal: 1000, purgeable: 100, wired: 200, compressor: 50 };
-        let (used, wired, compressed) = memory_used(p, PAGE);
-        assert_eq!(wired, 200 * PAGE);
-        assert_eq!(compressed, 50 * PAGE);
-        assert_eq!(used, (900 + 200 + 50) * PAGE);
+        let p = Pages { internal: 1000, purgeable: 100, wired: 200, compressor: 50, stored: 80 };
+        let m = memory_used(p, PAGE);
+        assert_eq!(m.wired, 200 * PAGE);
+        assert_eq!(m.compressed, 50 * PAGE);
+        assert_eq!(m.stored, 80 * PAGE);
+        assert_eq!(m.used, (900 + 200 + 50) * PAGE);
     }
 
     #[test]
     fn purgeable_beyond_anonymous_pages_counts_nothing() {
-        let p = Pages { internal: 10, purgeable: 50, wired: 0, compressor: 0 };
-        assert_eq!(memory_used(p, 4096).0, 0);
+        let p = Pages { internal: 10, purgeable: 50, wired: 0, compressor: 0, stored: 0 };
+        assert_eq!(memory_used(p, 4096).used, 0);
+    }
+
+    #[test]
+    fn the_compressor_keeps_what_it_holds_in_a_share_of_its_size() {
+        assert_eq!(squeeze(50, 80), Some(0.625));
+        // Nothing compressed, or not read: no share to say.
+        assert_eq!(squeeze(0, 0), None);
+        assert_eq!(squeeze(ABSENT, 80), None);
+        assert_eq!(squeeze(50, ABSENT), None);
+        // Never more than it holds, though its pages may briefly read so.
+        assert_eq!(squeeze(90, 80), Some(1.0));
     }
 
     #[test]
@@ -316,12 +354,12 @@ mod tests {
 
     #[test]
     fn the_row_follows_the_stored_columns() {
-        let u = HostUse { mem_used: 1, mem_total: 2, mem_wired: 3, mem_compressed: 4, cpu_mc: 5, cpu_total_mc: 6, disk_used: 7, disk_total: 8 };
+        let u = HostUse { mem_used: 1, mem_total: 2, mem_wired: 3, mem_compressed: 4, cpu_mc: 5, cpu_total_mc: 6, disk_used: 7, disk_total: 8, mem_stored: 9 };
         assert_eq!(crate::store::HOST_METRICS.len(), u.row().len());
         let named: Vec<(&str, i64)> = crate::store::HOST_METRICS.iter().copied().zip(u.row()).collect();
         assert_eq!(
             named,
-            [("mem_used", 1), ("mem_total", 2), ("mem_wired", 3), ("mem_compressed", 4), ("cpu_mc", 5), ("cpu_total_mc", 6), ("disk_used", 7), ("disk_total", 8)]
+            [("mem_used", 1), ("mem_total", 2), ("mem_wired", 3), ("mem_compressed", 4), ("cpu_mc", 5), ("cpu_total_mc", 6), ("disk_used", 7), ("disk_total", 8), ("mem_stored", 9)]
         );
     }
 
