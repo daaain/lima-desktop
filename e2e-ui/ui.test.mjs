@@ -251,8 +251,8 @@ test('The popover opens on the tab asked for, switches tabs and keeps each one\'
   await page.locator('.legend .row[data-vm]').first().waitFor();
   assert.equal(await tab('Disk').getAttribute('aria-selected'), 'true');
   assert.equal(await range('7 days').getAttribute('aria-pressed'), 'true');
-  // Past three quarters of the disk: the figure warns.
-  assert.match(await page.locator('.big').getAttribute('class'), /\bhot\b/);
+  // Under 50 GB of the disk free, as Settings has it by default: the figure warns.
+  await page.locator('.popover.warm .big.hot').waitFor();
   // A stopped VM's disk image counts, drawn at its size now.
   const foundry = page.locator('.row[data-vm="foundry"]');
   // A disk in powers of 1000, as Finder says it.
@@ -392,6 +392,31 @@ test("The popover's CPU apps wait for a second sample, and one that can't be rea
   await close();
 });
 
+test('The popover warns as Settings has it, read again each time it is shown', async () => {
+  // Memory about half in use: not past the 75 % it warns past by default.
+  const { page, errors, close } = await open('/menubar?tab=mem', { width: 360, height: 560 });
+  const tab = (name) => page.getByRole('tab', { name });
+  const hot = () => page.locator('.big').evaluate((el) => el.classList.contains('hot'));
+  await page.locator('.legend .row[data-vm]').first().waitFor();
+  assert.equal(await hot(), false);
+  // The disk, with less than the 50 GB free it warns under by default.
+  await tab('Disk').click();
+  await page.locator('.popover.warm .big.hot').waitFor();
+
+  // Settings changed while the popover was hidden: the disk warns under 25 GB free, and has more.
+  await page.evaluate(async () => {
+    const s = await window.__TAURI_INTERNALS__.invoke('settings');
+    const warn = { ...s.menuBar.warn, diskFreeGb: 25 };
+    await window.__TAURI_INTERNALS__.invoke('set_settings', { settings: { ...s, menuBar: { ...s.menuBar, warn } } });
+  });
+  await page.waitForTimeout(300);
+  assert.equal(await hot(), true, 'as it was, until it is shown again');
+  await page.evaluate(() => window.__fakeEmit('popover-shown', { tab: 'disk', theme: 'system' }));
+  await page.locator('.popover:not(.warm) .big:not(.hot)').waitFor();
+  assert.deepEqual(errors, []);
+  await close();
+});
+
 test('Settings chooses each menu bar item\'s drawing and figure, and whether closing the window keeps recording', async () => {
   const { page, errors, close } = await open('/settings');
   const stored = () => page.evaluate(() => window.__TAURI_INTERNALS__.invoke('settings'));
@@ -414,6 +439,7 @@ test('Settings chooses each menu bar item\'s drawing and figure, and whether clo
     cpu: { drawing: 'trace', figure: false },
     disk: { drawing: 'bar', figure: true },
     names: true,
+    warn: { memoryPct: 75, cpuPct: 75, diskFreeGb: 50 },
   });
 
   const names = page.getByRole('checkbox', { name: /Name each one/ });

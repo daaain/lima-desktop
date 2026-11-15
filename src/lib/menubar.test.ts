@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { Snapshot, Stack, VmLive } from './api';
+import type { Snapshot, Stack, VmLive, Warn } from './api';
 import {
   agoLabel, amount, appTip, APPS_PENDING, chartLabel, containersByVm, containerTip, layerAside, layerFigure, layers, listsTop, ofSentence,
   parseTab, parseTabRange, percentFigure, pickTop, recordingPhrase, shares, stackChart, stackRefreshMs, TAB_RANGES, topApps,
@@ -92,11 +92,38 @@ describe('shares', () => {
     const s = shares(fleet, 'disk')!;
     expect(s.parts.map((p) => [p.name, p.running])).toEqual([['foundry', false], ['atlas', true], ['harbor', true]]);
     expect(s.vms).toBe(131 * GB);
-    expect(s.hot).toBe(true);
   });
   it('never has the rest below nothing, when the VMs are counted as more than the computer uses', () => {
     const s = shares(snap([running('a', { host_rss: 50 * GiB })], { mem_used: 40 * GiB, mem_total: 64 * GiB }), 'mem')!;
     expect(s.rest).toBe(0);
+  });
+});
+
+describe('when the figure warns', () => {
+  const warn: Warn = { memoryPct: 75, cpuPct: 75, diskFreeGb: 50 };
+  const at = (tab: 'mem' | 'cpu' | 'disk', used: number, total: number, w: Warn | null = warn) => {
+    const keys = { mem: ['mem_used', 'mem_total'], cpu: ['cpu_mc', 'cpu_total_mc'], disk: ['disk_used', 'disk_total'] }[tab];
+    return shares(snap([], { [keys[0]]: used, [keys[1]]: total }), tab, w)!.hot;
+  };
+  it('is as Settings has it: memory and CPU past a percent in use', () => {
+    expect(at('mem', 48, 64)).toBe(false);
+    expect(at('mem', 49, 64)).toBe(true);
+    expect(at('cpu', 9100, 12000)).toBe(true);
+    expect(at('mem', 33, 64, { ...warn, memoryPct: 50 })).toBe(true);
+    expect(at('cpu', 12000, 12000, { ...warn, cpuPct: null })).toBe(false);
+  });
+  it('is a disk with less than so many GB free, whatever its size', () => {
+    // 90 % of a 1 TB disk still leaves 100 GB; 86 % of a 256 GB one only 36.
+    expect(at('disk', 900 * GB, 1000 * GB)).toBe(false);
+    expect(at('disk', 220 * GB, 256 * GB)).toBe(true);
+    expect(at('disk', 950 * GB, 1000 * GB)).toBe(false);
+    expect(at('disk', 951 * GB, 1000 * GB)).toBe(true);
+    expect(at('disk', 900 * GB, 1000 * GB, { ...warn, diskFreeGb: 200 })).toBe(true);
+    expect(at('disk', 1000 * GB, 1000 * GB, { ...warn, diskFreeGb: null })).toBe(false);
+  });
+  it('is never before the settings are read', () => {
+    expect(at('mem', 64, 64, null)).toBe(false);
+    expect(shares(fleet, 'mem')!.hot).toBe(false);
   });
 });
 

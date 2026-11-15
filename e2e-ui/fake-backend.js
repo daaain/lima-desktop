@@ -229,7 +229,7 @@
   // says it, 926.4 GiB), as `host` says.
   // Its use is the VMs' own costs on it (each VM's host_* readings, a stopped VM's disk image too)
   // and everything else this computer does: a steady 19 GiB or so of memory, a few busy cores now and
-  // then, and the rest of a disk past three quarters, so the disk tab warns.
+  // then, and the rest of a disk with under 50 GB free, so the disk tab warns.
   const HOST = { cpus: 16, memory: 128 * GiB, disk: 994.66e9 };
   const runningFleet = () => fleet.filter((v) => v.entity);
   const vmCost = (key, t) => runningFleet().reduce((sum, v) => sum + metricsOf.get(v.entity)[key](t), 0);
@@ -237,7 +237,7 @@
   const rest = {
     mem: scaled(shapes.flat(0.15, 0.04), HOST.memory),
     cpu: scaled(shapes.bursty(0.1, 0.3, 0.2), HOST.cpus * 1000),
-    disk: scaled(shapes.filling(0.53, 0.545, NOW), HOST.disk),
+    disk: scaled(shapes.filling(0.7, 0.715, NOW), HOST.disk),
   };
   let hostEntity;
   const hostMetrics = () => ({
@@ -325,7 +325,7 @@
     };
   }
 
-  // As settings.rs: one of the intervals offered, or refused.
+  // As settings.rs: one of the intervals and warnings offered, or refused.
   const settings = {
     intervalSecs: 1,
     theme: 'system',
@@ -334,6 +334,7 @@
       cpu: { drawing: 'trace', figure: true },
       disk: { drawing: 'bar', figure: true },
       names: true,
+      warn: { memoryPct: 75, cpuPct: 75, diskFreeGb: 50 },
     },
     keepRunning: true,
   };
@@ -342,7 +343,9 @@
   settings.checkUpdates = true;
   window.__fakeSettings = settings;
   const ITEMS = ['memory', 'cpu', 'disk'];
-  const copyMenuBar = (m) => ({ ...m, ...Object.fromEntries(ITEMS.map((k) => [k, { ...m[k] }])) });
+  const copyMenuBar = (m) => ({ ...m, ...Object.fromEntries(ITEMS.map((k) => [k, { ...m[k] }])), warn: { ...m.warn } });
+  const WARN_PCTS = [50, 60, 70, 75, 80, 85, 90, 95];
+  const WARN_FREE_GB = [10, 25, 50, 100, 200];
   const copy = () => ({ ...settings, menuBar: copyMenuBar(settings.menuBar) });
   function setSettings({ settings: s }) {
     if (![1, 2, 5, 10].includes(s.intervalSecs)) throw `${s.intervalSecs} s isn't one of the intervals offered (1 s, 2 s, 5 s, 10 s)`;
@@ -352,6 +355,11 @@
       if (!['off', 'trace', 'bar'].includes(item?.drawing)) throw `unknown variant \`${item?.drawing}\``;
       if (typeof item.figure !== 'boolean') throw 'invalid type: expected a boolean';
     }
+    for (const pct of [s.menuBar.warn?.memoryPct, s.menuBar.warn?.cpuPct]) {
+      if (pct != null && !WARN_PCTS.includes(pct)) throw `${pct} % isn't one of the warnings offered (${WARN_PCTS.map((p) => `${p} %`).join(', ')})`;
+    }
+    const gb = s.menuBar.warn?.diskFreeGb;
+    if (gb != null && !WARN_FREE_GB.includes(gb)) throw `${gb} GB free isn't one of the warnings offered (${WARN_FREE_GB.map((g) => `${g} GB`).join(', ')})`;
     if (typeof s.menuBar.names !== 'boolean' || typeof s.keepRunning !== 'boolean') throw 'invalid type: expected a boolean';
     if (typeof s.checkUpdates !== 'boolean') throw 'invalid type: expected a boolean';
     Object.assign(settings, s, { menuBar: copyMenuBar(s.menuBar) });
