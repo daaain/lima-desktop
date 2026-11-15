@@ -179,7 +179,25 @@ export interface MenuBar {
   cpu: MenuBarItem;
   disk: MenuBarItem;
   names: boolean;
+  warn: Warn;
 }
+
+/**
+ * When each menu bar item, and the popover's figure, turns the warning colour (settings::Warn); null is
+ * never. The main window's warnings are another matter: each VM's are past three quarters of its own size.
+ */
+export interface Warn {
+  /** Past this percent of the computer's memory in use: one of `WARN_PCTS`. */
+  memoryPct: number | null;
+  /** Past this percent of the computer's CPU in use: one of `WARN_PCTS`. */
+  cpuPct: number | null;
+  /** With less than this many GB (powers of 1000, as Finder counts a disk) free: one of `WARN_FREE_GB`. */
+  diskFreeGb: number | null;
+}
+/** The percents in use memory and CPU can warn past (settings::WARN_PCTS). */
+export const WARN_PCTS = [50, 60, 70, 75, 80, 85, 90, 95] as const;
+/** The GB free a disk can warn under (settings::WARN_FREE_GB). */
+export const WARN_FREE_GB = [10, 25, 50, 100, 200] as const;
 
 /** What's chosen in Settings (settings.rs). */
 export interface Settings {

@@ -1,8 +1,7 @@
 // The menu bar's popover (routes/menubar): the whole computer's memory, CPU or disk, the VMs' own
 // share of it and everything else, now and stacked over a range. What it says and the geometry it
 // draws are here, so a component only places them (docs/design/ui.md).
-import type { Snapshot, Stack, StackMetric, TopApp, TopApps } from './api';
-import { isHot } from './almanac';
+import type { Snapshot, Stack, StackMetric, TopApp, TopApps, Warn } from './api';
 import { lineName } from './containers';
 import { bytes, decimalBytes } from './format';
 import { inRange, rangeLabel, rangeMs, theLast, type AnyRangeKey } from './ranges';
@@ -105,8 +104,11 @@ export interface Shares {
   parts: VmPart[];
 }
 
-/** The tab's figures from a snapshot; null until the computer's use and size have been read. */
-export function shares(snap: Snapshot | null | undefined, tab: Tab): Shares | null {
+/**
+ * The tab's figures from a snapshot, warning as `warn` (Settings) says; null until the computer's use and
+ * size have been read.
+ */
+export function shares(snap: Snapshot | null | undefined, tab: Tab, warn?: Warn | null): Shares | null {
   const k = KEYS[tab];
   const host = snap?.hostUse?.latest;
   const used = host?.[k.used];
@@ -128,7 +130,17 @@ export function shares(snap: Snapshot | null | undefined, tab: Tab): Shares | nu
   const read = k.wired ? host?.[k.wired] : undefined;
   const wired = read != null && read >= 0 ? Math.min(read, left) : null;
   const pct = Math.min(100, Math.max(0, (used / total) * 100));
-  return { used, total, vms, wired, rest: left - (wired ?? 0), free: Math.max(0, total - used), pct, hot: isHot(pct), parts };
+  return { used, total, vms, wired, rest: left - (wired ?? 0), free: Math.max(0, total - used), pct, hot: warns(tab, pct, total - used, warn), parts };
+}
+
+/**
+ * Whether the figure warns, as the menu bar's item does: memory and CPU past a percent in use, a disk with
+ * less than so many GB (powers of 1000) free, as Settings has it. Never before the settings are read.
+ */
+export function warns(tab: Tab, pct: number, free: number, warn: Warn | null | undefined): boolean {
+  const at = tab === 'mem' ? warn?.memoryPct : tab === 'cpu' ? warn?.cpuPct : warn?.diskFreeGb;
+  if (at == null) return false;
+  return tab === 'disk' ? free < at * 1e9 : pct > at;
 }
 
 const largestFirst = (a: { now: number | null; name: string }, b: { now: number | null; name: string }) =>

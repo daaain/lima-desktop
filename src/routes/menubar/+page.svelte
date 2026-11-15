@@ -9,7 +9,7 @@
   import { onMount } from 'svelte';
   import { listen } from '@tauri-apps/api/event';
   import { page } from '$app/state';
-  import { api, type Snapshot, type Stack, type Theme, type TopApps } from '$lib/api';
+  import { api, type Snapshot, type Stack, type Theme, type TopApps, type Warn } from '$lib/api';
   import { inOrder } from '$lib/inOrder';
   import {
     agoLabel, amount, appTip, APPS_PENDING, chartLabel, containersByVm, containerTip, layerAside, layerFigure, layers, listsTop, ofSentence,
@@ -31,12 +31,18 @@
   }
 
   let tab = $state<Tab>(parseTab(page.url.searchParams.get('tab')));
-  // Shown again under another item (menubar.rs): its tab, and the theme, which Settings may have
-  // changed while the popover was hidden.
+  // When the figure warns, as the menu bar's items do: read from Settings as the page opens, and
+  // again each time it's shown.
+  let warn = $state<Warn | null>(null);
+  const readWarn = () => api.settings().then((s) => (warn = s.menuBar.warn), () => {});
+  // Shown again under another item (menubar.rs): its tab, and the theme and warnings, which
+  // Settings may have changed while the popover was hidden.
   onMount(() => {
+    readWarn();
     const stop = listen<{ tab: string; theme: Theme }>('popover-shown', (e) => {
       tab = parseTab(e.payload.tab);
       theme.apply(e.payload.theme);
+      readWarn();
     });
     return () => void stop.then((f) => f(), () => {});
   });
@@ -131,7 +137,7 @@
   });
 
   const range = $derived(over[tab]);
-  const now = $derived(shares(snapshot, tab));
+  const now = $derived(shares(snapshot, tab, warn));
   // Another tab's or range's stack isn't drawn as this one's while its own is on the way.
   const current = $derived(fetched?.tab === tab && fetched.over === range ? fetched : null);
   const stacked = $derived(layers(now, current?.stack, tab));

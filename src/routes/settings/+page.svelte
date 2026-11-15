@@ -3,7 +3,10 @@
   // and the polls follow at once), the theme, the menu bar's items and whether closing the window
   // leaves the app recording. settings.rs keeps them beside the history.
   import { onMount } from 'svelte';
-  import { api, DRAWINGS, INTERVALS, THEMES, type Drawing, type MenuBar, type MenuBarItem, type Settings, type Theme } from '$lib/api';
+  import {
+    api, DRAWINGS, INTERVALS, THEMES, WARN_FREE_GB, WARN_PCTS, type Drawing, type MenuBar, type MenuBarItem, type Settings, type Theme,
+    type Warn,
+  } from '$lib/api';
   import { live } from '$lib/live.svelte';
   import { intervalPhrase } from '$lib/almanac';
   import { theme } from '$lib/theme.svelte';
@@ -19,6 +22,15 @@
   ];
   const menuBar = (change: Partial<MenuBar>) => save({ menuBar: { ...settings!.menuBar, ...change } });
   const menuItem = (key: ItemKey, change: Partial<MenuBarItem>) => menuBar({ [key]: { ...settings!.menuBar[key], ...change } });
+  // When each item warns: memory and CPU past a percent in use, the disk with less than so many GB
+  // free; or never.
+  const WARN_KEYS: Record<ItemKey, keyof Warn> = { memory: 'memoryPct', cpu: 'cpuPct', disk: 'diskFreeGb' };
+  const warnChoices = (key: ItemKey) =>
+    key === 'disk'
+      ? WARN_FREE_GB.map((gb) => ({ value: gb, label: `under ${gb} GB free` }))
+      : WARN_PCTS.map((pct) => ({ value: pct, label: `past ${pct} %` }));
+  const warnItem = (key: ItemKey, value: string) =>
+    menuBar({ warn: { ...settings!.menuBar.warn, [WARN_KEYS[key]]: value === '' ? null : Number(value) } });
 
   let settings = $state<Settings | null>(null);
   let saving = $state(false);
@@ -100,6 +112,14 @@
                 onchange={(e) => menuItem(item.key, { figure: e.currentTarget.checked })} />
               Figure
             </label>
+            <label class="warn">
+              Warn
+              <select aria-label="{item.label} warns" disabled={saving} value={String(settings.menuBar.warn[WARN_KEYS[item.key]] ?? '')}
+                onchange={(e) => warnItem(item.key, e.currentTarget.value)}>
+                {#each warnChoices(item.key) as c (c.value)}<option value={String(c.value)}>{c.label}</option>{/each}
+                <option value="">never</option>
+              </select>
+            </label>
           </div>
         </div>
       {/each}
@@ -114,6 +134,12 @@
       under the figure, or on its side beside a drawing alone. Clicking an item opens the VMs' part over time. An item
       with neither a drawing nor a figure is left out, and with all three left out, the app's own icon stays in the menu
       bar as the way back in.
+    </p>
+    <p class="note">
+      An item turns the warning colour, and so does the figure in the window it opens, when memory or CPU is past the
+      percent in use chosen, or when the disk has less than the space chosen left: a percent says little across disk
+      sizes, as 90 % of a 1 TB disk still leaves 100 GB. The main window's warnings are each VM's own, past three
+      quarters of its size.
     </p>
   </section>
 
@@ -155,5 +181,12 @@
   .choice.small { height: 2rem; padding: 0 0.85rem; font-size: 0.85rem; }
   .check { display: inline-flex; align-items: center; gap: 0.5rem; font-size: 0.95rem; cursor: pointer; }
   .check input { accent-color: var(--fg); width: 15px; height: 15px; margin: 0; }
+  .warn { font-size: 0.95rem; }
+  .warn select {
+    font: inherit; color: var(--fg); background: transparent; border: 0; border-bottom: 1px solid var(--border);
+    padding: 0 0.1rem; margin-left: 0.2rem; cursor: pointer;
+    /* As wide as its longest choice, so each item's controls line up with the others'. */
+    width: 9.5rem;
+  }
   .note { max-width: 46rem; }
 </style>
