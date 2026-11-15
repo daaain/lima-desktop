@@ -328,6 +328,9 @@ export const TOP_N = 5;
 /** Whether a tab lists the apps and containers using the most: memory and CPU do; a disk doesn't. */
 export const listsTop = (tab: Tab): tab is 'mem' | 'cpu' => tab !== 'disk';
 
+/** Whether a figure says more than nothing would: a container at 30 millicores would say "0.0 cores". */
+const showsAny = (tab: Tab, v: number) => amount(tab, v) !== amount(tab, 0);
+
 /** The `n` largest by `value`, the largest first and by name between equals; none that uses nothing. */
 export function pickTop<T extends { name: string }>(xs: readonly T[], value: (x: T) => number, n = TOP_N): T[] {
   return xs
@@ -342,6 +345,8 @@ export interface TopContainer {
   id: string;
   /** As the Containers view calls it: its compose service, else its name. */
   name: string;
+  /** Its own name, which a compose service's differs from. */
+  container: string;
   /** Its memory (bytes) or CPU (millicores) now, measured in its VM. */
   now: number;
 }
@@ -358,9 +363,9 @@ export function topContainers(snap: Snapshot | null | undefined, tab: Tab, n = T
     .flatMap((v) =>
       v.containers
         .filter((c) => c.state === 'running' && c.latest[key] != null)
-        .map((c) => ({ vm: v.instance.name, id: c.id, name: lineName(c), now: c.latest[key] })),
+        .map((c) => ({ vm: v.instance.name, id: c.id, name: lineName(c), container: c.name, now: c.latest[key] })),
     );
-  return pickTop(all, (c) => c.now, n);
+  return pickTop(all.filter((c) => showsAny(tab, c.now)), (c) => c.now, n);
 }
 
 /** Which of the largest containers go under which VM's row; a VM with none of them has no entry. */
@@ -371,14 +376,18 @@ export function containersByVm(top: readonly TopContainer[]): Map<string, TopCon
 }
 
 /**
- * A container's row, pointed at. Its figure comes from inside the VM, so it's a part of the VM's own
- * figure, which is its whole cost on this computer, and not more use on top of it.
+ * A container's row, pointed at: its name in full, which the row may cut short, and that its figure
+ * comes from inside the VM, so it's a part of the VM's own figure, which is its whole cost on this
+ * computer, and not more use on top of it.
  */
-export const containerTip = (tab: 'mem' | 'cpu', vm: string) =>
-  `Measured inside ${vm}: part of its ${tab === 'mem' ? 'memory' : 'CPU'} above, not more on top of it`;
+export function containerTip(tab: 'mem' | 'cpu', c: TopContainer): string {
+  const name = c.container === c.name ? c.name : `${c.name} (the container ${c.container})`;
+  return `${name}\nMeasured inside ${c.vm}: part of its ${tab === 'mem' ? 'memory' : 'CPU'} above, not more on top of it`;
+}
 
 /** The apps to list under everything else: none while CPU waits for its second sample. */
-export const topApps = (t: TopApps | null | undefined, n = TOP_N): TopApp[] => (t?.pending ? [] : pickTop(t?.apps ?? [], (a) => a.value, n));
+export const topApps = (tab: Tab, t: TopApps | null | undefined, n = TOP_N): TopApp[] =>
+  t?.pending ? [] : pickTop((t?.apps ?? []).filter((a) => showsAny(tab, a.value)), (a) => a.value, n);
 
 /** In place of the apps while CPU waits for its second sample, a moment after the popover is shown. */
 export const APPS_PENDING = 'measuring the busiest apps…';

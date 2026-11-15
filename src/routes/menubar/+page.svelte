@@ -232,14 +232,14 @@
         <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
         <li class="row" class:hl={lit === vmLit(l.name)} data-vm={l.name} onmouseenter={() => (lit = vmLit(l.name))} onmouseleave={() => (lit = null)}>
           <span class="sw shade-{i % SHADES}"></span>
-          <span class="name serif" class:hot={l.stalled} title={l.stalled ? stalledTip(l.name) : null}>{l.name}</span>
+          <span class="name serif" class:hot={l.stalled} title={l.stalled ? stalledTip(l.name) : l.name}>{l.name}</span>
           <span class="fig num" class:muted={l.now == null}>{layerFigure(tab, l)}</span>
           <span class="aside num">{current ? layerAside(tab, l, range) : ''}</span>
         </li>
         {#if listsTop(tab)}
           {#each containersUnder.get(l.name) ?? [] as c (c.id)}
             <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-            <li class="row sub" class:hl={lit === vmLit(l.name)} data-container={c.name} data-in={l.name} title={containerTip(tab, l.name)}
+            <li class="row sub" class:hl={lit === vmLit(l.name)} data-container={c.name} data-in={l.name} title={containerTip(tab, c)}
               onmouseenter={() => (lit = vmLit(l.name))} onmouseleave={() => (lit = null)}>
               <span></span>
               <span class="part"><span class="name serif">{c.name}</span><span class="fig num">{amount(tab, c.now)}</span></span>
@@ -272,7 +272,7 @@
             <span class="aside"></span>
           </li>
         {/if}
-        {#each topApps(appsNow) as a (a.name)}
+        {#each topApps(tab, appsNow) as a (a.name)}
           <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
           <li class="row sub" class:hl={lit === 'rest'} data-app={a.name} title={appTip(a)}
             onmouseenter={() => (lit = 'rest')} onmouseleave={() => (lit = null)}>

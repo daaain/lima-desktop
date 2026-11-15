@@ -221,7 +221,7 @@ for (const dark of [false, true]) {
     ]);
     assert.match(await page.locator('.row[data-container="harbor-devbox"]').innerText(), /^harbor-devbox\s+2\.\d GiB$/);
     assert.match(await page.locator('.row[data-app="Google Chrome"]').innerText(), /^Google Chrome\s+5\.\d GiB$/);
-    assert.equal(await page.locator('.row[data-container="app"]').getAttribute('title'), 'Measured inside harbor: part of its memory above, not more on top of it');
+    assert.equal(await page.locator('.row[data-container="app"]').getAttribute('title'), 'app (the container harbor-app-1)\nMeasured inside harbor: part of its memory above, not more on top of it');
     assert.equal(await page.locator('.row[data-app="Google Chrome"]').getAttribute('title'), 'Google Chrome: its 38 processes added up');
     // The window is asked to fit the page.
     await page.waitForFunction(() => window.__fakeCalls.some((c) => c.cmd === 'fit_popover' && c.args.height > 200));
@@ -231,7 +231,7 @@ for (const dark of [false, true]) {
     await page.waitForFunction(() => /Google Chrome\s+[\d.]+ cores/.test(document.querySelector('.legend').innerText));
     assert.equal(await page.locator('.row[data-apps]').count(), 0);
     assert.match(await page.locator('.row[data-container="harbor-devbox"]').innerText(), /^harbor-devbox\s+\d\.\d cores$/);
-    assert.equal(await page.locator('.row[data-container="harbor-devbox"]').getAttribute('title'), 'Measured inside harbor: part of its CPU above, not more on top of it');
+    assert.equal(await page.locator('.row[data-container="harbor-devbox"]').getAttribute('title'), 'harbor-devbox\nMeasured inside harbor: part of its CPU above, not more on top of it');
     assert.equal(await page.locator('.row.sub[data-app]').count(), 5);
     await shoot(page, `menubar-cpu${suffix}`);
     await page.getByRole('tab', { name: 'Disk' }).click();

@@ -286,9 +286,9 @@ describe('the top apps and containers', () => {
       ['harbor', 'harbor-devbox'], ['quill', 'quill-devbox'], ['harbor', 'app'], ['atlas', 'frontend'], ['atlas', 'scraper'],
     ]);
     expect(mem[0].now).toBe(2.5 * GiB);
-    // CPU in millicores; one using none isn't listed.
+    // CPU in millicores; one that would say "0.0 cores" isn't listed.
     expect(topContainers(withContainers, 'cpu').map((c) => [c.name, c.now])).toEqual([
-      ['harbor-devbox', 900], ['app', 300], ['frontend', 50], ['quill-devbox', 20], ['pdf', 10],
+      ['harbor-devbox', 900], ['app', 300], ['frontend', 50],
     ]);
     expect(topContainers(withContainers, 'disk')).toEqual([]);
     expect(topContainers(null, 'mem')).toEqual([]);
@@ -301,20 +301,26 @@ describe('the top apps and containers', () => {
     expect(under.get('atlas')?.map((c) => c.name)).toEqual(['frontend', 'scraper']);
     expect(under.has('kiln')).toBe(false);
     const cpu = containersByVm(topContainers(withContainers, 'cpu'));
-    expect(cpu.get('atlas')?.map((c) => c.name)).toEqual(['frontend', 'pdf']);
+    expect(cpu.get('atlas')?.map((c) => c.name)).toEqual(['frontend']);
+    expect(cpu.has('quill')).toBe(false);
   });
 
-  it('says a container is part of its VM, not more on top of it', () => {
-    expect(containerTip('mem', 'harbor')).toBe("Measured inside harbor: part of its memory above, not more on top of it");
-    expect(containerTip('cpu', 'harbor')).toBe("Measured inside harbor: part of its CPU above, not more on top of it");
+  it('says a container in full, and that it is part of its VM, not more on top of it', () => {
+    const [devbox, app] = topContainers(withContainers, 'mem').filter((c) => c.vm === 'harbor');
+    expect(containerTip('mem', devbox)).toBe('harbor-devbox\nMeasured inside harbor: part of its memory above, not more on top of it');
+    expect(containerTip('cpu', app)).toBe('app (the container app-1)\nMeasured inside harbor: part of its CPU above, not more on top of it');
   });
 
   it("lists the apps this tab's answer has, and none while CPU waits for its second sample", () => {
     const chrome = { name: 'Google Chrome', value: 5 * GiB, processes: 40 };
     const slack = { name: 'Slack', value: 0.6 * GiB, processes: 6 };
-    expect(topApps({ apps: [slack, chrome], pending: false }).map((a) => a.name)).toEqual(['Google Chrome', 'Slack']);
-    expect(topApps({ apps: [], pending: true })).toEqual([]);
-    expect(topApps(null)).toEqual([]);
+    expect(topApps('mem', { apps: [slack, chrome], pending: false }).map((a) => a.name)).toEqual(['Google Chrome', 'Slack']);
+    expect(topApps('mem', { apps: [], pending: true })).toEqual([]);
+    expect(topApps('mem', null)).toEqual([]);
+    // One that would say "0.0 cores" isn't listed.
+    const busy = { name: 'Firefox', value: 200, processes: 9 };
+    const idle = { name: 'Fork', value: 49, processes: 1 };
+    expect(topApps('cpu', { apps: [busy, idle], pending: false }).map((a) => a.name)).toEqual(['Firefox']);
     expect(APPS_PENDING).toBe('measuring the busiest apps…');
   });
 
