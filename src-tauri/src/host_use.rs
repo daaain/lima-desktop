@@ -158,23 +158,30 @@ pub fn disk(path: &Path) -> Option<(u64, u64)> {
 /// changes slowly; what's written or deleted in between shows in `statvfs`, read every time.
 const PURGEABLE_FOR: Duration = Duration::from_secs(60);
 
+/// How much more `statvfs` may call available than when macOS last said what's purgeable before it's
+/// asked again: macOS may have cleared that space, which then counts as available already.
+const RECLAIMED: u64 = 1 << 30;
+
 /// [`disk`], read again and again: `statvfs` every time, and the purgeable space macOS last said.
 #[derive(Default)]
 struct DiskReader {
     purgeable: Option<Purgeable>,
 }
 
-/// Space a volume's system would clear, beyond what `statvfs` calls available, and when it said so.
+/// Space a volume's system would clear, beyond what `statvfs` called `available`, and when it said so.
 struct Purgeable {
     path: PathBuf,
     at: Instant,
+    available: u64,
     bytes: u64,
 }
 
 impl Purgeable {
-    /// Whether it still stands for `path` at `now`.
-    fn stands(&self, path: &Path, now: Instant) -> bool {
-        self.path == path && now.saturating_duration_since(self.at) < PURGEABLE_FOR
+    /// Whether it still stands for `path` at `now`, with `available` as `statvfs` says now.
+    fn stands(&self, path: &Path, now: Instant, available: u64) -> bool {
+        self.path == path
+            && now.saturating_duration_since(self.at) < PURGEABLE_FOR
+            && available <= self.available.saturating_add(RECLAIMED)
     }
 }
 
@@ -182,10 +189,10 @@ impl DiskReader {
     fn read(&mut self, path: &Path, now: Instant) -> Option<(u64, u64)> {
         let (available, total) = statvfs(path)?;
         let bytes = match &self.purgeable {
-            Some(p) if p.stands(path, now) => p.bytes,
+            Some(p) if p.stands(path, now, available) => p.bytes,
             _ => {
                 let bytes = beyond(sys::volume(path), available);
-                self.purgeable = Some(Purgeable { path: path.to_owned(), at: now, bytes });
+                self.purgeable = Some(Purgeable { path: path.to_owned(), at: now, available, bytes });
                 bytes
             }
         };
@@ -412,11 +419,22 @@ mod tests {
     #[test]
     fn purgeable_space_stands_for_a_minute_on_its_own_volume() {
         let at = Instant::now();
-        let p = Purgeable { path: "/a".into(), at, bytes: 1 };
-        assert!(p.stands(Path::new("/a"), at));
-        assert!(p.stands(Path::new("/a"), at + Duration::from_secs(59)));
-        assert!(!p.stands(Path::new("/a"), at + PURGEABLE_FOR));
-        assert!(!p.stands(Path::new("/b"), at), "another volume asks again");
+        let p = Purgeable { path: "/a".into(), at, available: 10 << 30, bytes: 1 };
+        assert!(p.stands(Path::new("/a"), at, 10 << 30));
+        assert!(p.stands(Path::new("/a"), at + Duration::from_secs(59), 10 << 30));
+        assert!(!p.stands(Path::new("/a"), at + PURGEABLE_FOR, 10 << 30));
+        assert!(!p.stands(Path::new("/b"), at, 10 << 30), "another volume asks again");
+    }
+
+    // macOS may have cleared it, making it available: counted again on top, it would be counted
+    // twice, and stay so even once something wrote over it.
+    #[test]
+    fn purgeable_space_no_longer_stands_once_much_more_is_available() {
+        let at = Instant::now();
+        let p = Purgeable { path: "/a".into(), at, available: 10 << 30, bytes: 70 << 30 };
+        assert!(p.stands(Path::new("/a"), at, 9 << 30), "written to: still stands");
+        assert!(p.stands(Path::new("/a"), at, (10 << 30) + RECLAIMED), "a little freed: still stands");
+        assert!(!p.stands(Path::new("/a"), at, (10 << 30) + RECLAIMED + 1), "much freed: asked again");
     }
 
     // Between askings, what's written shows at once: statvfs is read every time.
@@ -424,9 +442,10 @@ mod tests {
     fn the_reader_adds_the_purgeable_space_it_last_heard_of() {
         let dir = std::env::temp_dir();
         let at = Instant::now();
-        let mut r =
-            DiskReader { purgeable: Some(Purgeable { path: dir.clone(), at, bytes: 5 << 30 }) };
         let (statvfs_avail, total) = statvfs(&dir).expect("statvfs");
+        let mut r = DiskReader {
+            purgeable: Some(Purgeable { path: dir.clone(), at, available: statvfs_avail, bytes: 5 << 30 }),
+        };
         let (used, read_total) = r.read(&dir, at + Duration::from_secs(1)).expect("disk");
         assert_eq!(read_total, total);
         let expected = total.saturating_sub(statvfs_avail + (5 << 30));
