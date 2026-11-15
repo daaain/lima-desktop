@@ -324,21 +324,29 @@ pub struct StackColumns {
     pub part: &'static str,
 }
 
-/// How many of the newest buckets may be missing the VMs' readings because they're late, not
-/// because the VMs stopped: theirs come from the guests over ssh, a moment after the computer's own,
-/// so the newest bucket often has the computer's reading and not yet theirs.
+/// How many buckets in a row a VM may be missing a reading because it's late or lost, not because
+/// the VM stopped: each guest's come over ssh, each at its own moment after the computer's own, so
+/// the newest bucket often has the computer's reading and not yet a VM's.
 const LATE_BUCKETS: usize = 2;
 
-/// The buckets (of `n`) where the VMs weren't measured though they ran: between two of their
-/// readings, or among the last [`LATE_BUCKETS`] after their newest. A stack shows the computer
-/// there as a gap rather than with VMs that use nothing, which would drop the chart to the floor.
-/// Further on, they stopped: the computer goes on alone.
+/// The buckets (of `n`) where a VM wasn't measured though it ran: up to [`LATE_BUCKETS`] between
+/// two of its readings, or after its newest. A stack shows the computer there as a gap rather
+/// than with a VM that uses nothing, which would drop its band, and those above it, to nothing.
+/// A longer while without a reading, it was stopped: the computer goes on without it.
 fn unmeasured_vms(vms: &[StackVm], n: usize) -> Vec<usize> {
-    let measured: Vec<bool> = (0..n).map(|j| vms.iter().any(|v| v.avg[j].is_some())).collect();
-    let (Some(first), Some(last)) = (measured.iter().position(|&m| m), measured.iter().rposition(|&m| m)) else {
-        return Vec::new();
-    };
-    (first..n.min(last + 1 + LATE_BUCKETS)).filter(|&j| !measured[j]).collect()
+    let mut gap = vec![false; n];
+    for v in vms {
+        let known: Vec<usize> = (0..n).filter(|&j| v.avg[j].is_some()).collect();
+        for w in known.windows(2) {
+            if w[1] - w[0] - 1 <= LATE_BUCKETS {
+                gap[w[0] + 1..w[1]].fill(true);
+            }
+        }
+        if let Some(&last) = known.last() {
+            gap[last + 1..n.min(last + 1 + LATE_BUCKETS)].fill(true);
+        }
+    }
+    (0..n).filter(|&j| gap[j]).collect()
 }
 
 pub fn stack_columns(metric: &str) -> Option<StackColumns> {
@@ -705,7 +713,7 @@ impl Store {
         let Some(host) = host else {
             return Ok(Stack::default());
         };
-        let mut h = self.series(host, from, to, points)?;
+        let (mut h, width) = self.bucketed(host, from, to, points, None)?;
         let band = |s: &mut Series, col: &str| s.metrics.remove(col).unwrap_or_default();
         let (mut used, mut total) = (band(&mut h, cols.used).avg, band(&mut h, cols.total).avg);
         let mut wired = cols.wired.map(|c| band(&mut h, c).avg);
@@ -719,14 +727,13 @@ impl Store {
         };
         let mut out = Vec::new();
         for (id, name) in vms {
-            let mut s = self.series(id, from, to, points)?;
+            // On the computer's buckets, not ones of its own: each VM is measured at its own
+            // moment, with ssh's jitter, so its own would be wider and skip some of the computer's.
+            let (mut s, _) = self.bucketed(id, from, to, points, Some(width))?;
             let b = band(&mut s, cols.part);
             let mut avg = vec![None; h.ts.len()];
             for (i, t) in s.ts.iter().enumerate() {
-                // The same buckets, unless this VM was measured at another pace: then the
-                // computer's bucket it falls in.
-                let j = at.get(t).copied().or_else(|| h.ts.partition_point(|&x| x <= *t).checked_sub(1));
-                if let (Some(j), Some(v)) = (j, b.avg.get(i).copied().flatten()) {
+                if let (Some(&j), Some(v)) = (at.get(t), b.avg.get(i).copied().flatten()) {
                     avg[j] = Some(v);
                 }
             }
@@ -758,6 +765,19 @@ impl Store {
         to: i64,
         points: usize,
     ) -> rusqlite::Result<Series> {
+        Ok(self.bucketed(entity, from, to, points, None)?.0)
+    }
+
+    /// [`Store::series`], and the width of its buckets: `width` if given, so another entity's
+    /// series can be on the same buckets, else as `series` picks it.
+    fn bucketed(
+        &mut self,
+        entity: i64,
+        from: i64,
+        to: i64,
+        points: usize,
+        width: Option<i64>,
+    ) -> rusqlite::Result<(Series, i64)> {
         self.write_dirty()?;
         let ncols = self.ncols(entity);
         let names = self.kinds.get(&entity).map(|k| k.metrics()).unwrap_or(&[]);
@@ -771,7 +791,7 @@ impl Store {
         // window), with a quarter to spare for late ones: else most buckets would be empty, and
         // the chart's line nothing but breaks. Fewer buckets, then.
         let spacing = steady_spacing(rows.iter().map(|r| r.0));
-        let width = ((to - from) / points.max(1) as i64).max(spacing + spacing / 4).max(1);
+        let width = width.unwrap_or_else(|| ((to - from) / points.max(1) as i64).max(spacing + spacing / 4)).max(1);
         let points = ((to - from + width - 1) / width).max(1) as usize;
         let sample_secs = if use_raw {
             (spacing + 500) / 1000
@@ -845,7 +865,7 @@ impl Store {
                 series.metrics.insert(name.to_string(), band);
             }
         }
-        Ok(series)
+        Ok((series, width))
     }
 
     /// Max / average / p95 of every metric of `entity` over [from, to] — the right-sizing numbers.
@@ -1361,6 +1381,76 @@ mod tests {
         assert_eq!(st.total, want(100));
         assert_eq!(st.wired, Some(want(8)));
         assert_eq!(st.vms[0].avg, want(20));
+    }
+
+    #[test]
+    fn every_vm_is_in_every_bucket_the_computer_is_drawn_in_though_each_was_measured_at_its_own_moment() {
+        let mut s = Store::in_memory().unwrap();
+        let t = 10 * MINUTE;
+        let to = t + 2 * MINUTE;
+        let host = s.entity(Kind::Host, "", "host", "this computer", 0).unwrap();
+        let col = |m: &str| HOST_METRICS.iter().position(|c| *c == m).unwrap();
+        let rss = VM_METRICS.iter().position(|m| *m == "host_rss").unwrap();
+        let vm_row = |v: i64| {
+            let mut r = vec![ABSENT; VM_METRICS.len()];
+            r[rss] = v;
+            r
+        };
+        // The computer on the dot every 2 s; each guest's readings over ssh at its own moment
+        // after it, give or take a fifth of a second, and the newest of one of them still to come.
+        let (a, b) = (
+            s.entity(Kind::Vm, "a", "a", "a", 0).unwrap(),
+            s.entity(Kind::Vm, "b", "b", "b", 0).unwrap(),
+        );
+        let mut at = t;
+        let mut i = 0;
+        while at < to {
+            let mut h = vec![ABSENT; HOST_METRICS.len()];
+            h[col("mem_used")] = 50;
+            h[col("mem_total")] = 100;
+            s.ingest(host, at, h);
+            let jitter = [0, 200, -150, 100, -200][i % 5];
+            s.ingest(a, at + 300 + jitter, vm_row(20));
+            if at + 1_700 < to - 2_000 {
+                s.ingest(b, at + 1_700 - jitter, vm_row(10));
+            }
+            at += 2_000;
+            i += 1;
+        }
+        let st = s.stack("mem", t, to, 120).unwrap();
+        for (j, used) in st.used.iter().enumerate() {
+            if used.is_some() {
+                for v in &st.vms {
+                    assert!(v.avg[j].is_some(), "{} has no reading in bucket {j} of {}", v.name, st.used.len());
+                }
+            }
+        }
+        assert!(st.used.iter().filter(|u| u.is_some()).count() > st.used.len() * 9 / 10);
+    }
+
+    #[test]
+    fn a_vm_stopped_for_a_while_leaves_the_computer_alone_meanwhile() {
+        let mut s = Store::in_memory().unwrap();
+        let t = 10 * MINUTE;
+        let host = s.entity(Kind::Host, "", "host", "this computer", 0).unwrap();
+        let web = s.entity(Kind::Vm, "web", "web", "web", 0).unwrap();
+        let col = |m: &str| HOST_METRICS.iter().position(|c| *c == m).unwrap();
+        let rss = VM_METRICS.iter().position(|m| *m == "host_rss").unwrap();
+        for i in 0..120 {
+            let mut h = vec![ABSENT; HOST_METRICS.len()];
+            h[col("mem_used")] = 50;
+            h[col("mem_total")] = 100;
+            s.ingest(host, t + i * 1000, h);
+            if !(20..100).contains(&i) {
+                let mut v = vec![ABSENT; VM_METRICS.len()];
+                v[rss] = 20;
+                s.ingest(web, t + i * 1000, v);
+            }
+        }
+        let st = s.stack("mem", t, t + 2 * MINUTE, 12).unwrap();
+        // Its readings again after a while say it was stopped, not late: the computer alone meanwhile.
+        assert!(st.used.iter().all(Option::is_some));
+        assert_eq!(st.vms[0].avg.iter().filter(|v| v.is_none()).count(), 8);
     }
 
     #[test]
