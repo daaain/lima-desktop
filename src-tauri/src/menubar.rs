@@ -5,9 +5,10 @@
 //! With all three off the app's own icon stays, as the way back in when the window is closed.
 //!
 //! On macOS each item is one image, its figure and name set in it beside the drawing (`typeset`),
-//! a template image that macOS tints for a light or dark menu bar, except past three quarters,
-//! when it's drawn in the warning colour instead. Elsewhere the image is the drawing alone and the
-//! figure its title.
+//! a template image that macOS tints for a light or dark menu bar; one that warns is drawn in the
+//! warning colour instead. When each warns is set in Settings: memory and CPU past a percent in use
+//! (three quarters unless chosen otherwise), the disk with less than so many GB free. Elsewhere the
+//! image is the drawing alone and the figure its title.
 
 use std::collections::VecDeque;
 use std::sync::Mutex;
@@ -20,7 +21,7 @@ use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent}
 use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
 
 use crate::collector::{Collector, Snapshot};
-use crate::settings::{Drawing, Item, MenuBar, Saved};
+use crate::settings::{Drawing, Item, MenuBar, Saved, Warn};
 
 /// The popover window's label, and its width in points.
 pub const POPOVER: &str = "popover";
@@ -57,24 +58,54 @@ impl Res {
             Res::Disk => m.disk,
         }
     }
+    /// Memory and CPU past a percent in use, the disk under so many GB (powers of 1000) free.
+    fn threshold(self, w: &Warn) -> Threshold {
+        let past = |pct: Option<u8>| pct.map_or(Threshold::Never, |p| Threshold::Past(f32::from(p) / 100.0));
+        match self {
+            Res::Mem => past(w.memory_pct),
+            Res::Cpu => past(w.cpu_pct),
+            Res::Disk => w
+                .disk_free_gb
+                .map_or(Threshold::Never, |gb| Threshold::FreeUnder(u64::from(gb) * 1_000_000_000)),
+        }
+    }
     fn index(self) -> usize {
         self as usize
     }
 }
 
 /// A resource's use as shares of the whole computer, 0 to 1: everything in use, and the VMs' part
-/// of it.
+/// of it; and what's left, in the resource's own unit (bytes, or millicores for CPU).
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct Share {
     pub whole: f32,
     pub vms: f32,
+    pub free: u64,
+}
+
+/// When an item turns the warning colour, as Settings has it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Threshold {
+    Never,
+    /// Past this share of the whole in use, 0 to 1.
+    Past(f32),
+    /// With less than this much left (a disk's bytes).
+    FreeUnder(u64),
 }
 
 impl Share {
-    /// Past three quarters: the app's one threshold.
-    pub fn hot(self) -> bool {
-        self.whole > 0.75
+    pub fn hot(self, t: Threshold) -> bool {
+        match t {
+            Threshold::Never => false,
+            Threshold::Past(share) => self.whole > share,
+            Threshold::FreeUnder(left) => self.free < left,
+        }
     }
+}
+
+/// Whether an item warns: its newest share is past its threshold.
+pub fn warns(history: &[Share], t: Threshold) -> bool {
+    history.last().is_some_and(|s| s.hot(t))
 }
 
 /// The share from the computer's `used` and `total` and the VMs' own parts; `None` without the
@@ -84,7 +115,11 @@ pub fn share(used: Option<i64>, total: Option<i64>, vms: impl Iterator<Item = i6
     let (used, total) = (used.filter(|&u| u >= 0)?, total.filter(|&t| t > 0)?);
     let whole = (used as f64 / total as f64).clamp(0.0, 1.0) as f32;
     let vms: i64 = vms.filter(|&v| v > 0).sum();
-    Some(Share { whole, vms: ((vms as f64 / total as f64) as f32).clamp(0.0, whole) })
+    Some(Share {
+        whole,
+        vms: ((vms as f64 / total as f64) as f32).clamp(0.0, whole),
+        free: (total - used).max(0) as u64,
+    })
 }
 
 /// Memory, CPU and disk from a snapshot: memory and CPU from the running VMs, disk from every VM
@@ -175,9 +210,8 @@ const HOT_ON_LIGHT: [u8; 3] = [179, 77, 0];
 const INK: [u8; 3] = [0, 0, 0];
 const WHITE: [u8; 3] = [255, 255, 255];
 
-/// The menu bar's appearance, for what macOS can't tint: past three quarters an item isn't a
-/// template image, so its warning colour is chosen for the bar, and its names painted in the bar's
-/// own text colour.
+/// The menu bar's appearance, for what macOS can't tint: an item that warns isn't a template image,
+/// so its warning colour is chosen for the bar, and its names painted in the bar's own text colour.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Bar {
     #[default]
@@ -281,9 +315,9 @@ impl Mask {
 }
 
 /// The colour an item is painted, and whether it's a template image for macOS to tint: the warning
-/// colour past three quarters.
-pub fn ink(now: Option<Share>) -> ([u8; 3], bool) {
-    if now.is_some_and(|s| s.hot()) { (HOT, false) } else { (INK, true) }
+/// colour when it warns.
+pub fn ink(hot: bool) -> ([u8; 3], bool) {
+    if hot { (HOT, false) } else { (INK, true) }
 }
 
 fn drawing_width(d: Drawing) -> u32 {
@@ -294,25 +328,26 @@ fn drawing_width(d: Drawing) -> u32 {
     }
 }
 
-/// The drawing alone, with nothing set beside it.
-pub fn drawing(d: Drawing, history: &[Share]) -> Option<Icon> {
+/// The drawing alone, with nothing set beside it; `hot`, in the warning colour.
+pub fn drawing(d: Drawing, history: &[Share], hot: bool) -> Option<Icon> {
     let mut m = Mask::new(drawing_width(d), H);
     match d {
         Drawing::Off => return None,
         Drawing::Trace => m.trace(0, history),
         Drawing::Bar => m.bar(0, history.last().copied()),
     }
-    Some(m.paint(ink(history.last().copied()).0))
+    Some(m.paint(ink(hot).0))
 }
 
-/// The last [`COLUMNS`] measurements, oldest first, the newest at the right; columns touch.
+/// The last [`COLUMNS`] measurements, oldest first, the newest at the right; columns touch. Not
+/// warning.
 pub fn trace(history: &[Share]) -> Icon {
-    drawing(Drawing::Trace, history).expect("a trace")
+    drawing(Drawing::Trace, history, false).expect("a trace")
 }
 
-/// Now, as an upright bar notched at quarters.
+/// Now, as an upright bar notched at quarters. Not warning.
 pub fn bar(now: Share) -> Icon {
-    drawing(Drawing::Bar, &[now]).expect("a bar")
+    drawing(Drawing::Bar, &[now], false).expect("a bar")
 }
 
 // ---- an item's layout ---------------------------------------------------------------------------
@@ -395,9 +430,10 @@ pub fn layout(p: Parts, m: Measures) -> Layout {
     Layout { width: x, side_name, drawing, figure, name_under }
 }
 
-/// The whole item as one image, its figure and name set beside the drawing.
+/// The whole item as one image, its figure and name set beside the drawing; `hot`, in the warning
+/// colour.
 #[cfg(target_os = "macos")]
-pub fn item(res: Res, p: Parts, history: &[Share], bar: Bar) -> Icon {
+pub fn item(res: Res, p: Parts, history: &[Share], hot: bool, bar: Bar) -> Icon {
     use crate::typeset::Face;
     let fig = if p.name_under {
         Face::system(FIGURE_NAMED_PX, FIGURE_WEIGHT)
@@ -426,7 +462,7 @@ pub fn item(res: Res, p: Parts, history: &[Share], bar: Bar) -> Icon {
     if let Some(pen) = l.figure {
         fig.draw(&mut m, &figure(now), pen.x, pen.y, false);
     }
-    // The names apart, so that past three quarters they keep the menu bar's own colour.
+    // The names apart, so that when it warns they keep the menu bar's own colour.
     let mut names = Mask::new(l.width, H);
     if let Some(pen) = l.name_under {
         name.draw(&mut names, res.id(), pen.x, pen.y, false);
@@ -434,7 +470,7 @@ pub fn item(res: Res, p: Parts, history: &[Share], bar: Bar) -> Icon {
     if let Some(pen) = l.side_name {
         side.draw(&mut names, res.id(), pen.x, pen.y, true);
     }
-    match ink(now) {
+    match ink(hot) {
         (rgb, true) => m.paint_under(rgb, &names, rgb),
         (_, false) => m.paint_under(bar.hot(), &names, bar.ink()),
     }
@@ -657,16 +693,17 @@ pub struct Shown {
     pub tooltip: Option<String>,
 }
 
-/// What an item shows, from its recent shares: on macOS one image, the figure and name in it.
-pub fn shown(res: Res, p: Parts, history: &[Share], bar: Bar) -> Shown {
+/// What an item shows, from its recent shares and whether it warns (`hot`): on macOS one image, the
+/// figure and name in it.
+pub fn shown(res: Res, p: Parts, history: &[Share], hot: bool, bar: Bar) -> Shown {
     let now = history.last().copied();
     #[cfg(target_os = "macos")]
-    let (icon, title) = (Some(item(res, p, history, bar)), None);
+    let (icon, title) = (Some(item(res, p, history, hot, bar)), None);
     #[cfg(not(target_os = "macos"))]
     let _ = bar;
     #[cfg(not(target_os = "macos"))]
-    let (icon, title) = (drawing(p.drawing, history), p.figure.then(|| title(res, now, p.name_under)));
-    Shown { icon, template: ink(now).1, title, tooltip: now.map(|s| tooltip(res, s)) }
+    let (icon, title) = (drawing(p.drawing, history, hot), p.figure.then(|| title(res, now, p.name_under)));
+    Shown { icon, template: ink(hot).1, title, tooltip: now.map(|s| tooltip(res, s)) }
 }
 
 /// Redraws every item, changing only what has changed. Never on the main thread: each change
@@ -681,9 +718,11 @@ fn draw(app: &AppHandle) {
             continue;
         };
         let h: Vec<Share> = history[res.index()].iter().copied().collect();
-        // Only an item past three quarters needs to know (and asking is a trip to the main thread).
-        let bar = if ink(h.last().copied()).1 { Bar::default() } else { appearance(&tray) };
-        let new = shown(res, p, &h, bar);
+        // As Settings has it now, so a change there shows at once.
+        let hot = warns(&h, res.threshold(&chosen.warn));
+        // Only an item that warns needs to know (and asking is a trip to the main thread).
+        let bar = if hot { appearance(&tray) } else { Bar::default() };
+        let new = shown(res, p, &h, hot, bar);
         // An item put in the menu bar again since it was last drawn starts empty.
         let added = state.added[res.index()].load(Ordering::Relaxed);
         let old = match drawn[res.index()].take() {
@@ -899,27 +938,60 @@ mod tests {
         i.rgba[k..k + 4].try_into().unwrap()
     }
 
+    /// A share with nothing said about what's left of the computer.
+    fn used(whole: f32, vms: f32) -> Share {
+        Share { whole, vms, ..Share::default() }
+    }
+
     #[test]
     fn a_share_is_of_the_whole_computer_and_the_vms_never_exceed_it() {
         let s = share(Some(48), Some(64), [16, 8, -1].into_iter()).unwrap();
-        assert_eq!(s, Share { whole: 0.75, vms: 0.375 });
-        assert!(!s.hot());
-        assert!(share(Some(49), Some(64), std::iter::empty()).unwrap().hot());
+        assert_eq!(s, Share { whole: 0.75, vms: 0.375, free: 16 });
         // Read a moment apart, the VMs can come out above the computer: they're capped.
         assert_eq!(share(Some(10), Some(100), [30].into_iter()).unwrap().vms, 0.1);
+        // And the computer above its total: nothing is left, not less than nothing.
+        assert_eq!(share(Some(70), Some(64), std::iter::empty()).unwrap().free, 0);
         assert_eq!(share(None, Some(64), std::iter::empty()), None);
         assert_eq!(share(Some(-1), Some(64), std::iter::empty()), None);
         assert_eq!(share(Some(1), Some(0), std::iter::empty()), None);
     }
 
     #[test]
+    fn memory_and_cpu_warn_past_the_percent_chosen_in_settings() {
+        let at = |used, of| share(Some(used), Some(of), std::iter::empty()).unwrap();
+        let w = Warn::default();
+        assert!(!at(48, 64).hot(Res::Mem.threshold(&w)));
+        assert!(at(49, 64).hot(Res::Mem.threshold(&w)));
+        assert!(at(49, 64).hot(Res::Cpu.threshold(&w)));
+        let w = Warn { memory_pct: Some(50), cpu_pct: None, ..Warn::default() };
+        assert!(!at(32, 64).hot(Res::Mem.threshold(&w)));
+        assert!(at(33, 64).hot(Res::Mem.threshold(&w)));
+        // Never: not even when it's all in use.
+        assert!(!at(64, 64).hot(Res::Cpu.threshold(&w)));
+    }
+
+    #[test]
+    fn the_disk_warns_under_the_free_space_chosen_in_settings_whatever_its_size() {
+        const GB: i64 = 1_000_000_000;
+        let at = |used, of| share(Some(used * GB), Some(of * GB), std::iter::empty()).unwrap();
+        let disk = |gb| Res::Disk.threshold(&Warn { disk_free_gb: gb, ..Warn::default() });
+        // 90 % of a 1 TB disk still leaves 100 GB; 86 % of a 256 GB one only 36.
+        assert!(!at(900, 1000).hot(disk(Some(50))));
+        assert!(at(220, 256).hot(disk(Some(50))));
+        assert!(!at(950, 1000).hot(disk(Some(50))), "exactly 50 GB is not under 50 GB");
+        assert!(at(951, 1000).hot(disk(Some(50))));
+        assert!(at(900, 1000).hot(disk(Some(200))));
+        assert!(!at(1000, 1000).hot(disk(None)));
+    }
+
+    #[test]
     fn the_figure_is_the_whole_computer_as_a_percent() {
-        let s = Share { whole: 0.704, vms: 0.5 };
+        let s = used(0.704, 0.5);
         assert_eq!(figure(Some(s)), "70%");
         assert_eq!(figure(None), "–");
         assert_eq!(title(Res::Mem, Some(s), false), "70%");
         assert_eq!(title(Res::Cpu, Some(s), true), "cpu 70%");
-        assert_eq!(title(Res::Disk, Some(Share { whole: 1.0, vms: 0.0 }), true), "disk 100%");
+        assert_eq!(title(Res::Disk, Some(used(1.0, 0.0)), true), "disk 100%");
         assert_eq!(title(Res::Disk, None, true), "disk –");
     }
 
@@ -988,7 +1060,7 @@ mod tests {
 
     #[test]
     fn a_trace_draws_the_vms_solid_under_everything_else_pale_newest_at_the_right() {
-        let i = trace(&[Share { whole: 0.5, vms: 0.25 }]);
+        let i = trace(&[used(0.5, 0.25)]);
         assert_eq!((i.width, i.height, i.rgba.len()), (48, 36, 48 * 36 * 4));
         let x = i.width - FRAME - 1; // the newest column
         assert_eq!(px(&i, x, H - FRAME - 1), [0, 0, 0, SOLID]); // VMs, at the bottom
@@ -1000,7 +1072,7 @@ mod tests {
 
     #[test]
     fn columns_touch_with_no_gap() {
-        let full = Share { whole: 1.0, vms: 1.0 };
+        let full = used(1.0, 1.0);
         let i = trace(&[full; COLUMNS]);
         let y = H / 2;
         assert!((FRAME..i.width - FRAME).all(|x| px(&i, x, y)[3] == SOLID));
@@ -1008,21 +1080,32 @@ mod tests {
 
     #[test]
     fn only_the_last_columns_are_drawn() {
-        let mut h = vec![Share { whole: 1.0, vms: 1.0 }];
+        let mut h = vec![used(1.0, 1.0)];
         h.extend(std::iter::repeat_n(Share::default(), COLUMNS));
         let i = trace(&h);
         assert!((FRAME..i.width - FRAME).all(|x| px(&i, x, H / 2)[3] == 0));
     }
 
     #[test]
-    fn past_three_quarters_it_is_drawn_in_the_warning_colour_and_not_tinted() {
-        let hot = Share { whole: 0.9, vms: 0.5 };
-        assert_eq!(ink(Some(hot)), (HOT, false));
-        assert_eq!(ink(Some(Share { whole: 0.7, vms: 0.5 })), (INK, true));
-        assert_eq!(ink(None), (INK, true));
-        assert_eq!(&px(&trace(&[hot]), 0, 0)[..3], &HOT);
-        assert_eq!(&px(&bar(hot), 0, 0)[..3], &HOT);
-        assert_eq!(&trace(&[Share { whole: 0.7, vms: 0.5 }]).rgba[..3], &INK);
+    fn when_it_warns_it_is_drawn_in_the_warning_colour_and_not_tinted() {
+        assert_eq!(ink(true), (HOT, false));
+        assert_eq!(ink(false), (INK, true));
+        let now = [used(0.9, 0.5)];
+        for d in [Drawing::Trace, Drawing::Bar] {
+            assert_eq!(&px(&drawing(d, &now, true).unwrap(), 0, 0)[..3], &HOT);
+            assert_eq!(&px(&drawing(d, &now, false).unwrap(), 0, 0)[..3], &INK);
+        }
+        assert_eq!(&trace(&now).rgba[..3], &INK);
+    }
+
+    #[test]
+    fn an_item_warns_when_its_newest_share_is_past_its_threshold() {
+        let past = Threshold::Past(0.75);
+        assert!(warns(&[used(0.9, 0.5), used(0.8, 0.5)], past));
+        // The newest measurement only.
+        assert!(!warns(&[used(0.9, 0.5), used(0.7, 0.5)], past));
+        assert!(!warns(&[], past));
+        assert!(!warns(&[used(1.0, 1.0)], Threshold::Never));
     }
 
     #[test]
@@ -1050,7 +1133,7 @@ mod tests {
 
     #[test]
     fn a_bar_is_notched_at_quarters() {
-        let i = bar(Share { whole: 1.0, vms: 1.0 });
+        let i = bar(used(1.0, 1.0));
         assert_eq!(i.width, BAR_WIDTH);
         let inside = H - 2 * FRAME;
         let notch = H - FRAME - inside / 2;
@@ -1060,10 +1143,10 @@ mod tests {
 
     #[test]
     fn before_a_measurement_a_drawing_is_its_frame() {
-        let i = drawing(Drawing::Bar, &[]).unwrap();
+        let i = drawing(Drawing::Bar, &[], false).unwrap();
         assert_eq!(px(&i, 0, H / 2)[3], SOLID);
         assert_eq!(px(&i, BAR_WIDTH / 2, H - FRAME - 1)[3], 0);
-        assert_eq!(drawing(Drawing::Off, &[]), None);
+        assert_eq!(drawing(Drawing::Off, &[], false), None);
     }
 
     #[test]
@@ -1086,10 +1169,10 @@ mod tests {
     #[test]
     fn an_item_keeps_its_width_whatever_its_figure() {
         let p = parts(item(Drawing::Trace, true), true).unwrap();
-        let at = |w: f32| shown(Res::Cpu, p, &[Share { whole: w, vms: 0.0 }], Bar::Dark).icon.unwrap();
+        let at = |w: f32| shown(Res::Cpu, p, &[used(w, 0.0)], false, Bar::Dark).icon.unwrap();
         let (low, high) = (at(0.05), at(1.0));
         assert_eq!(low.width, high.width);
-        assert_eq!(shown(Res::Cpu, p, &[], Bar::Dark).icon.unwrap().width, low.width);
+        assert_eq!(shown(Res::Cpu, p, &[], false, Bar::Dark).icon.unwrap().width, low.width);
         // The figure is set to the right of the trace, the name under it.
         let fig = TRACE_WIDTH + FIGURE_GAP..low.width;
         assert!(ink_in(&low, fig.clone(), 0..18) > 40);
@@ -1101,10 +1184,10 @@ mod tests {
     #[test]
     fn an_item_is_one_image_its_figure_in_it_tinted_unless_hot() {
         let p = parts(item(Drawing::Bar, true), false).unwrap();
-        let cool = shown(Res::Mem, p, &[Share { whole: 0.4, vms: 0.2 }], Bar::Dark);
+        let cool = shown(Res::Mem, p, &[used(0.4, 0.2)], false, Bar::Dark);
         assert!(cool.template && cool.title.is_none());
         assert_eq!(cool.tooltip.as_deref(), Some("mem: this computer 40 % in use, the VMs 20 %"));
-        let hot = shown(Res::Mem, p, &[Share { whole: 0.9, vms: 0.2 }], Bar::Dark);
+        let hot = shown(Res::Mem, p, &[used(0.9, 0.2)], true, Bar::Dark);
         let icon = hot.icon.unwrap();
         assert!(!hot.template);
         // The text too.
@@ -1118,7 +1201,7 @@ mod tests {
     #[test]
     fn a_name_on_its_side_is_set_left_of_the_drawing() {
         let p = parts(item(Drawing::Trace, false), true).unwrap();
-        let i = shown(Res::Disk, p, &[Share { whole: 0.4, vms: 0.2 }], Bar::Dark).icon.unwrap();
+        let i = shown(Res::Disk, p, &[used(0.4, 0.2)], false, Bar::Dark).icon.unwrap();
         let start = layout(p, Measures { figure: 0.0, name: 0.0, side: 0.0, side_cap: 0.0, side_descent: 0.0 });
         assert_eq!(start.width, SIDE_GAP + TRACE_WIDTH);
         let side = i.width - TRACE_WIDTH - SIDE_GAP;
@@ -1148,18 +1231,18 @@ mod tests {
 
     #[cfg(target_os = "macos")]
     #[test]
-    fn past_three_quarters_the_names_keep_the_menu_bars_own_colour() {
-        let hot = [Share { whole: 0.9, vms: 0.2 }];
+    fn when_it_warns_the_names_keep_the_menu_bars_own_colour() {
+        let hot = [used(0.9, 0.2)];
         for (bar, own, warn) in [(Bar::Dark, WHITE, HOT), (Bar::Light, INK, HOT_ON_LIGHT)] {
             // On its side, left of the drawing; the drawing in the warning colour.
             let p = parts(item(Drawing::Trace, false), true).unwrap();
-            let i = shown(Res::Disk, p, &hot, bar).icon.unwrap();
+            let i = shown(Res::Disk, p, &hot, true, bar).icon.unwrap();
             let side = i.width - TRACE_WIDTH - SIDE_GAP;
             assert_eq!(colours_in(&i, 0..side, 0..H).iter().map(|c| c.0).collect::<Vec<_>>(), [own], "{bar:?}");
             assert_eq!(&px(&i, side + SIDE_GAP, 0)[..3], &warn);
             // Under the figure: the figure in the warning colour, the name not.
             let p = parts(item(Drawing::Trace, true), true).unwrap();
-            let i = shown(Res::Mem, p, &hot, bar).icon.unwrap();
+            let i = shown(Res::Mem, p, &hot, true, bar).icon.unwrap();
             let fig = TRACE_WIDTH + FIGURE_GAP..i.width;
             assert_eq!(colours_in(&i, fig.clone(), 0..18).iter().map(|c| c.0).collect::<Vec<_>>(), [warn], "{bar:?}");
             assert_eq!(colours_in(&i, fig, 22..H).iter().map(|c| c.0).collect::<Vec<_>>(), [own], "{bar:?}");
@@ -1191,7 +1274,7 @@ mod tests {
     #[test]
     fn a_name_on_its_side_runs_most_of_the_items_height() {
         let p = parts(item(Drawing::Bar, false), true).unwrap();
-        let i = shown(Res::Cpu, p, &[Share { whole: 0.4, vms: 0.2 }], Bar::Dark).icon.unwrap();
+        let i = shown(Res::Cpu, p, &[used(0.4, 0.2)], false, Bar::Dark).icon.unwrap();
         let side = i.width - BAR_WIDTH - SIDE_GAP;
         let rows = (0..H).filter(|&y| ink_in(&i, 0..side, y..y + 1) > 0).count();
         assert!(rows >= 24, "{rows} rows");
@@ -1200,13 +1283,13 @@ mod tests {
     #[cfg(not(target_os = "macos"))]
     #[test]
     fn elsewhere_the_image_is_the_drawing_and_the_figure_its_title() {
-        let now = [Share { whole: 0.4, vms: 0.2 }];
-        let s = shown(Res::Mem, parts(item(Drawing::Trace, true), true).unwrap(), &now, Bar::Dark);
+        let now = [used(0.4, 0.2)];
+        let s = shown(Res::Mem, parts(item(Drawing::Trace, true), true).unwrap(), &now, false, Bar::Dark);
         assert_eq!(s.icon, Some(trace(&now)));
         assert_eq!(s.title.as_deref(), Some("mem 40%"));
-        let s = shown(Res::Mem, parts(item(Drawing::Bar, false), true).unwrap(), &now, Bar::Dark);
+        let s = shown(Res::Mem, parts(item(Drawing::Bar, false), true).unwrap(), &now, false, Bar::Dark);
         assert_eq!((s.icon, s.title), (Some(bar(now[0])), None));
-        let s = shown(Res::Cpu, parts(item(Drawing::Off, true), false).unwrap(), &[], Bar::Dark);
+        let s = shown(Res::Cpu, parts(item(Drawing::Off, true), false).unwrap(), &[], false, Bar::Dark);
         assert_eq!((s.icon, s.title.as_deref()), (None, Some("–")));
     }
 
@@ -1225,26 +1308,26 @@ mod tests {
             std::fs::write(dir.join(format!("{name}.rgba")), out).unwrap();
         };
         let wave: Vec<Share> = (0..COLUMNS)
-            .map(|i| Share { whole: 0.3 + 0.25 * ((i as f32) * 0.7).sin().abs(), vms: 0.15 + 0.05 * (i % 3) as f32 })
+            .map(|i| used(0.3 + 0.25 * ((i as f32) * 0.7).sin().abs(), 0.15 + 0.05 * (i % 3) as f32))
             .collect();
-        let hot: Vec<Share> = wave.iter().map(|s| Share { whole: s.whole + 0.3, vms: s.vms + 0.2 }).collect();
+        let hot: Vec<Share> = wave.iter().map(|s| used(s.whole + 0.3, s.vms + 0.2)).collect();
         for (res, d) in [(Res::Mem, Drawing::Trace), (Res::Cpu, Drawing::Trace), (Res::Disk, Drawing::Bar)] {
             for (tag, f, names) in
                 [("named", true, true), ("plain", true, false), ("side", false, true), ("bare", false, false)]
             {
                 let p = parts(item(d, f), names).unwrap();
-                write(&format!("{}-{}-{tag}", res.id(), d_name(d)), &shown(res, p, &wave, Bar::Dark));
-                write(&format!("{}-{}-{tag}-hot", res.id(), d_name(d)), &shown(res, p, &hot, Bar::Dark));
-                write(&format!("{}-{}-{tag}-hot-light", res.id(), d_name(d)), &shown(res, p, &hot, Bar::Light));
+                write(&format!("{}-{}-{tag}", res.id(), d_name(d)), &shown(res, p, &wave, false, Bar::Dark));
+                write(&format!("{}-{}-{tag}-hot", res.id(), d_name(d)), &shown(res, p, &hot, true, Bar::Dark));
+                write(&format!("{}-{}-{tag}-hot-light", res.id(), d_name(d)), &shown(res, p, &hot, true, Bar::Light));
             }
             let p = parts(item(Drawing::Off, true), true).unwrap();
-            write(&format!("{}-figure-named", res.id()), &shown(res, p, &wave, Bar::Dark));
-            write(&format!("{}-figure-named-empty", res.id()), &shown(res, p, &[], Bar::Dark));
+            write(&format!("{}-figure-named", res.id()), &shown(res, p, &wave, false, Bar::Dark));
+            write(&format!("{}-figure-named-empty", res.id()), &shown(res, p, &[], false, Bar::Dark));
             for w in [0.05, 1.0] {
                 let p = parts(item(d, true), true).unwrap();
                 write(
                     &format!("{}-width-{}", res.id(), (w * 100.0) as u32),
-                    &shown(res, p, &[Share { whole: w, vms: 0.0 }], Bar::Dark),
+                    &shown(res, p, &[used(w, 0.0)], false, Bar::Dark),
                 );
             }
         }
