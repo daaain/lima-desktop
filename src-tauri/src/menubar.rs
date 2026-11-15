@@ -638,19 +638,25 @@ pub fn apply(app: &AppHandle) {
 }
 
 fn add(app: &AppHandle, id: &str, icon: Option<Icon>) -> tauri::Result<()> {
-    let menu = Menu::with_items(
-        app,
-        &[
-            &MenuItem::with_id(app, "open", "Open Lima Desktop", true, None::<&str>)?,
-            &PredefinedMenuItem::separator(app)?,
-            &MenuItem::with_id(app, "quit", "Quit Lima Desktop", true, None::<&str>)?,
-        ],
-    )?;
+    // The item's own tab; the app's item opens on memory.
+    let res = Res::from_id(id).unwrap_or(Res::Mem);
+    let open = MenuItem::with_id(app, "open", "Open Lima Desktop", true, None::<&str>)?;
+    let separator = PredefinedMenuItem::separator(app)?;
+    let quit = MenuItem::with_id(app, "quit", "Quit Lima Desktop", true, None::<&str>)?;
+    // Linux tells of no clicks on an item, only of its menu: the popover is opened from there.
+    #[cfg(not(target_os = "macos"))]
+    let popover = MenuItem::with_id(app, "popover", "Memory, CPU and Disk…", true, None::<&str>)?;
+    #[cfg(not(target_os = "macos"))]
+    let items: &[&dyn tauri::menu::IsMenuItem<tauri::Wry>] = &[&popover, &open, &separator, &quit];
+    #[cfg(target_os = "macos")]
+    let items: &[&dyn tauri::menu::IsMenuItem<tauri::Wry>] = &[&open, &separator, &quit];
+    let menu = Menu::with_items(app, items)?;
     let mut b = TrayIconBuilder::with_id(id)
         .tooltip("Lima Desktop")
         .menu(&menu)
         .show_menu_on_left_click(false)
-        .on_menu_event(|app, e| match e.id().as_ref() {
+        .on_menu_event(move |app, e| match e.id().as_ref() {
+            "popover" => open_popover(app, res, None),
             "open" => open_main(app),
             "quit" => app.exit(0),
             _ => {}
@@ -712,7 +718,11 @@ pub fn shown(res: Res, p: Parts, history: &[Share], hot: bool, bar: Bar) -> Show
     #[cfg(not(target_os = "macos"))]
     let _ = bar;
     #[cfg(not(target_os = "macos"))]
-    let (icon, title) = (drawing(p.drawing, history, hot), p.figure.then(|| title(res, now, p.name_under)));
+    let (icon, title) = (
+        // Linux shows no title without an image: one with only its figure has the app's.
+        drawing(p.drawing, history, hot).or_else(|| Some(glyph())),
+        p.figure.then(|| title(res, now, p.name_under)),
+    );
     Shown { icon, template: ink(hot).1, title, tooltip: now.map(|s| tooltip(res, s)) }
 }
 
@@ -1279,6 +1289,16 @@ mod tests {
     #[cfg(target_os = "macos")]
     fn ink_in(i: &Icon, xs: std::ops::Range<u32>, ys: std::ops::Range<u32>) -> usize {
         ys.flat_map(|y| xs.clone().map(move |x| (x, y))).filter(|&(x, y)| px(i, x, y)[3] > 64).count()
+    }
+
+    // A tray item shows no title without an image there: one with only its figure has the app's.
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn an_item_with_only_its_figure_still_has_an_image() {
+        let p = parts(item(Drawing::Off, true), false).unwrap();
+        let s = shown(Res::Cpu, p, &[used(0.4, 0.2)], false, Bar::Dark);
+        assert_eq!(s.icon, Some(glyph()));
+        assert!(s.title.is_some());
     }
 
     #[cfg(target_os = "macos")]

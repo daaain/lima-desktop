@@ -190,7 +190,10 @@ under the sentence, figures and bar it explains, with the allocation as a dashed
   builds on the first click, at `?tab=mem|cpu|disk`, then hides when it loses the focus and shows
   again under the item clicked, telling the page its tab with an event rather than loading it
   again): only the page, none of the main window's chrome, and no card or shadow of its own; it
-  fills the window, which it asks the backend to fit to its height (`fit_popover`). The window and
+  fills the window, which it asks the backend to fit to its height (`fit_popover`); it scrolls only
+  if it must, with no scrollbar, as one would flash up for the moment the page has grown and the
+  window not yet. On Linux, which tells of no clicks on a tray item, its menu opens the popover
+  ("Memory, CPU and Disk…"), at the top right of the screen. The window and
   `app.html` paint the theme's background before the page does, so it never flashes white. Tabs
   for Memory, CPU and Disk; the whole computer's use now as the big figure ("70 %", in `--warn`
   when it warns, as the menu bar's item does, by the thresholds chosen in Settings, read again each
