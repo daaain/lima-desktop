@@ -1,18 +1,20 @@
 <script lang="ts">
   // The menu bar's popover, a window of its own: the whole computer's memory, CPU or disk now, the
   // VMs' part of it and everything else, then the same stacked over a range, and a legend that is
-  // the list of VMs. What it says and draws comes from lib/menubar.ts. The backend builds the window
+  // the list of VMs, each with its busiest containers under it, and under everything else the busiest
+  // apps. What it says and draws comes from lib/menubar.ts. The backend builds the window
   // once, at ?tab=mem|cpu|disk, and from then on hides it and shows it again under the item clicked,
   // saying which tab with an event, so the page isn't loaded again. While the window is hidden it
   // fetches nothing; shown again, it fetches at once.
   import { onMount } from 'svelte';
   import { listen } from '@tauri-apps/api/event';
   import { page } from '$app/state';
-  import { api, type Snapshot, type Stack, type Theme } from '$lib/api';
+  import { api, type Snapshot, type Stack, type Theme, type TopApps } from '$lib/api';
   import { inOrder } from '$lib/inOrder';
   import {
-    agoLabel, amount, chartLabel, layerAside, layerFigure, layers, ofSentence, parseTab, parseTabRange, percentFigure, rangeLabel,
-    recordingPhrase, shares, stackChart, stackRefreshMs, stalledTip, SHADES, STACK_POINTS, TAB_RANGES, TABS, WIRED, type Tab,
+    agoLabel, amount, appTip, APPS_PENDING, chartLabel, containersByVm, containerTip, layerAside, layerFigure, layers, listsTop, ofSentence,
+    parseTab, parseTabRange, percentFigure, rangeLabel, recordingPhrase, shares, stackChart, stackRefreshMs, stalledTip, topApps,
+    topContainers, SHADES, STACK_POINTS, TAB_RANGES, TABS, TOP_N, WIRED, type Tab,
   } from '$lib/menubar';
   import { followsLive, rangeMs, type AnyRangeKey } from '$lib/ranges';
   import { theme } from '$lib/theme.svelte';
@@ -102,6 +104,32 @@
     return () => clearInterval(every);
   });
 
+  // The busiest apps, for memory and CPU: measured only while the popover is shown, at the
+  // measuring interval, as the backend samples them only when asked.
+  let apps = $state<{ tab: Tab; top: TopApps } | null>(null);
+  let appsError = $state<{ tab: Tab; message: string } | null>(null);
+  const appsInOrder = inOrder();
+  $effect(() => {
+    const t = tab;
+    if (!visible || !listsTop(t)) return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let stopped = false;
+    const tick = async () => {
+      try {
+        apps = { tab: t, top: await appsInOrder(api.topApps(t, TOP_N)) };
+        appsError = null;
+      } catch (e) {
+        appsError = { tab: t, message: String(e) };
+      }
+      if (!stopped) timer = setTimeout(tick, (intervalSecs ?? 1) * 1000);
+    };
+    tick();
+    return () => {
+      stopped = true;
+      clearTimeout(timer);
+    };
+  });
+
   const range = $derived(over[tab]);
   const now = $derived(shares(snapshot, tab));
   // Another tab's or range's stack isn't drawn as this one's while its own is on the way.
@@ -114,6 +142,10 @@
       : null,
   );
   const failed = $derived(stackError?.tab === tab && stackError.over === range ? stackError.message : null);
+  // Another tab's apps aren't listed as this one's while its own are on the way.
+  const appsNow = $derived(apps?.tab === tab ? apps.top : null);
+  const appsFailed = $derived(appsError?.tab === tab ? appsError.message : null);
+  const containersUnder = $derived(containersByVm(topContainers(snapshot, tab)));
 
   // What's pointed at, in the chart or the legend, is drawn forward in both: a VM ("vm:" and its
   // name, as a VM could be called "wired"), wired memory or everything else.
@@ -204,6 +236,17 @@
           <span class="fig num" class:muted={l.now == null}>{layerFigure(tab, l)}</span>
           <span class="aside num">{current ? layerAside(tab, l, range) : ''}</span>
         </li>
+        {#if listsTop(tab)}
+          {#each containersUnder.get(l.name) ?? [] as c (c.id)}
+            <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+            <li class="row sub" class:hl={lit === vmLit(l.name)} data-container={c.name} data-in={l.name} title={containerTip(tab, l.name)}
+              onmouseenter={() => (lit = vmLit(l.name))} onmouseleave={() => (lit = null)}>
+              <span></span>
+              <span class="part"><span class="name serif">{c.name}</span><span class="fig num">{amount(tab, c.now)}</span></span>
+              <span class="aside"></span>
+            </li>
+          {/each}
+        {/if}
       {/each}
       {#if tab === 'mem' && now?.wired != null}
         <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
@@ -221,6 +264,24 @@
         <span class="fig num">{amount(tab, now?.rest)}</span>
         <span class="aside"></span>
       </li>
+      {#if listsTop(tab)}
+        {#if appsNow?.pending || (!appsNow && appsFailed)}
+          <li class="row sub" class:hl={lit === 'rest'} data-apps={appsFailed ? 'failed' : 'pending'} title={appsFailed}>
+            <span></span>
+            <span class="part"><span class="name serif">{appsFailed ? "the busiest apps couldn't be read" : APPS_PENDING}</span></span>
+            <span class="aside"></span>
+          </li>
+        {/if}
+        {#each topApps(appsNow) as a (a.name)}
+          <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+          <li class="row sub" class:hl={lit === 'rest'} data-app={a.name} title={appTip(a)}
+            onmouseenter={() => (lit = 'rest')} onmouseleave={() => (lit = null)}>
+            <span></span>
+            <span class="part"><span class="name serif">{a.name}</span><span class="fig num">{amount(tab, a.value)}</span></span>
+            <span class="aside"></span>
+          </li>
+        {/each}
+      {/if}
       <li class="row other">
         <span class="sw free"></span>
         <span class="name serif">free</span>
@@ -304,6 +365,17 @@
   }
   .row:last-child { border-bottom: 0; }
   .row.hl { background: var(--wash); }
+  /* The busiest containers under their VM and apps under everything else: parts of the row above,
+     so indented, smaller and grey, with no rule between them and it. */
+  .row:has(+ .sub), .sub { border-bottom-color: transparent; }
+  .sub:has(+ .row:not(.sub)) { border-bottom-color: var(--border); }
+  .sub { padding-top: 1px; padding-bottom: 2px; font-size: 0.78rem; color: var(--muted); }
+  .sub .name { font-size: 0.92rem; font-weight: 400; padding-left: 10px; color: var(--muted); }
+  .sub .fig { font-weight: 400; }
+  /* A part's name may run on into the figures' column as far as its own figure, still at the
+     column's right edge, so longer names ("Visual Studio Code") fit. */
+  .part { grid-column: 2 / 4; display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+  .part .name { flex: 1; }
   .sw { width: 9px; height: 9px; align-self: center; background: var(--shade); }
   .sw.wired {
     background:

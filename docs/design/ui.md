@@ -200,12 +200,24 @@ under the sentence, figures and bar it explains, with the allocation as a dashed
   the list: each VM's name (in `--warn` while it isn't answering), its figure now and, in grey, its
   peak in the range ("peak 16.6 GiB in 1 h"), or for a disk, which only grows between clean-ups,
   what it grew ("grew 4.5 GB in 7 days"); then wired memory with a few words on what it is
-  ("kernel, GPU and drivers", more in its tooltip), everything else, and what's free. Pointing at a
+  ("kernel, GPU and drivers", more in its tooltip), everything else, and what's free. On memory and
+  CPU, not the disk, the legend breaks two rows down a level: the five containers using the most,
+  across every VM, each indented under the VM it runs in (a VM with none of the five has none; from
+  the snapshot, named as the Containers view names them; its tooltip says it's measured inside the
+  VM, so part of the VM's figure, not more on top of it), and the five apps using the most under
+  everything else, which they are part of (`top_apps.rs`: a process in an `.app` counts toward the
+  outermost bundle, so Chrome's helpers are one "Google Chrome"; anything else by its name; the
+  tooltip says how many processes). These rows are a name and a figure in the tab's format, smaller,
+  in `--muted` and not bold, with no rule between them and their row; a name runs on into the
+  figures' column as far as its own figure. They have no band of their own, and pointing at one
+  lights its VM, or everything else. CPU needs two samples, so for the moment after the popover is
+  shown the apps are "measuring the busiest apps…", never figures that look real. Pointing at a
   row or a band, a VM's, wired memory's or everything else's, brings that band forward in
   `--accent` and lights its row. It polls at the measuring interval while it's shown and fetches
   nothing while it's hidden; it fetches the stack as a tab or range is chosen, then, for a range up
   to 6 h, again as each of its 120 columns comes due, but not more often than the computer is
-  measured (`menubar.stackRefreshMs`): every second at 2 min, every 7.5 s at 15 min. Its words and
+  measured (`menubar.stackRefreshMs`): every second at 2 min, every 7.5 s at 15 min; the busiest
+  apps at the measuring interval, and not at all on the disk. Its words and
   geometry are `lib/menubar.ts`.
 - **A VM**: the headline verdict; four figures (Memory, CPU, Pressure, Disk), each a verdict
   sentence, three numbers, a bar and its chart; the resize sentence; "Out of memory" when there

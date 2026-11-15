@@ -1,8 +1,9 @@
 // The menu bar's popover (routes/menubar): the whole computer's memory, CPU or disk, the VMs' own
 // share of it and everything else, now and stacked over a range. What it says and the geometry it
 // draws are here, so a component only places them (docs/design/ui.md).
-import type { Snapshot, Stack, StackMetric } from './api';
+import type { Snapshot, Stack, StackMetric, TopApp, TopApps } from './api';
 import { isHot } from './almanac';
+import { lineName } from './containers';
 import { bytes, decimalBytes } from './format';
 import { inRange, rangeLabel, rangeMs, theLast, type AnyRangeKey } from './ranges';
 
@@ -320,3 +321,67 @@ export function stackChart(
     top: runs.map(([a, b]) => `M${edge((i) => cum[i][k], a, b).join('L')}`).join(''),
   };
 }
+
+/** How many apps, and containers, the legend lists. */
+export const TOP_N = 5;
+
+/** Whether a tab lists the apps and containers using the most: memory and CPU do; a disk doesn't. */
+export const listsTop = (tab: Tab): tab is 'mem' | 'cpu' => tab !== 'disk';
+
+/** The `n` largest by `value`, the largest first and by name between equals; none that uses nothing. */
+export function pickTop<T extends { name: string }>(xs: readonly T[], value: (x: T) => number, n = TOP_N): T[] {
+  return xs
+    .filter((x) => value(x) > 0)
+    .sort((a, b) => value(b) - value(a) || a.name.localeCompare(b.name))
+    .slice(0, n);
+}
+
+/** A container among the legend's largest, under the VM it runs in. */
+export interface TopContainer {
+  vm: string;
+  id: string;
+  /** As the Containers view calls it: its compose service, else its name. */
+  name: string;
+  /** Its memory (bytes) or CPU (millicores) now, measured in its VM. */
+  now: number;
+}
+
+/**
+ * The `n` containers using the most of the tab's resource now, across every running VM: from the
+ * snapshot, as the Containers view has them, so nothing more is measured for the popover.
+ */
+export function topContainers(snap: Snapshot | null | undefined, tab: Tab, n = TOP_N): TopContainer[] {
+  if (!listsTop(tab)) return [];
+  const key = tab === 'mem' ? 'mem' : 'cpu_mc';
+  const all = (snap?.vms ?? [])
+    .filter((v) => v.instance.status === 'Running')
+    .flatMap((v) =>
+      v.containers
+        .filter((c) => c.state === 'running' && c.latest[key] != null)
+        .map((c) => ({ vm: v.instance.name, id: c.id, name: lineName(c), now: c.latest[key] })),
+    );
+  return pickTop(all, (c) => c.now, n);
+}
+
+/** Which of the largest containers go under which VM's row; a VM with none of them has no entry. */
+export function containersByVm(top: readonly TopContainer[]): Map<string, TopContainer[]> {
+  const by = new Map<string, TopContainer[]>();
+  for (const c of top) by.set(c.vm, [...(by.get(c.vm) ?? []), c]);
+  return by;
+}
+
+/**
+ * A container's row, pointed at. Its figure comes from inside the VM, so it's a part of the VM's own
+ * figure, which is its whole cost on this computer, and not more use on top of it.
+ */
+export const containerTip = (tab: 'mem' | 'cpu', vm: string) =>
+  `Measured inside ${vm}: part of its ${tab === 'mem' ? 'memory' : 'CPU'} above, not more on top of it`;
+
+/** The apps to list under everything else: none while CPU waits for its second sample. */
+export const topApps = (t: TopApps | null | undefined, n = TOP_N): TopApp[] => (t?.pending ? [] : pickTop(t?.apps ?? [], (a) => a.value, n));
+
+/** In place of the apps while CPU waits for its second sample, a moment after the popover is shown. */
+export const APPS_PENDING = 'measuring the busiest apps…';
+
+/** An app's row, pointed at: how many processes its figure adds up. */
+export const appTip = (a: TopApp) => (a.processes === 1 ? `${a.name}: one process` : `${a.name}: its ${a.processes} processes added up`);

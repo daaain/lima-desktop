@@ -3,7 +3,8 @@
 // made to exercise the UI: a VM past three quarters of its memory (a leak) with a container restarted after growing for hours, a CPU-bound one with
 // an OOM kill and a stall from memory, one with a nearly full disk and a managed-by marker, one whose podman is
 // too old and that has stopped responding, an idle one, and stopped and broken ones; image stores with superseded tags, dangling images and
-// an image with two tags, and volumes some no container uses (anonymous ones among them). Every value is a function of the entity and the time,
+// an image with two tags, and volumes some no container uses (anonymous ones among them); and the computer's
+// busiest apps besides the VMs, as the menu bar's popover lists them. Every value is a function of the entity and the time,
 // so two runs at the same (fixed) time draw the same picture.
 (() => {
   const GiB = 1024 ** 3;
@@ -205,11 +206,13 @@
       instance('quill', 'Running', 4, 8, 60, {
         marker: marker({ state: 'active', manager: 'foldyard', group: 'quill', hint: 'Use `fy` to stop or delete it.', locked: ['stop', 'delete', 'resize'], source: 'file' }),
       }),
-      { cpu: shapes.bursty(0.01, 0.2, 0.08), mem: shapes.flat(0.3, 0.02), disk: shapes.filling(0.48, 0.83, NOW) },
-      [container('quill-devbox', local('quill-devbox-packages'), { memMiB: 2300, upHours: 15 }), container('wasm-build', local('wasm-builder'), { state: 'exited' })],
+      // On this computer, a little more than its guest uses: its devbox, measured inside, is part of it.
+      { cpu: shapes.bursty(0.01, 0.2, 0.08), mem: shapes.flat(0.3, 0.02), hostRss: shapes.flat(0.36, 0.02), disk: shapes.filling(0.48, 0.83, NOW) },
+      [container('quill-devbox', local('quill-devbox-packages'), { memMiB: 2300, upHours: 15, cpu: shapes.flat(0.002, 0.001) }), container('wasm-build', local('wasm-builder'), { state: 'exited' })],
     ),
-    vm(instance('lantern', 'Running', 8, 16, 60), { cpu: shapes.flat(0.006, 0.004), mem: shapes.flat(0.06, 0.004), disk: shapes.flat(0.14, 0) }, [
-      container('lantern-devbox', local('lantern-devbox-packages'), { memMiB: 895, upHours: 15 }),
+    vm(instance('lantern', 'Running', 8, 16, 60), { cpu: shapes.flat(0.006, 0.004), mem: shapes.flat(0.06, 0.004), hostRss: shapes.flat(0.085, 0.004), disk: shapes.flat(0.14, 0) }, [
+      // Idle as its VM is: a container never uses more than the VM it's in.
+      container('lantern-devbox', local('lantern-devbox-packages'), { memMiB: 895, upHours: 15, cpu: shapes.flat(0.002, 0.001) }),
     ]),
     vm(instance('ember', 'Running', 2, 4, 20), { cpu: shapes.flat(0.02, 0.01), mem: shapes.flat(0.21, 0.01), disk: shapes.flat(0.36, 0) }, [], {
       podmanError: 'podman 4.3.1 in this VM is too old: Lima Desktop needs podman 5 or newer',
@@ -274,6 +277,34 @@
         return { name: v.instance.name, avg: avg(f), peak: Math.round(Math.max(...ts.flatMap((t) => samples(f, t)))) };
       }),
     };
+  }
+
+  // The busiest apps besides the VMs (commands::top_apps): memory as each app's processes' footprints
+  // added up, CPU in millicores, a little different each minute. CPU needs two samples, so the first
+  // asking after a while (as when the popover is first shown) has none yet, as the backend's.
+  const APPS = [
+    // name, processes, memory (GiB), CPU (cores)
+    ['Google Chrome', 38, 5.4, 0.8],
+    ['Visual Studio Code', 21, 1.9, 0.25],
+    ['Slack', 7, 1.3, 0.12],
+    ['WindowServer', 1, 1.1, 0.45],
+    ['Mail', 4, 0.6, 0.02],
+    ['kernel_task', 1, 0.4, 0.35],
+    ['Lima Desktop', 3, 0.25, 0.04],
+    ['Finder', 1, 0.2, 0.01],
+  ];
+  let appsSampledAt = -Infinity;
+  function topApps({ metric, n = 5 }) {
+    const t = Date.now();
+    const pending = metric === 'cpu' && performance.now() - appsSampledAt > 25_000;
+    appsSampledAt = performance.now();
+    if (pending) return { apps: [], pending: true };
+    const apps = APPS.map(([name, processes, mem, cpu], i) => ({
+      name,
+      processes,
+      value: Math.round(metric === 'mem' ? mem * GiB * (0.95 + 0.1 * noise(i, t / 60_000)) : cpu * 1000 * (0.6 + 0.8 * noise(i, 9, t / 60_000))),
+    }));
+    return { apps: apps.sort((a, b) => b.value - a.value).slice(0, n), pending: false };
   }
 
   function snapshot() {
@@ -576,6 +607,8 @@
     volume_remove: () => later(),
     volumes_prune: () => later({ removed: 1, reclaimed: 1260 * MiB, errors: [] }),
     host_stack: (args) => hostStack(args),
+    // A test can set __fakeTopApps to stand between the app and an answer (to have it fail, say).
+    top_apps: (args) => (window.__fakeTopApps ? window.__fakeTopApps(args, () => topApps(args)) : topApps(args)),
     // The window commands do nothing here; a test reads what was asked from __fakeCalls.
     open_main: (args) => void calls.push({ cmd: 'open_main', args }),
     quit: (args) => void calls.push({ cmd: 'quit', args }),

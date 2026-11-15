@@ -315,6 +315,21 @@ export interface Stack {
   vms: { name: string; avg: (number | null)[]; peak: number | null }[];
 }
 
+/** One app on this computer (commands::top_apps): its processes added up, those in an `.app` bundle under the outermost one. */
+export interface TopApp {
+  name: string;
+  /** Bytes of memory (footprint, else resident), or millicores of CPU. */
+  value: number;
+  processes: number;
+}
+
+/** The apps using the most of a resource now, the largest first, leaving out the VMs' own processes. */
+export interface TopApps {
+  apps: TopApp[];
+  /** CPU only: the first sample after a while, with nothing yet to measure from. */
+  pending: boolean;
+}
+
 export type VmAction = 'start' | 'stop' | 'restart' | 'delete';
 export type ContainerAction = 'start' | 'stop' | 'restart' | 'remove';
 
@@ -325,6 +340,8 @@ export const api = {
   /** The menu bar popover's chart: `metric` over [from, to] in about `points` buckets. */
   hostStack: (metric: StackMetric, from: number, to: number, points = 120) =>
     invoke<Stack>('host_stack', { metric, from, to, points }),
+  /** The `n` apps using the most memory or CPU now, for the popover to list under everything else. */
+  topApps: (metric: 'mem' | 'cpu', n = 5) => invoke<TopApps>('top_apps', { metric, n }),
   /** Shows the main window, making it again if it was closed. */
   openMain: () => invoke<void>('open_main'),
   /** Quits the app, and with it the recording. */

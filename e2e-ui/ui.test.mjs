@@ -213,11 +213,31 @@ for (const dark of [false, true]) {
     assert.equal(await page.locator('svg path.band.vm').count(), 5);
     assert.equal(await page.locator('svg path.band.wired').count(), 1);
     assert.match(await page.locator('footer').innerText(), /Recording every 1 s/);
+    // The busiest containers under the VM each runs in, and the busiest apps under everything else.
+    await page.locator('.legend .row[data-app]').first().waitFor();
+    assert.deepEqual(await page.locator('.legend .row .name').allInnerTexts(), [
+      'atlas', 'frontend', 'harbor', 'harbor-devbox', 'app', 'quill', 'quill-devbox', 'lantern', 'lantern-devbox', 'ember',
+      'wired', 'everything else', 'Google Chrome', 'Visual Studio Code', 'Slack', 'WindowServer', 'Mail', 'free',
+    ]);
+    assert.match(await page.locator('.row[data-container="harbor-devbox"]').innerText(), /^harbor-devbox\s+2\.\d GiB$/);
+    assert.match(await page.locator('.row[data-app="Google Chrome"]').innerText(), /^Google Chrome\s+5\.\d GiB$/);
+    assert.equal(await page.locator('.row[data-container="app"]').getAttribute('title'), 'Measured inside harbor: part of its memory above, not more on top of it');
+    assert.equal(await page.locator('.row[data-app="Google Chrome"]').getAttribute('title'), 'Google Chrome: its 38 processes added up');
     // The window is asked to fit the page.
     await page.waitForFunction(() => window.__fakeCalls.some((c) => c.cmd === 'fit_popover' && c.args.height > 200));
     await shoot(page, `menubar${suffix}`);
+    // CPU's apps at once: the memory tab's samples are recent enough to measure from.
+    await page.getByRole('tab', { name: 'CPU' }).click();
+    await page.waitForFunction(() => /Google Chrome\s+[\d.]+ cores/.test(document.querySelector('.legend').innerText));
+    assert.equal(await page.locator('.row[data-apps]').count(), 0);
+    assert.match(await page.locator('.row[data-container="harbor-devbox"]').innerText(), /^harbor-devbox\s+\d\.\d cores$/);
+    assert.equal(await page.locator('.row[data-container="harbor-devbox"]').getAttribute('title'), 'Measured inside harbor: part of its CPU above, not more on top of it');
+    assert.equal(await page.locator('.row.sub[data-app]').count(), 5);
+    await shoot(page, `menubar-cpu${suffix}`);
     await page.getByRole('tab', { name: 'Disk' }).click();
     await page.waitForFunction(() => /grew [\d.]+ GB in 7 days/.test(document.querySelector('.legend').innerText));
+    // No apps or containers for a disk.
+    assert.equal(await page.locator('.legend .row.sub').count(), 0);
     await shoot(page, `menubar-disk${suffix}`);
     assert.deepEqual(errors, []);
     await close();
@@ -281,7 +301,7 @@ test('The popover is told its tab when shown again, watches 2 min move, and fetc
     const invoke = window.__TAURI_INTERNALS__.invoke;
     window.__asked = [];
     window.__TAURI_INTERNALS__.invoke = (cmd, args) => {
-      if (cmd === 'host_stack' || cmd === 'snapshot') window.__asked.push({ cmd, args, at: performance.now() });
+      if (cmd === 'host_stack' || cmd === 'snapshot' || cmd === 'top_apps') window.__asked.push({ cmd, args, at: performance.now() });
       return invoke(cmd, args);
     };
   };
@@ -304,7 +324,11 @@ test('The popover is told its tab when shown again, watches 2 min move, and fetc
   await page.waitForTimeout(3200);
   assert.ok((await stacks()) - before >= 2, 'fetched again about every second');
 
-  // Hidden, it fetches nothing; shown again, it fetches at once.
+  // The busiest apps are asked for at the measuring interval too.
+  const appsAsked = () => page.evaluate(() => window.__asked.filter((a) => a.cmd === 'top_apps' && a.args.metric === 'cpu').length);
+  assert.ok((await appsAsked()) >= 3, 'apps asked for about every second');
+
+  // Hidden, it fetches nothing, the busiest apps included; shown again, it fetches at once.
   const asked = () => page.evaluate(() => window.__asked.length);
   const visibility = (state) =>
     page.evaluate((s) => {
@@ -340,6 +364,33 @@ for (const dark of [false, true]) {
     await close();
   });
 }
+
+test("The popover's CPU apps wait for a second sample, and one that can't be read says so", async () => {
+  const { page, errors, close } = await open('/menubar?tab=cpu', { width: 360, height: 560 });
+  // Opened on CPU: nothing to measure from yet, so no figures that look real.
+  await page.locator('.row[data-apps="pending"]').waitFor();
+  assert.equal(await page.locator('.row[data-apps="pending"] .name').innerText(), 'measuring the busiest apps…');
+  assert.equal(await page.locator('.row[data-app]').count(), 0);
+  // A second later, at the measuring interval, the apps.
+  await page.locator('.row[data-app]').first().waitFor();
+  assert.equal(await page.locator('.row[data-apps]').count(), 0);
+  // Hovering an app lights everything else, which it is part of; a container lights its VM.
+  await page.locator('.row[data-app="Google Chrome"]').hover();
+  assert.equal(await page.locator('svg path.band.rest.hl').count(), 1);
+  await page.locator('.row[data-container="harbor-devbox"]').hover();
+  assert.equal(await page.locator('svg path.band.vm.hl').count(), 1);
+  assert.match(await page.locator('.row[data-vm="harbor"]').getAttribute('class'), /\bhl\b/);
+  // Failing (ps missing, say), the apps already listed stay; a tab with none says it couldn't read them.
+  await page.evaluate(() => (window.__fakeTopApps = () => { throw new Error("can't run ps"); }));
+  await page.waitForTimeout(1500);
+  assert.equal(await page.locator('.row[data-app]').count(), 5);
+  await page.getByRole('tab', { name: 'Memory' }).click();
+  await page.locator('.row[data-apps="failed"]').waitFor();
+  assert.equal(await page.locator('.row[data-apps="failed"] .name').innerText(), "the busiest apps couldn't be read");
+  assert.equal(await page.locator('.row[data-apps="failed"]').getAttribute('title'), "Error: can't run ps");
+  assert.deepEqual(errors, []);
+  await close();
+});
 
 test('Settings chooses each menu bar item\'s drawing and figure, and whether closing the window keeps recording', async () => {
   const { page, errors, close } = await open('/settings');

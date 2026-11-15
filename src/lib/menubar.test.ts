@@ -1,10 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import type { Snapshot, Stack, VmLive } from './api';
 import {
-  agoLabel, amount, chartLabel, layerAside, layerFigure, layers, ofSentence, parseTab, parseTabRange, percentFigure, recordingPhrase,
-  shares, stackChart, stackRefreshMs, TAB_RANGES, WIRED, type Layer,
+  agoLabel, amount, appTip, APPS_PENDING, chartLabel, containersByVm, containerTip, layerAside, layerFigure, layers, listsTop, ofSentence,
+  parseTab, parseTabRange, percentFigure, pickTop, recordingPhrase, shares, stackChart, stackRefreshMs, TAB_RANGES, topApps,
+  topContainers, WIRED, type Layer,
 } from './menubar';
-import { vm } from './testing';
+import { container, vm } from './testing';
 
 const GiB = 1024 ** 3;
 const GB = 1e9;
@@ -251,5 +252,74 @@ describe('stackChart', () => {
   it('cycles the shades', () => {
     const ls = ['a', 'b', 'c', 'd', 'e', 'f'].map((n) => layer(n, [1, 1]));
     expect(stackChart(stackOf({}), ls, at)!.bands.map((b) => b.shade)).toEqual([0, 1, 2, 3, 4, 0]);
+  });
+});
+
+describe('the top apps and containers', () => {
+  it('lists them for memory and CPU, not a disk', () => {
+    expect(listsTop('mem')).toBe(true);
+    expect(listsTop('cpu')).toBe(true);
+    expect(listsTop('disk')).toBe(false);
+  });
+
+  it('picks the five largest, by name between equals, and nothing that uses none', () => {
+    const xs = [3, 9, 0, 7, 7, 1, 12, 5].map((v, i) => ({ name: `n${i}`, v }));
+    expect(pickTop(xs, (x) => x.v).map((x) => x.name)).toEqual(['n6', 'n1', 'n3', 'n4', 'n7']);
+    expect(pickTop(xs, (x) => x.v, 2).map((x) => x.name)).toEqual(['n6', 'n1']);
+    expect(pickTop([{ name: 'a', v: 0 }], (x) => x.v)).toEqual([]);
+    expect(pickTop([], (x: { name: string; v: number }) => x.v)).toEqual([]);
+  });
+
+  const ct = (name: string, mem: number, cpu: number, o = {}) =>
+    container({ id: name, name, latest: { mem: mem * GiB, cpu_mc: cpu }, ...o });
+  const withContainers = snap([
+    { ...running('harbor', { host_rss: 10 * GiB }), containers: [ct('harbor-devbox', 2.5, 900), ct('app-1', 0.9, 300, { composeService: 'app' })] },
+    { ...running('atlas', { host_rss: 25 * GiB }), containers: [ct('frontend', 0.7, 50), ct('scraper', 0.45, 0), ct('pdf', 0.05, 10), ct('old', 3, 0, { state: 'exited' })] },
+    { ...running('quill', { host_rss: 3 * GiB }), containers: [ct('quill-devbox', 2.3, 20)] },
+    // Stopped: its list is stale, and none of it runs.
+    { ...stopped('kiln', {}), containers: [ct('kiln-db', 9, 9000)] },
+  ]);
+
+  it('takes the five largest containers across every running VM, by their names in the Containers view', () => {
+    const mem = topContainers(withContainers, 'mem');
+    expect(mem.map((c) => [c.vm, c.name])).toEqual([
+      ['harbor', 'harbor-devbox'], ['quill', 'quill-devbox'], ['harbor', 'app'], ['atlas', 'frontend'], ['atlas', 'scraper'],
+    ]);
+    expect(mem[0].now).toBe(2.5 * GiB);
+    // CPU in millicores; one using none isn't listed.
+    expect(topContainers(withContainers, 'cpu').map((c) => [c.name, c.now])).toEqual([
+      ['harbor-devbox', 900], ['app', 300], ['frontend', 50], ['quill-devbox', 20], ['pdf', 10],
+    ]);
+    expect(topContainers(withContainers, 'disk')).toEqual([]);
+    expect(topContainers(null, 'mem')).toEqual([]);
+  });
+
+  it('puts each container under the VM it runs in, and a VM with none in the five gets none', () => {
+    const under = containersByVm(topContainers(withContainers, 'mem'));
+    expect(under.get('harbor')?.map((c) => c.name)).toEqual(['harbor-devbox', 'app']);
+    expect(under.get('quill')?.map((c) => c.name)).toEqual(['quill-devbox']);
+    expect(under.get('atlas')?.map((c) => c.name)).toEqual(['frontend', 'scraper']);
+    expect(under.has('kiln')).toBe(false);
+    const cpu = containersByVm(topContainers(withContainers, 'cpu'));
+    expect(cpu.get('atlas')?.map((c) => c.name)).toEqual(['frontend', 'pdf']);
+  });
+
+  it('says a container is part of its VM, not more on top of it', () => {
+    expect(containerTip('mem', 'harbor')).toBe("Measured inside harbor: part of its memory above, not more on top of it");
+    expect(containerTip('cpu', 'harbor')).toBe("Measured inside harbor: part of its CPU above, not more on top of it");
+  });
+
+  it("lists the apps this tab's answer has, and none while CPU waits for its second sample", () => {
+    const chrome = { name: 'Google Chrome', value: 5 * GiB, processes: 40 };
+    const slack = { name: 'Slack', value: 0.6 * GiB, processes: 6 };
+    expect(topApps({ apps: [slack, chrome], pending: false }).map((a) => a.name)).toEqual(['Google Chrome', 'Slack']);
+    expect(topApps({ apps: [], pending: true })).toEqual([]);
+    expect(topApps(null)).toEqual([]);
+    expect(APPS_PENDING).toBe('measuring the busiest apps…');
+  });
+
+  it("says what an app's figure adds up", () => {
+    expect(appTip({ name: 'Google Chrome', value: 1, processes: 40 })).toBe('Google Chrome: its 40 processes added up');
+    expect(appTip({ name: 'WindowServer', value: 1, processes: 1 })).toBe('WindowServer: one process');
   });
 });
