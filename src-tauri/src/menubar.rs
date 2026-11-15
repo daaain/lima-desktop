@@ -170,11 +170,14 @@ const SOLID: u8 = 255;
 const PALE: u8 = 95;
 /// The warning colour: macOS's orange for a dark menu bar, which still reads on a light one.
 const HOT: [u8; 3] = [255, 159, 10];
+/// On a light menu bar the bright one is faint (about 2:1): a deeper one, legible as small text.
+const HOT_ON_LIGHT: [u8; 3] = [179, 77, 0];
 const INK: [u8; 3] = [0, 0, 0];
 const WHITE: [u8; 3] = [255, 255, 255];
 
 /// The menu bar's appearance, for what macOS can't tint: past three quarters an item isn't a
-/// template image, and its names are painted in the menu bar's own text colour.
+/// template image, so its warning colour is chosen for the bar, and its names painted in the bar's
+/// own text colour.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Bar {
     #[default]
@@ -187,6 +190,14 @@ impl Bar {
         match self {
             Bar::Dark => WHITE,
             Bar::Light => INK,
+        }
+    }
+
+    /// The warning colour on this menu bar.
+    fn hot(self) -> [u8; 3] {
+        match self {
+            Bar::Dark => HOT,
+            Bar::Light => HOT_ON_LIGHT,
         }
     }
 }
@@ -423,8 +434,10 @@ pub fn item(res: Res, p: Parts, history: &[Share], bar: Bar) -> Icon {
     if let Some(pen) = l.side_name {
         side.draw(&mut names, res.id(), pen.x, pen.y, true);
     }
-    let (rgb, template) = ink(now);
-    m.paint_under(rgb, &names, if template { rgb } else { bar.ink() })
+    match ink(now) {
+        (rgb, true) => m.paint_under(rgb, &names, rgb),
+        (_, false) => m.paint_under(bar.hot(), &names, bar.ink()),
+    }
 }
 
 /// Font weights, on CoreText's scale (0 regular, 0.23 medium, 0.3 semibold).
@@ -1137,20 +1150,41 @@ mod tests {
     #[test]
     fn past_three_quarters_the_names_keep_the_menu_bars_own_colour() {
         let hot = [Share { whole: 0.9, vms: 0.2 }];
-        for (bar, own) in [(Bar::Dark, WHITE), (Bar::Light, INK)] {
+        for (bar, own, warn) in [(Bar::Dark, WHITE, HOT), (Bar::Light, INK, HOT_ON_LIGHT)] {
             // On its side, left of the drawing; the drawing in the warning colour.
             let p = parts(item(Drawing::Trace, false), true).unwrap();
             let i = shown(Res::Disk, p, &hot, bar).icon.unwrap();
             let side = i.width - TRACE_WIDTH - SIDE_GAP;
             assert_eq!(colours_in(&i, 0..side, 0..H).iter().map(|c| c.0).collect::<Vec<_>>(), [own], "{bar:?}");
-            assert_eq!(&px(&i, side + SIDE_GAP, 0)[..3], &HOT);
+            assert_eq!(&px(&i, side + SIDE_GAP, 0)[..3], &warn);
             // Under the figure: the figure in the warning colour, the name not.
             let p = parts(item(Drawing::Trace, true), true).unwrap();
             let i = shown(Res::Mem, p, &hot, bar).icon.unwrap();
             let fig = TRACE_WIDTH + FIGURE_GAP..i.width;
-            assert_eq!(colours_in(&i, fig.clone(), 0..18).iter().map(|c| c.0).collect::<Vec<_>>(), [HOT], "{bar:?}");
+            assert_eq!(colours_in(&i, fig.clone(), 0..18).iter().map(|c| c.0).collect::<Vec<_>>(), [warn], "{bar:?}");
             assert_eq!(colours_in(&i, fig, 22..H).iter().map(|c| c.0).collect::<Vec<_>>(), [own], "{bar:?}");
         }
+    }
+
+    /// WCAG's contrast ratio between two colours.
+    fn contrast(a: [u8; 3], b: [u8; 3]) -> f64 {
+        let lum = |c: [u8; 3]| {
+            let lin = |v: u8| {
+                let v = f64::from(v) / 255.0;
+                if v <= 0.04045 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) }
+            };
+            0.2126 * lin(c[0]) + 0.7152 * lin(c[1]) + 0.0722 * lin(c[2])
+        };
+        let (x, y) = (lum(a), lum(b));
+        (x.max(y) + 0.05) / (x.min(y) + 0.05)
+    }
+
+    #[test]
+    fn the_warning_colour_reads_as_text_on_either_menu_bar() {
+        // A dark menu bar and a light one, as they look over a plain wallpaper.
+        let (dark, light) = ([0x1e, 0x1e, 0x1e], [0xf2, 0xf2, 0xf2]);
+        assert!(contrast(Bar::Dark.hot(), dark) >= 4.5, "{}", contrast(Bar::Dark.hot(), dark));
+        assert!(contrast(Bar::Light.hot(), light) >= 4.5, "{}", contrast(Bar::Light.hot(), light));
     }
 
     #[cfg(target_os = "macos")]
