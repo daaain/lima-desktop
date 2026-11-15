@@ -559,11 +559,9 @@ impl Collector {
     /// instances are on (once one says where).
     async fn host_loop(self: Arc<Self>) {
         let mut reader = crate::host_use::Reader::new();
-        let entity = self
-            .store()
-            .entity(Kind::Host, "", "host", "this computer", now_ms())
-            .map_err(|e| log::error!("recording the computer's use: {e}"))
-            .ok();
+        // Asked for again each time until the store gives it: storage that failed once may recover.
+        let mut entity = None;
+        let mut said = false;
         let mut every = self.interval.subscribe();
         let mut interval = stats_interval(*every.borrow_and_update());
         loop {
@@ -576,6 +574,16 @@ impl Collector {
                 vms.values().map(|v| v.live.instance.dir.clone()).find(|d| !d.is_empty())
             };
             let row = reader.read(lima_dir.as_deref().map(Path::new)).row();
+            if entity.is_none() {
+                match self.store().entity(Kind::Host, "", "host", "this computer", now_ms()) {
+                    Ok(id) => entity = Some(id),
+                    Err(e) if !said => {
+                        log::error!("recording the computer's use: {e}");
+                        said = true;
+                    }
+                    Err(_) => {}
+                }
+            }
             if let Some(id) = entity {
                 self.store().ingest(id, now_ms(), row.clone());
             }
