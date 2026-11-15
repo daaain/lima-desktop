@@ -146,7 +146,11 @@ under the sentence, figures and bar it explains, with the allocation as a dashed
   if need be, to the shortest that holds the latest kill or stall: that is what was asked to be
   seen, so the range stays so on every page until chosen again. What is now (a figure, a bar, the
   overview's headline and capacity bars) stays now.
-- **VMs**: the headline; the three capacity bars; then running VMs, each a row under the column
+- **VMs**: the headline; the three capacity bars, and under memory's, where compression makes a
+  difference, one muted sentence on what the running VMs hold of this computer's RAM as Activity
+  Monitor counts it, and what that is with their compressed memory at its compressed size
+  (`hostRamSentence`); a VM's own figures (its row's "RAM on your computer", its sizing chart) stay
+  Activity Monitor's, as a VM is sized for what it touches, not for what compression saves; then running VMs, each a row under the column
   heads Memory, CPU, Disk, Containers (a figure, a sketch, a bar, a note), with one dot per
   container; then the VMs that aren't running, with a bar for the memory each is set to. Both lists
   go by name until a column head is chosen (see **Order**, below); the count head ("Five are

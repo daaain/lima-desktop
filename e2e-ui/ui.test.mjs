@@ -88,6 +88,8 @@ for (const dark of [false, true]) {
     await atlas.locator('.sketch:not(.empty)').first().waitFor();
     // Capacity is drawn against the host.
     assert.match(await page.locator('.capacities').innerText(), /128\.0 GiB on this computer/);
+    // What the VMs hold of this computer's RAM, and less with compressed memory at its compressed size.
+    assert.match(await page.locator('[data-ram]').innerText(), /^The running VMs hold [\d.]+ GiB of this computer's RAM, as Activity Monitor counts it; [\d.]+ GiB with what macOS has compressed/);
     // A stopped VM's disk image counts, and hovering its block says whose it is.
     await page.locator('.capacity', { hasText: 'Disk' }).locator('.block[title^="foundry, not running"]').hover();
     assert.match(await page.locator('.capacity', { hasText: 'Disk' }).innerText(), /foundry not running · 61\.0 GiB/);

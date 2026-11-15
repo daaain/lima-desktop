@@ -114,6 +114,20 @@ export interface HostBar {
 }
 
 /**
+ * Under the overview's memory bar, where compression makes a difference: what the running VMs hold
+ * of this computer's RAM as Activity Monitor counts it (host_rss, their footprints), and what that
+ * is with their compressed memory counted at the size the compressor keeps it in (host_mem, as the
+ * computer's "Memory Used" counts it). Nothing until every running VM has both.
+ */
+export function hostRamSentence(running: readonly VmLive[]): string | null {
+  const both = running.map((v) => [v.latest.host_rss, v.latest.host_mem] as const);
+  if (!both.length || both.some(([r, m]) => r == null || m == null)) return null;
+  const [rss, mem] = both.reduce(([a, b], [r, m]) => [a + r!, b + m!], [0, 0]);
+  if (bytes(rss) === bytes(mem)) return null;
+  return `The running VMs hold ${bytes(rss)} of this computer's RAM, as Activity Monitor counts it; ${bytes(mem)} with what macOS has compressed counted at its compressed size.`;
+}
+
+/**
  * A host resource as one bar of blocks, a block per VM: as wide as its allocation (or, not
  * running, as what it uses), running VMs first and the largest first within each.
  */

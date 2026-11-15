@@ -2,7 +2,7 @@
   import { live } from '$lib/live.svelte';
   import { bytes, cores, permille } from '$lib/format';
   import type { Instance, VmLive } from '$lib/api';
-  import { band, bandRise, countWord, fleetHeadline, gauges, share, sketch, vmSentence } from '$lib/almanac';
+  import { band, bandRise, countWord, fleetHeadline, gauges, hostRamSentence, share, sketch, vmSentence } from '$lib/almanac';
   import { History } from '$lib/history.svelte';
   import { range } from '$lib/range.svelte';
   import { theLast } from '$lib/ranges';
@@ -53,6 +53,7 @@
     ...running.map((v) => ({ name: v.instance.name, used: v.latest.host_disk_alloc ?? v.latest.store_used ?? v.latest.disk_used ?? 0, allocated: v.instance.disk })),
     ...others.map((v) => ({ name: v.instance.name, used: v.latest.host_disk_alloc ?? 0 })),
   ]);
+  const ram = $derived(hostRamSentence(running));
   const hotVms = (what: 'memory' | 'cpu' | 'disk') => running.filter((v) => gauges(v)[what].hot).map((v) => v.instance.name);
 </script>
 
@@ -82,6 +83,7 @@
       <div class="capacities">
         <Capacity name="Memory" items={running.map((v) => ({ name: v.instance.name, used: v.latest.mem_used ?? 0, allocated: v.latest.mem_total ?? v.instance.memory }))}
           host={host?.memory} format={(n) => bytes(n)} hot={hotVms('memory')} />
+        {#if ram}<p class="note ram" data-ram>{ram}</p>{/if}
         <Capacity name="CPU" items={running.map((v) => ({ name: v.instance.name, used: v.latest.cpu_mc ?? 0, allocated: v.instance.cpus * 1000 }))}
           host={host ? host.cpus * 1000 : undefined} format={(n) => `${cores(n)} cores`} hot={hotVms('cpu')} />
         <Capacity name="Disk" items={diskHoldings} host={host?.disk} format={(n) => bytes(n)} hot={hotVms('disk')} />
@@ -207,6 +209,8 @@
   .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--bar); box-sizing: border-box; }
   .dot.off { background: none; border: 1.5px solid var(--warn); }
   .fleet > .note { margin-top: 0.9rem; max-width: 60rem; }
+  /* What the VMs hold of this computer's RAM, close under the memory bar it's about. */
+  .note.ram { margin: -0.15rem 0 0.2rem; }
   .narrow-order { display: none; }
 
   .stopped { margin-top: 2.4rem; display: grid; gap: 0.4rem; }
