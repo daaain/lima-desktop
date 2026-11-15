@@ -417,6 +417,34 @@ test('The popover warns as Settings has it, read again each time it is shown', a
   await close();
 });
 
+test('Settings chooses when each menu bar item warns: memory and CPU by the percent in use, the disk by the space left', async () => {
+  const { page, errors, close } = await open('/settings');
+  const warns = (label) => page.getByRole('combobox', { name: `${label} warns` });
+  await warns('Memory').waitFor();
+  assert.equal(await warns('Memory').locator('option:checked').innerText(), 'past 75 %');
+  assert.equal(await warns('CPU').locator('option:checked').innerText(), 'past 75 %');
+  assert.equal(await warns('Disk').locator('option:checked').innerText(), 'under 50 GB free');
+  assert.deepEqual(await warns('Memory').locator('option').allInnerTexts(), [
+    'past 50 %', 'past 60 %', 'past 70 %', 'past 75 %', 'past 80 %', 'past 85 %', 'past 90 %', 'past 95 %', 'never',
+  ]);
+  assert.deepEqual(await warns('Disk').locator('option').allInnerTexts(), [
+    'under 10 GB free', 'under 25 GB free', 'under 50 GB free', 'under 100 GB free', 'under 200 GB free', 'never',
+  ]);
+
+  await warns('Memory').selectOption({ label: 'past 90 %' });
+  await page.waitForFunction(async () => (await window.__TAURI_INTERNALS__.invoke('settings')).menuBar.warn.memoryPct === 90);
+  await warns('CPU').selectOption({ label: 'never' });
+  await page.waitForFunction(async () => (await window.__TAURI_INTERNALS__.invoke('settings')).menuBar.warn.cpuPct === null);
+  await warns('Disk').selectOption({ label: 'under 200 GB free' });
+  await page.waitForFunction(async () => (await window.__TAURI_INTERNALS__.invoke('settings')).menuBar.warn.diskFreeGb === 200);
+  assert.deepEqual((await page.evaluate(() => window.__TAURI_INTERNALS__.invoke('settings'))).menuBar.warn, {
+    memoryPct: 90, cpuPct: null, diskFreeGb: 200,
+  });
+  assert.equal(await warns('CPU').locator('option:checked').innerText(), 'never');
+  assert.deepEqual(errors, []);
+  await close();
+});
+
 test('Settings chooses each menu bar item\'s drawing and figure, and whether closing the window keeps recording', async () => {
   const { page, errors, close } = await open('/settings');
   const stored = () => page.evaluate(() => window.__TAURI_INTERNALS__.invoke('settings'));
