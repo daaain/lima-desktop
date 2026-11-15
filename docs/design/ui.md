@@ -195,10 +195,14 @@ under the sentence, figures and bar it explains, with the allocation as a dashed
   memory, the computer's wired memory (the kernel's, the GPU's and drivers', never paged out or
   compressed; no VM's process has any, so it's part of what the VMs leave and kept inside it) in
   everything else's hatch, crossed; everything else hatched above; the computer's total is the
-  top. A gap is where the computer wasn't measured, or the VMs weren't though they ran; the right edge is the newest bucket measured, as the VMs' newest readings may still be on their way. A stopped VM's disk image has no history, so
+  top. A gap is where the computer wasn't measured, or a VM wasn't though it ran (a reading or two late or lost; a longer while, it was stopped); the right edge is the newest bucket measured, as the VMs' newest readings may still be on their way. A stopped VM's disk image has no history, so
   it's drawn at its size now throughout, and a disk's gaps hold its nearest reading. The legend is
   the list: each VM's name (in `--warn` while it isn't answering), its figure now and, in grey, its
-  peak in the range ("peak 16.6 GiB in 1 h"), or for a disk, which only grows between clean-ups,
+  peak in the range. On memory, a VM's or an app's figure, and its band, is its share of the
+  memory in use, its compressed memory counted at the size the compressor keeps it in, so the parts
+  add up to the computer's; after it, small, `--muted` and in brackets where it differs, what
+  Activity Monitor says ("33.0 GiB (47.1)", its unit only where that differs), which counts
+  compressed memory at full size, as its tooltip says ("peak 16.6 GiB in 1 h"), or for a disk, which only grows between clean-ups,
   what it grew ("grew 4.5 GB in 7 days"); then wired memory with a few words on what it is
   ("kernel, GPU and drivers", more in its tooltip), everything else, and what's free. On memory and
   CPU, not the disk, the legend breaks two rows down a level: the five containers using the most,
@@ -207,9 +211,10 @@ under the sentence, figures and bar it explains, with the allocation as a dashed
   VM, so part of the VM's figure, not more on top of it), and the five apps using the most under
   everything else, which they are part of (`top_apps.rs`: a process in an `.app` counts toward the
   outermost bundle, so Chrome's helpers are one "Google Chrome"; anything else by its name; the
-  tooltip says how many processes). These rows are a name and a figure in the tab's format, smaller,
-  in `--muted` and not bold, with no rule between them and their row; a name runs on into the
-  figures' column as far as its own figure. They have no band of their own, and pointing at one
+  tooltip says how many processes); a container's tooltip names it in full, and one whose figure
+  would round to nothing ("0.0 cores") isn't listed. These rows are a name and a figure in the tab's format, smaller,
+  in `--muted` and not bold, with no rule between them and their row. Every row's name runs on
+  into the figures' column as far as its own figure. They have no band of their own, and pointing at one
   lights its VM, or everything else. CPU needs two samples, so for the moment after the popover is
   shown the apps are "measuring the busiest apps…", never figures that look real. Pointing at a
   row or a band, a VM's, wired memory's or everything else's, brings that band forward in
