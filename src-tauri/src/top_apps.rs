@@ -203,6 +203,7 @@ impl TopApps {
 
 /// `ps`'s cumulative CPU time (`cputime`), `[[dd-]hh:]mm:ss.cc` (macOS gives minutes past 59 as they
 /// are), in ms.
+#[cfg(any(target_os = "macos", test))]
 fn parse_cputime(s: &str) -> Option<u64> {
     let (days, rest) = match s.split_once('-') {
         Some((d, r)) => (d.parse::<u64>().ok()?, r),
@@ -229,6 +230,7 @@ fn parse_cputime(s: &str) -> Option<u64> {
 
 /// `ps -axo pid=,rss=,cputime=`: each process's pid, resident bytes and CPU time in ms. Lines that
 /// don't read are skipped.
+#[cfg(any(target_os = "macos", test))]
 fn parse_ps(out: &str) -> Vec<(u32, u64, u64)> {
     out.lines()
         .filter_map(|l| {

@@ -212,8 +212,10 @@ const PALE: u8 = 95;
 /// The warning colour: macOS's orange for a dark menu bar, which still reads on a light one.
 const HOT: [u8; 3] = [255, 159, 10];
 /// On a light menu bar the bright one is faint (about 2:1): a deeper one, legible as small text.
+#[cfg(any(target_os = "macos", test))]
 const HOT_ON_LIGHT: [u8; 3] = [179, 77, 0];
 const INK: [u8; 3] = [0, 0, 0];
+#[cfg(target_os = "macos")]
 const WHITE: [u8; 3] = [255, 255, 255];
 
 /// The menu bar's appearance, for what macOS can't tint: an item that warns isn't a template image,
@@ -226,6 +228,7 @@ pub enum Bar {
 }
 
 impl Bar {
+    #[cfg(target_os = "macos")]
     fn ink(self) -> [u8; 3] {
         match self {
             Bar::Dark => WHITE,
@@ -234,6 +237,7 @@ impl Bar {
     }
 
     /// The warning colour on this menu bar.
+    #[cfg(any(target_os = "macos", test))]
     fn hot(self) -> [u8; 3] {
         match self {
             Bar::Dark => HOT,
