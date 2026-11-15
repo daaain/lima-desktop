@@ -1009,12 +1009,12 @@ pub fn open_main(app: &AppHandle) {
 /// until it's opened again, as a menu bar app does; otherwise it quits. Tauri would quit only once
 /// every window was gone, and the popover's, once opened, is hidden, never closed.
 pub fn main_closed(app: &AppHandle) {
-    if !keeps_running(app) {
+    if keeps_running(app) {
+        #[cfg(target_os = "macos")]
+        let _ = app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+    } else {
         app.exit(0);
-        return;
     }
-    #[cfg(target_os = "macos")]
-    let _ = app.set_activation_policy(tauri::ActivationPolicy::Accessory);
 }
 
 #[cfg(test)]
