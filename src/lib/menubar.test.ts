@@ -97,6 +97,40 @@ describe('shares', () => {
     const s = shares(snap([running('a', { host_rss: 50 * GiB })], { mem_used: 40 * GiB, mem_total: 64 * GiB }), 'mem')!;
     expect(s.rest).toBe(0);
   });
+  it('shrinks the VMs to fit the use, in proportion, when they were read as more than it', () => {
+    // Read a moment apart, a burst can have the VMs at 3 cores where the computer said 1.
+    const burst = snap(
+      [running('a', { host_cpu_mc: 2000 }), running('b', { host_cpu_mc: 1000 })],
+      { cpu_mc: 1000, cpu_total_mc: 8000 },
+    );
+    const s = shares(burst, 'cpu')!;
+    expect(s.parts.map((p) => p.name)).toEqual(['a', 'b']);
+    expect(s.parts[0].now).toBeCloseTo(2000 / 3);
+    expect(s.parts[1].now).toBeCloseTo(1000 / 3);
+    expect(s).toMatchObject({ used: 1000, vms: 1000, rest: 0, free: 7000 });
+    expect(ofSentence('cpu', s)).toBe("of this computer's 8 cores in use: the VMs 1.0 cores, everything else 0.0 cores");
+    // Nothing in use leaves the VMs nothing.
+    const idle = shares(snap([running('a', { host_cpu_mc: 200 })], { cpu_mc: 0, cpu_total_mc: 8000 }), 'cpu')!;
+    expect(idle).toMatchObject({ vms: 0, rest: 0, parts: [{ now: 0 }] });
+  });
+  it("leaves no wired memory, and Activity Monitor's figure as read, when the VMs fill the use", () => {
+    const over = snap(
+      [running('a', { host_mem: 30 * GiB, host_rss: 33 * GiB }), running('b', { host_mem: 20 * GiB })],
+      { mem_used: 40 * GiB, mem_total: 64 * GiB, mem_wired: 5 * GiB },
+    );
+    const s = shares(over, 'mem')!;
+    expect(s.parts.map((p) => [p.name, p.now, p.reported])).toEqual([['a', 24 * GiB, 33 * GiB], ['b', 16 * GiB, null]]);
+    expect(s).toMatchObject({ vms: 40 * GiB, wired: 0, rest: 0 });
+    // A VM whose footprint stands in for its share, shrunk: its footprint isn't then set beside it as
+    // another reading (it was only ever one, and not compressed memory's doing).
+    const old = shares(snap([running('c', { host_rss: 50 * GiB })], { mem_used: 40 * GiB, mem_total: 64 * GiB }), 'mem')!;
+    expect(old.parts.map((p) => [p.now, p.reported])).toEqual([[40 * GiB, null]]);
+  });
+  it('changes nothing when the VMs fit', () => {
+    const s = shares(snap([running('a', { host_cpu_mc: 600 }), running('b', { host_cpu_mc: 400 })], { cpu_mc: 1000, cpu_total_mc: 8000 }), 'cpu')!;
+    expect(s.parts.map((p) => p.now)).toEqual([600, 400]);
+    expect(s).toMatchObject({ vms: 1000, rest: 0, free: 7000 });
+  });
 });
 
 describe('when the figure warns', () => {
@@ -262,9 +296,25 @@ describe('stackChart', () => {
   });
 
   it('never draws past the total, nor the rest below the VMs', () => {
-    const c = stackChart(stackOf({ used: [90, 90] }), [layer('a', [80, 80]), layer('b', [50, 50])], at)!;
+    // The computer read as more than its total; the VMs as all of its use.
+    const c = stackChart(stackOf({ used: [130, 130] }), [layer('a', [80, 80]), layer('b', [50, 50])], at)!;
     expect(c.bands[1].d).toBe('M0,0L25,0L75,0L100,0L100,20L75,20L25,20L0,20Z');
     expect(c.rest).toBe('M0,0L25,0L75,0L100,0L100,0L75,0L25,0L0,0Z');
+  });
+
+  it("shrinks the VMs to fit a bucket's use, in proportion, when they were read as more than it", () => {
+    // Used 50 then 60; the VMs 60 + 40 = 100 in the first bucket, which shrinks by half, and 30 + 20 in the second, which fits.
+    const c = stackChart(stackOf({ wired: [5, 5] }), [layer('a', [60, 30]), layer('b', [40, 20])], at)!;
+    expect(c.bands).toEqual([
+      { name: 'a', shade: 0, d: 'M0,70L25,70L75,70L100,70L100,100L75,100L25,100L0,100Z' },
+      { name: 'b', shade: 1, d: 'M0,50L25,50L75,50L100,50L100,70L75,70L25,70L0,70Z' },
+    ]);
+    // The top is the computer's use, not the VMs' 100; nothing is left for wired memory or the rest there.
+    expect(c.top).toBe('M0,50L25,50L75,50L100,50');
+    expect(c.wired).toBe('M0,50L25,50L75,45L100,45L100,50L75,50L25,50L0,50Z');
+    expect(c.rest).toBe('M0,50L25,50L75,40L100,40L100,45L75,45L25,50L0,50Z');
+    // A bucket with nothing in use has the VMs at nothing.
+    expect(stackChart(stackOf({ used: [0, 0] }), [layer('a', [10, 10])], at)!.top).toBe('M0,100L25,100L75,100L100,100');
   });
 
   it('places the buckets in time, and needs a scale', () => {
@@ -369,10 +419,11 @@ describe('memory, and what Activity Monitor says of it', () => {
     host,
   );
 
-  it("counts each VM's share of the memory in use, else its footprint, and keeps the footprint beside it", () => {
+  it("counts each VM's share of the memory in use, else its footprint, and keeps the footprint beside a share", () => {
     const s = shares(squeezed, 'mem')!;
     expect(s.parts.map((p) => [p.name, p.now, p.reported])).toEqual([
-      ['atlas', 25 * GiB, 25 * GiB],
+      // Its footprint is its figure: nothing else to set beside it.
+      ['atlas', 25 * GiB, null],
       ['harbor', 7 * GiB, 10 * GiB],
     ]);
     expect(s.vms).toBe(32 * GiB);

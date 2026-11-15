@@ -75,7 +75,10 @@ export interface VmPart {
   name: string;
   /** Its own cost on the computer now; null without a reading (not running). */
   now: number | null;
-  /** Memory only: what Activity Monitor says it uses now, its footprint. */
+  /**
+   * Memory only: what Activity Monitor says it uses now, its footprint, beside its share; null where
+   * the footprint stands in for the share (`now` is then the footprint).
+   */
   reported: number | null;
   running: boolean;
   /** It has stopped answering (`VmLive.stalledSince`). */
@@ -86,7 +89,7 @@ export interface VmPart {
 export interface Shares {
   used: number;
   total: number;
-  /** The VMs' parts added up. */
+  /** The VMs' parts added up: never more than `used`. */
   vms: number;
   /**
    * Memory only, where it's read: what the kernel, the GPU and drivers hold, which is never paged out
@@ -100,13 +103,17 @@ export interface Shares {
   /** Used, in percent of the total. */
   pct: number;
   hot: boolean;
-  /** Each VM with a reading, the largest first. */
+  /**
+   * Each VM with a reading, the largest first. Where they come to more than `used` (they're read a
+   * moment after the computer), each `now` is shrunk in proportion so they add up to `used`; `reported`
+   * stays as read.
+   */
   parts: VmPart[];
 }
 
 /**
  * The tab's figures from a snapshot, warning as `warn` (Settings) says; null until the computer's use and
- * size have been read.
+ * size have been read. The computer's use is the measure: VMs read as more than it shrink to fit it.
  */
 export function shares(snap: Snapshot | null | undefined, tab: Tab, warn?: Warn | null): Shares | null {
   const k = KEYS[tab];
@@ -120,12 +127,17 @@ export function shares(snap: Snapshot | null | undefined, tab: Tab, warn?: Warn 
     .map((v) => ({
       name: v.instance.name,
       now: Math.max(0, own(v.latest)!),
-      reported: k.reported && v.latest[k.reported] != null ? Math.max(0, v.latest[k.reported]) : null,
+      // Only beside a share of its own: where the footprint stands in for one, it's the figure already.
+      reported: k.reported && v.latest[k.vm] != null && v.latest[k.reported] != null ? Math.max(0, v.latest[k.reported]) : null,
       running: v.instance.status === 'Running',
       stalled: v.stalledSince != null,
     }))
     .sort(largestFirst);
-  const vms = parts.reduce((s, p) => s + (p.now ?? 0), 0);
+  const sum = parts.reduce((s, p) => s + (p.now ?? 0), 0);
+  // Read a moment after the computer, the VMs can come to more than its use (a burst of CPU, say):
+  // each then shrinks in proportion, so together they're all of it and never more.
+  const vms = Math.min(sum, Math.max(0, used));
+  if (vms < sum) for (const p of parts) p.now = (p.now! * vms) / sum;
   const left = Math.max(0, used - vms);
   const read = k.wired ? host?.[k.wired] : undefined;
   const wired = read != null && read >= 0 ? Math.min(read, left) : null;
@@ -297,8 +309,10 @@ export const SHADES = 5;
  * held across its bucket, and joined straight to the next), the VMs from the bottom, then wired
  * memory if the stack has it (never past the computer's use: it's part of what the VMs leave),
  * then everything else up to the computer's use; a bucket with no reading of the computer is a gap. A
- * VM without a reading in a measured bucket adds nothing there. The scale is the computer's total;
- * nothing is drawn past it, or past the bucket's own total.
+ * VM without a reading in a measured bucket adds nothing there. Where the VMs come to more than the
+ * bucket's use (read a moment apart, as `shares` has it), each shrinks in proportion so together they
+ * reach it exactly: the top never goes past what the computer measured. The scale is the computer's
+ * total; nothing is drawn past it, or past the bucket's own total.
  */
 export function stackChart(
   stack: Stack,
@@ -333,11 +347,16 @@ export function stackChart(
   const restTop: number[] = [];
   for (let i = 0; i < n; i++) {
     const cap = Math.min(scale, stack.total[i] ?? scale);
+    const own = ls.map((l) => Math.max(0, l.values?.[i] ?? 0));
+    // VMs read as more than the computer's use in the bucket shrink in proportion to fit it.
+    const sum = own.reduce((s, v) => s + v, 0);
+    const used = stack.used[i];
+    const room = used == null ? sum : Math.min(sum, Math.max(0, used));
     const col = [0];
-    for (const l of ls) col.push(Math.min(cap, col[col.length - 1] + Math.max(0, l.values?.[i] ?? 0)));
+    for (const v of own) col.push(Math.min(cap, col[col.length - 1] + (room < sum ? (v * room) / sum : v)));
     cum.push(col);
     const vms = col[col.length - 1];
-    const top = Math.max(vms, Math.min(cap, stack.used[i] ?? 0));
+    const top = Math.max(vms, Math.min(cap, used ?? 0));
     wiredTop.push(Math.min(top, vms + Math.max(0, stack.wired?.[i] ?? 0)));
     restTop.push(top);
   }
