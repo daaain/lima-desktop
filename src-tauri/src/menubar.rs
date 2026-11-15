@@ -928,15 +928,16 @@ pub fn open_main(app: &AppHandle) {
     }
 }
 
-/// The main window has closed while the app keeps recording: out of the Dock (and the app
-/// switcher) until it's opened again, as a menu bar app is.
+/// The main window has closed. If the app keeps recording, it leaves the Dock (and the app switcher)
+/// until it's opened again, as a menu bar app does; otherwise it quits. Tauri would quit only once
+/// every window was gone, and the popover's, once opened, is hidden, never closed.
 pub fn main_closed(app: &AppHandle) {
-    #[cfg(target_os = "macos")]
-    if keeps_running(app) {
-        let _ = app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+    if !keeps_running(app) {
+        app.exit(0);
+        return;
     }
-    #[cfg(not(target_os = "macos"))]
-    let _ = app;
+    #[cfg(target_os = "macos")]
+    let _ = app.set_activation_policy(tauri::ActivationPolicy::Accessory);
 }
 
 #[cfg(test)]
