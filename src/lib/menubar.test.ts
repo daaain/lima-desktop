@@ -223,6 +223,16 @@ describe('stackChart', () => {
     expect(c.top.match(/M/g)).toHaveLength(2);
   });
 
+  it('ends at the newest bucket measured, so readings still on their way leave no hole at the right', () => {
+    // The newest bucket (300) has no reading yet: the chart's right edge is where 200's ends.
+    const stack = stackOf({ ts: [0, 100, 200, 300], used: [50, 50, 60, null], total: [100, 100, 100, 100] });
+    const c = stackChart(stack, [layer('a', [20, 30, 10, null])], { ...at, to: 400 })!;
+    expect(c.top).toBe('M0,80L16.7,80L50,70L83.3,90L100,90');
+    // A hole earlier on stays one.
+    const holed = stackOf({ ts: [0, 100, 200, 300], used: [50, null, 60, 60], total: [100, 100, 100, 100] });
+    expect(stackChart(holed, [layer('a', [20, 30, null, 10])], { ...at, to: 400 })!.top.match(/M/g)).toHaveLength(2);
+  });
+
   it('never draws past the total, nor the rest below the VMs', () => {
     const c = stackChart(stackOf({ used: [90, 90] }), [layer('a', [80, 80]), layer('b', [50, 50])], at)!;
     expect(c.bands[1].d).toBe('M0,0L25,0L75,0L100,0L100,20L75,20L25,20L0,20Z');

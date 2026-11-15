@@ -272,7 +272,20 @@ export function stackChart(
   if (!(scale > 0) || n === 0 || !(o.to > o.from)) return null;
   const step = n > 1 ? (stack.ts[n - 1] - stack.ts[0]) / (n - 1) : o.to - o.from;
   const r = (v: number) => String(+v.toFixed(1));
-  const x = (t: number) => r(Math.min(o.width, Math.max(0, ((t - o.from) / (o.to - o.from)) * o.width)));
+
+  // Runs of measured buckets.
+  const runs: [number, number][] = [];
+  for (let i = 0; i < n; i++) {
+    if (stack.used[i] == null) continue;
+    const last = runs[runs.length - 1];
+    if (last && last[1] === i - 1) last[1] = i;
+    else runs.push([i, i]);
+  }
+  // The right edge is where the newest bucket measured ends, not this very moment: the newest
+  // readings may still be on their way, and would leave a sliver of nothing at the right.
+  const newest = runs[runs.length - 1]?.[1];
+  const to = newest == null ? o.to : Math.max(o.from + 1, Math.min(o.to, stack.ts[newest] + step));
+  const x = (t: number) => r(Math.min(o.width, Math.max(0, ((t - o.from) / (to - o.from)) * o.width)));
   const y = (v: number) => r(o.height - (Math.min(scale, Math.max(0, v)) / scale) * o.height);
 
   // Cumulative heights per bucket: cum[i][k] is where layer k starts, cum[i][ls.length] the VMs' top.
@@ -288,15 +301,6 @@ export function stackChart(
     const top = Math.max(vms, Math.min(cap, stack.used[i] ?? 0));
     wiredTop.push(Math.min(top, vms + Math.max(0, stack.wired?.[i] ?? 0)));
     restTop.push(top);
-  }
-
-  // Runs of measured buckets.
-  const runs: [number, number][] = [];
-  for (let i = 0; i < n; i++) {
-    if (stack.used[i] == null) continue;
-    const last = runs[runs.length - 1];
-    if (last && last[1] === i - 1) last[1] = i;
-    else runs.push([i, i]);
   }
 
   const edge = (values: (i: number) => number, a: number, b: number) => {
