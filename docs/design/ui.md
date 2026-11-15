@@ -25,8 +25,11 @@ The pictures in this guide and the README are drawn from invented data by the UI
   than half, more than three quarters. A sentence can't carry "34 %" honestly a second later; the
   figure beside it can.
 - **Past three quarters is the one threshold** (`WARN_PCT`). The sentence, the figure, the bar and
-  the history all turn at the same point, so they never disagree. Right-sizing's verdicts
-  (`rightsize.ts`) are stricter and separate: they look at a window of history, and say "needs
+  the history all turn at the same point, so they never disagree. The menu bar's items and their
+  popover are the exception: they're about the whole computer, and when they warn is chosen in
+  Settings (memory and CPU past a percent in use, the disk with less than so many GB free, as a
+  percent says little across disk sizes). Right-sizing's verdicts (`rightsize.ts`) are stricter
+  and separate: they look at a window of history, and say "needs
   more" only on evidence (the whole VM running out, whether the kernel killed something or the VM
   stalled with memory past 90 % or under pressure; sustained full memory pressure; a peak over
   90 %). A container hitting its own limit, or a stall of unknown cause, never says the VM needs
@@ -185,13 +188,14 @@ under the sentence, figures and bar it explains, with the allocation as a dashed
   fills the window, which it asks the backend to fit to its height (`fit_popover`). The window and
   `app.html` paint the theme's background before the page does, so it never flashes white. Tabs
   for Memory, CPU and Disk; the whole computer's use now as the big figure ("70 %", in `--warn`
-  past three quarters) and beside it its own range picker (2 min to 24 h for memory and CPU,
+  when it warns, as the menu bar's item does, by the thresholds chosen in Settings, read again each
+  time the popover is shown) and beside it its own range picker (2 min to 24 h for memory and CPU,
   opening on 1 h; 1 h to 30 days for the disk, opening on 7 days; each tab's kept in the webview's
   storage), not the app's range, as it answers a different question; 2 min is the popover's alone,
   to watch memory and CPU move second by second. Under both, what the figure is of, its parts in
   the order they're stacked ("of this computer's 64.0 GiB in use: the VMs 35.0 GiB, wired 4.0 GiB,
   everything else 5.8 GiB"). Then the range as a stacked area: a band per VM, the largest now at
-  the bottom, in shades of `--bar` (of `--warn` when the computer is past three quarters); on
+  the bottom, in shades of `--bar` (of `--warn` when the figure warns); on
   memory, the computer's wired memory (the kernel's, the GPU's and drivers', never paged out or
   compressed; no VM's process has any, so it's part of what the VMs leave and kept inside it) in
   everything else's hatch, crossed; everything else hatched above; the computer's total is the
