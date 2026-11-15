@@ -559,6 +559,21 @@ test('The popover says a newer version too, above its footer', async () => {
   await close();
 });
 
+test('The popover, shown again after the check was switched off in Settings, no longer says a newer version', async () => {
+  const { page, errors, close } = await open('/menubar?tab=mem', { width: 360, height: 560, init: `window.__fakeUpdate = ${JSON.stringify(V030)};` });
+  const notice = page.locator('.newer .update');
+  await notice.waitFor();
+  // Switched off in the main window's Settings while the popover was hidden.
+  await page.evaluate(async () => {
+    const s = await window.__TAURI_INTERNALS__.invoke('settings');
+    await window.__TAURI_INTERNALS__.invoke('set_settings', { settings: { ...s, checkUpdates: false } });
+  });
+  await page.evaluate(() => window.__fakeEmit('popover-shown', { tab: 'mem', theme: 'system' }));
+  await notice.waitFor({ state: 'detached' });
+  assert.deepEqual(errors, []);
+  await close();
+});
+
 test('With the check switched off, no new version is said', async () => {
   const init = `window.__fakeUpdate = ${JSON.stringify(V030)}; window.__fakeSettings.checkUpdates = false;`;
   const { page, errors, close } = await open('/settings', { init });

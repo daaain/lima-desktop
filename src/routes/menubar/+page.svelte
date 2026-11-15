@@ -19,6 +19,7 @@
   import { followsLive, rangeMs, type AnyRangeKey } from '$lib/ranges';
   import { theme } from '$lib/theme.svelte';
   import UpdateNotice from '$lib/UpdateNotice.svelte';
+  import { update } from '$lib/update.svelte';
 
   const HEIGHT = 130;
   const rangeKey = (t: Tab) => `menubar-range-${t}`;
@@ -35,14 +36,15 @@
   // again each time it's shown.
   let warn = $state<Warn | null>(null);
   const readWarn = () => api.settings().then((s) => (warn = s.menuBar.warn), () => {});
-  // Shown again under another item (menubar.rs): its tab, and the theme and warnings, which
-  // Settings may have changed while the popover was hidden.
+  // Shown again under another item (menubar.rs): its tab, and the theme, warnings and whether to
+  // tell of updates, which Settings may have changed while the popover was hidden.
   onMount(() => {
     readWarn();
     const stop = listen<{ tab: string; theme: Theme }>('popover-shown', (e) => {
       tab = parseTab(e.payload.tab);
       theme.apply(e.payload.theme);
       readWarn();
+      update.refresh();
     });
     return () => void stop.then((f) => f(), () => {});
   });
@@ -316,8 +318,11 @@
 </div>
 
 <style>
-  /* The window is the popover: no card or shadow of its own, and it scrolls only if it must. */
-  :global(html:has(.popover)) { overflow-y: auto; }
+  /* The window is the popover: no card or shadow of its own, and it scrolls only if it must, without
+     a scrollbar. It's sized to the page (fitPopover), but a moment after the page grows (another tab,
+     or its figures arriving), and a scrollbar would flash up in between. */
+  :global(html:has(.popover)) { overflow-y: auto; scrollbar-width: none; }
+  :global(html:has(.popover)::-webkit-scrollbar) { display: none; }
   .popover { padding: 16px; display: grid; gap: 0; }
 
   /* The VMs' bands: shades of the bar's colour toward the page, or of the warning's past three
