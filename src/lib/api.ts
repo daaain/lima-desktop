@@ -318,9 +318,11 @@ export interface Stack {
 /** One app on this computer (commands::top_apps): its processes added up, those in an `.app` bundle under the outermost one. */
 export interface TopApp {
   name: string;
-  /** Bytes of memory (footprint, else resident), or millicores of CPU. */
+  /** Bytes of memory (its share of the memory in use), or millicores of CPU. */
   value: number;
   processes: number;
+  /** Memory only: what Activity Monitor says, its processes' footprints added up, where they can be read. */
+  reported?: number;
 }
 
 /** The apps using the most of a resource now, the largest first, leaving out the VMs' own processes. */

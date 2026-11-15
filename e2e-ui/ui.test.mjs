@@ -220,7 +220,12 @@ for (const dark of [false, true]) {
       'wired', 'everything else', 'Google Chrome', 'Visual Studio Code', 'Slack', 'WindowServer', 'Mail', 'free',
     ]);
     assert.match(await page.locator('.row[data-container="harbor-devbox"]').innerText(), /^harbor-devbox\s+2\.\d GiB$/);
-    assert.match(await page.locator('.row[data-app="Google Chrome"]').innerText(), /^Google Chrome\s+5\.\d GiB$/);
+    // Memory as its share of the use, Activity Monitor's figure in brackets beside it where it has one.
+    assert.match(await page.locator('.row[data-app="Google Chrome"]').innerText(), /^Google Chrome\s+5\.\d GiB\s*\(6\.\d\)$/);
+    assert.match(await page.locator('.row[data-app="WindowServer"]').innerText(), /^WindowServer\s+1\.\d GiB$/);
+    assert.match(await page.locator('.row[data-vm="harbor"] .fig').innerText(), /^[\d.]+ GiB\s*\([\d.]+\)$/);
+    assert.match(await page.locator('.row[data-vm="harbor"] .reported').innerText(), /^\([\d.]+\)$/);
+    assert.match(await page.locator('.row[data-vm="harbor"] .reported').getAttribute('title'), /^Activity Monitor says [\d.]+ GiB: it counts compressed memory at its full size/);
     assert.equal(await page.locator('.row[data-container="app"]').getAttribute('title'), 'app (the container harbor-app-1)\nMeasured inside harbor: part of its memory above, not more on top of it');
     assert.equal(await page.locator('.row[data-app="Google Chrome"]').getAttribute('title'), 'Google Chrome: its 38 processes added up');
     // The window is asked to fit the page.

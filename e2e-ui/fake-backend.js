@@ -146,6 +146,8 @@
       store_used: scaled(shape.disk, inst.disk),
       store_size: inst.disk - 0.1 * GiB,
       host_rss: scaled(shape.hostRss ?? shape.mem, mem * 0.9),
+      // Its share of the memory in use: its compressed memory at the size the compressor keeps it in.
+      host_mem: scaled(shape.hostRss ?? shape.mem, mem * 0.9 * 0.8),
       host_cpu_mc: scaled(shape.cpu, inst.cpus * 1100),
       host_disk_alloc: scaled(shape.disk, inst.disk * 1.05),
     }, o.silent);
@@ -241,11 +243,12 @@
   };
   let hostEntity;
   const hostMetrics = () => ({
-    mem_used: (t, id) => vmCost('host_rss', t) + rest.mem(t, id),
+    mem_used: (t, id) => vmCost('host_mem', t) + rest.mem(t, id),
     mem_total: HOST.memory,
     // The kernel's, the GPU's and drivers': part of everything else, as none of it is a VM's.
     mem_wired: (t, id) => 5.2 * GiB + (noise(id, 3, t / 60_000) - 0.5) * 0.4 * GiB,
     mem_compressed: (t, id) => 1.4 * GiB + rest.mem(t, id) * 0.05,
+    mem_stored: (t, id) => (1.4 * GiB + rest.mem(t, id) * 0.05) * 1.6,
     cpu_mc: (t, id) => vmCost('host_cpu_mc', t) + rest.cpu(t, id),
     cpu_total_mc: HOST.cpus * 1000,
     disk_used: (t, id) => vmCost('host_disk_alloc', t) + imagesAtRest() + rest.disk(t, id),
@@ -255,7 +258,7 @@
   // The menu bar's stack (commands::host_stack): the computer's use and size (and for memory, its
   // wired part) and each running VM's own cost, averaged over the same buckets; a stopped VM has no
   // history. A bucket is never narrower than the samples are apart, with a quarter to spare.
-  const STACK_KEYS = { mem: ['mem_used', 'mem_total', 'host_rss'], cpu: ['cpu_mc', 'cpu_total_mc', 'host_cpu_mc'], disk: ['disk_used', 'disk_total', 'host_disk_alloc'] };
+  const STACK_KEYS = { mem: ['mem_used', 'mem_total', 'host_mem'], cpu: ['cpu_mc', 'cpu_total_mc', 'host_cpu_mc'], disk: ['disk_used', 'disk_total', 'host_disk_alloc'] };
   hostEntity = entity(hostMetrics());
 
   function hostStack({ metric, from, to, points = 120 }) {
@@ -282,6 +285,8 @@
   // The busiest apps besides the VMs (commands::top_apps): memory as each app's processes' footprints
   // added up, CPU in millicores, a little different each minute. CPU needs two samples, so the first
   // asking after a while (as when the popover is first shown) has none yet, as the backend's.
+  // Another user's processes have no footprint to read, so nothing reported beside them.
+  const UNREPORTED = new Set(['WindowServer', 'kernel_task']);
   const APPS = [
     // name, processes, memory (GiB), CPU (cores)
     ['Google Chrome', 38, 5.4, 0.8],
@@ -299,11 +304,12 @@
     const pending = metric === 'cpu' && performance.now() - appsSampledAt > 25_000;
     appsSampledAt = performance.now();
     if (pending) return { apps: [], pending: true };
-    const apps = APPS.map(([name, processes, mem, cpu], i) => ({
-      name,
-      processes,
-      value: Math.round(metric === 'mem' ? mem * GiB * (0.95 + 0.1 * noise(i, t / 60_000)) : cpu * 1000 * (0.6 + 0.8 * noise(i, 9, t / 60_000))),
-    }));
+    const apps = APPS.map(([name, processes, mem, cpu], i) => {
+      const value = Math.round(metric === 'mem' ? mem * GiB * (0.95 + 0.1 * noise(i, t / 60_000)) : cpu * 1000 * (0.6 + 0.8 * noise(i, 9, t / 60_000)));
+      // What Activity Monitor says: the footprints, compressed memory at full size.
+      const reported = metric === 'mem' && !UNREPORTED.has(name) ? Math.round(value * 1.15) : undefined;
+      return { name, processes, value, ...(reported != null && { reported }) };
+    });
     return { apps: apps.sort((a, b) => b.value - a.value).slice(0, n), pending: false };
   }
 

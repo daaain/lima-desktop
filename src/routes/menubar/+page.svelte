@@ -13,7 +13,7 @@
   import { inOrder } from '$lib/inOrder';
   import {
     agoLabel, amount, appTip, APPS_PENDING, chartLabel, containersByVm, containerTip, layerAside, layerFigure, layers, listsTop, ofSentence,
-    parseTab, parseTabRange, percentFigure, rangeLabel, recordingPhrase, shares, stackChart, stackRefreshMs, stalledTip, topApps,
+    parseTab, parseTabRange, percentFigure, rangeLabel, recordingPhrase, reportedFigure, reportedTip, shares, stackChart, stackRefreshMs, stalledTip, topApps,
     topContainers, SHADES, STACK_POINTS, TAB_RANGES, TABS, TOP_N, WIRED, type Tab,
   } from '$lib/menubar';
   import { followsLive, rangeMs, type AnyRangeKey } from '$lib/ranges';
@@ -171,6 +171,12 @@
   });
 </script>
 
+<!-- Beside a memory figure, Activity Monitor's for the same, where it differs. -->
+{#snippet reported(now: number | null, of: number | null | undefined)}
+  {@const r = reportedFigure(tab, now, of)}
+  {#if r}<span class="reported" title={reportedTip(of!)}>{r}</span>{/if}
+{/snippet}
+
 <svelte:document onvisibilitychange={() => (visible = document.visibilityState !== 'hidden')} />
 
 <div class="popover" class:warm={now?.hot} bind:this={root}>
@@ -232,8 +238,10 @@
         <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
         <li class="row" class:hl={lit === vmLit(l.name)} data-vm={l.name} onmouseenter={() => (lit = vmLit(l.name))} onmouseleave={() => (lit = null)}>
           <span class="sw shade-{i % SHADES}"></span>
-          <span class="name serif" class:hot={l.stalled} title={l.stalled ? stalledTip(l.name) : l.name}>{l.name}</span>
-          <span class="fig num" class:muted={l.now == null}>{layerFigure(tab, l)}</span>
+          <span class="part">
+            <span class="name serif" class:hot={l.stalled} title={l.stalled ? stalledTip(l.name) : l.name}>{l.name}</span>
+            <span class="fig num" class:muted={l.now == null}>{layerFigure(tab, l)}{@render reported(l.now, l.reported)}</span>
+          </span>
           <span class="aside num">{current ? layerAside(tab, l, range) : ''}</span>
         </li>
         {#if listsTop(tab)}
@@ -252,16 +260,14 @@
         <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
         <li class="row other" class:hl={lit === 'wired'} data-part="wired" onmouseenter={() => (lit = 'wired')} onmouseleave={() => (lit = null)}>
           <span class="sw wired"></span>
-          <span class="name serif" title={WIRED.tip}>{WIRED.name}</span>
-          <span class="fig num">{amount(tab, now.wired)}</span>
+          <span class="part"><span class="name serif" title={WIRED.tip}>{WIRED.name}</span><span class="fig num">{amount(tab, now.wired)}</span></span>
           <span class="aside">{WIRED.aside}</span>
         </li>
       {/if}
       <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
       <li class="row other" class:hl={lit === 'rest'} data-part="rest" onmouseenter={() => (lit = 'rest')} onmouseleave={() => (lit = null)}>
         <span class="sw hatched"></span>
-        <span class="name serif">everything else</span>
-        <span class="fig num">{amount(tab, now?.rest)}</span>
+        <span class="part"><span class="name serif">everything else</span><span class="fig num">{amount(tab, now?.rest)}</span></span>
         <span class="aside"></span>
       </li>
       {#if listsTop(tab)}
@@ -277,15 +283,14 @@
           <li class="row sub" class:hl={lit === 'rest'} data-app={a.name} title={appTip(a)}
             onmouseenter={() => (lit = 'rest')} onmouseleave={() => (lit = null)}>
             <span></span>
-            <span class="part"><span class="name serif">{a.name}</span><span class="fig num">{amount(tab, a.value)}</span></span>
+            <span class="part"><span class="name serif">{a.name}</span><span class="fig num">{amount(tab, a.value)}{@render reported(a.value, a.reported)}</span></span>
             <span class="aside"></span>
           </li>
         {/each}
       {/if}
       <li class="row other">
         <span class="sw free"></span>
-        <span class="name serif">free</span>
-        <span class="fig num">{amount(tab, now?.free)}</span>
+        <span class="part"><span class="name serif">free</span><span class="fig num">{amount(tab, now?.free)}</span></span>
         <span class="aside"></span>
       </li>
     </ul>
@@ -372,8 +377,8 @@
   .sub { padding-top: 1px; padding-bottom: 2px; font-size: 0.78rem; color: var(--muted); }
   .sub .name { font-size: 0.92rem; font-weight: 400; padding-left: 10px; color: var(--muted); }
   .sub .fig { font-weight: 400; }
-  /* A part's name may run on into the figures' column as far as its own figure, still at the
-     column's right edge, so longer names ("Visual Studio Code") fit. */
+  /* A name may run on into the figures' column as far as its own figure, still at the column's
+     right edge, so longer names ("everything else", "Visual Studio Code") fit. */
   .part { grid-column: 2 / 4; display: flex; align-items: baseline; gap: 8px; min-width: 0; }
   .part .name { flex: 1; }
   .sw { width: 9px; height: 9px; align-self: center; background: var(--shade); }
@@ -388,6 +393,8 @@
   .name.hot { color: var(--warn); }
   .other .name { color: var(--muted); }
   .fig { font-weight: 600; text-align: right; }
+  /* Memory as Activity Monitor says it, small after the figure. */
+  .reported { margin-left: 0.3em; font-size: 0.78rem; font-weight: 400; color: var(--muted); }
   .aside { color: var(--muted); font-size: 0.78rem; min-width: 7.5em; text-align: right; }
 
   footer {

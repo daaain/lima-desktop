@@ -44,9 +44,13 @@ export const STACK_POINTS = 120;
 export const stackRefreshMs = (k: AnyRangeKey, intervalSecs: number | undefined) =>
   Math.max((intervalSecs ?? 1) * 1000, rangeMs(k) / STACK_POINTS);
 
-/** What a tab reads from the snapshot: the computer's use and size (`hostUse`), and each VM's own cost on it. */
-const KEYS: Record<Tab, { used: string; total: string; vm: string; wired?: string }> = {
-  mem: { used: 'mem_used', total: 'mem_total', vm: 'host_rss', wired: 'mem_wired' },
+/**
+ * What a tab reads from the snapshot: the computer's use and size (`hostUse`), and each VM's own cost
+ * on it. A VM's memory is its share of the memory in use (host_mem), and beside it its footprint as
+ * Activity Monitor shows it (`reported`), which stands in for the share where that wasn't measured.
+ */
+const KEYS: Record<Tab, { used: string; total: string; vm: string; reported?: string; wired?: string }> = {
+  mem: { used: 'mem_used', total: 'mem_total', vm: 'host_mem', reported: 'host_rss', wired: 'mem_wired' },
   cpu: { used: 'cpu_mc', total: 'cpu_total_mc', vm: 'host_cpu_mc' },
   disk: { used: 'disk_used', total: 'disk_total', vm: 'host_disk_alloc' },
 };
@@ -72,6 +76,8 @@ export interface VmPart {
   name: string;
   /** Its own cost on the computer now; null without a reading (not running). */
   now: number | null;
+  /** Memory only: what Activity Monitor says it uses now, its footprint. */
+  reported: number | null;
   running: boolean;
   /** It has stopped answering (`VmLive.stalledSince`). */
   stalled: boolean;
@@ -106,11 +112,13 @@ export function shares(snap: Snapshot | null | undefined, tab: Tab): Shares | nu
   const used = host?.[k.used];
   const total = host?.[k.total];
   if (used == null || total == null || !(total > 0)) return null;
+  const own = (latest: Record<string, number>) => latest[k.vm] ?? (k.reported ? latest[k.reported] : undefined);
   const parts: VmPart[] = (snap?.vms ?? [])
-    .filter((v) => v.latest[k.vm] != null)
+    .filter((v) => own(v.latest) != null)
     .map((v) => ({
       name: v.instance.name,
-      now: Math.max(0, v.latest[k.vm]),
+      now: Math.max(0, own(v.latest)!),
+      reported: k.reported && v.latest[k.reported] != null ? Math.max(0, v.latest[k.reported]) : null,
       running: v.instance.status === 'Running',
       stalled: v.stalledSince != null,
     }))
@@ -164,6 +172,8 @@ export const stalledTip = (name: string) => `${name} isn't answering`;
 export interface Layer {
   name: string;
   now: number | null;
+  /** Memory only: what Activity Monitor says it uses now. */
+  reported: number | null;
   running: boolean;
   stalled: boolean;
   /** On the stack's buckets; null without a stack. */
@@ -189,7 +199,7 @@ export function layers(s: Shares | null, stack: Stack | null | undefined, tab: T
     return { ...p, values: h?.avg ?? null, peak: h?.peak ?? null, constant: false };
   });
   for (const h of history.values()) {
-    out.push({ name: h.name, now: null, running: false, stalled: false, values: h.avg, peak: h.peak, constant: false });
+    out.push({ name: h.name, now: null, reported: null, running: false, stalled: false, values: h.avg, peak: h.peak, constant: false });
   }
   for (const l of out) {
     if (!stack) continue;
@@ -216,6 +226,22 @@ function ends(values: (number | null)[] | null): [number, number] | null {
   const known = (values ?? []).filter((v): v is number => v != null);
   return known.length ? [known[0], known[known.length - 1]] : null;
 }
+
+/**
+ * Beside a memory figure, what Activity Monitor says of the same, in brackets: "(47.1)", its unit
+ * only where that differs; nothing where the two agree or there's nothing to say.
+ */
+export function reportedFigure(tab: Tab, now: number | null | undefined, reported: number | null | undefined): string | null {
+  if (tab !== 'mem' || now == null || reported == null) return null;
+  const [a, r] = [amount(tab, now), amount(tab, reported)];
+  if (a === r) return null;
+  const unit = (x: string) => x.split(' ')[1];
+  return `(${unit(a) === unit(r) ? r.split(' ')[0] : r})`;
+}
+
+/** The figure in brackets, pointed at. */
+export const reportedTip = (reported: number) =>
+  `Activity Monitor says ${amount('mem', reported)}: it counts compressed memory at its full size. Counted at the size the compressor keeps it in, as the computer's use counts it, the figures add up.`;
 
 /** A legend row's figure: what the VM costs now, or that it isn't running. */
 export const layerFigure = (tab: Tab, l: Layer) => (l.now == null ? 'not running' : amount(tab, l.now));

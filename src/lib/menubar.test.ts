@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { Snapshot, Stack, VmLive } from './api';
 import {
   agoLabel, amount, appTip, APPS_PENDING, chartLabel, containersByVm, containerTip, layerAside, layerFigure, layers, listsTop, ofSentence,
-  parseTab, parseTabRange, percentFigure, pickTop, recordingPhrase, shares, stackChart, stackRefreshMs, TAB_RANGES, topApps,
+  parseTab, parseTabRange, percentFigure, pickTop, recordingPhrase, reportedFigure, reportedTip, shares, stackChart, stackRefreshMs, TAB_RANGES, topApps,
   topContainers, WIRED, type Layer,
 } from './menubar';
 import { container, vm } from './testing';
@@ -169,7 +169,7 @@ describe('layers', () => {
 
 describe("the legend's figures", () => {
   const layer = (o: Partial<Layer>): Layer => ({
-    name: 'a', now: 10 * GiB, running: true, stalled: false, values: [8 * GiB, 9 * GiB], peak: 16.6 * GiB, constant: false, ...o,
+    name: 'a', now: 10 * GiB, reported: null, running: true, stalled: false, values: [8 * GiB, 9 * GiB], peak: 16.6 * GiB, constant: false, ...o,
   });
   it('gives the peak in the range for memory and CPU', () => {
     expect(layerAside('mem', layer({}), '1h')).toBe('peak 16.6 GiB in 1 h');
@@ -193,7 +193,7 @@ describe("the legend's figures", () => {
 describe('stackChart', () => {
   const at = { from: 0, to: 200, width: 100, height: 100 };
   const layer = (name: string, values: (number | null)[]): Layer => ({
-    name, now: 1, running: true, stalled: false, values, peak: null, constant: false,
+    name, now: 1, reported: null, running: true, stalled: false, values, peak: null, constant: false,
   });
 
   it('stacks the VMs from the bottom, everything else above, each bucket held across itself', () => {
@@ -327,5 +327,44 @@ describe('the top apps and containers', () => {
   it("says what an app's figure adds up", () => {
     expect(appTip({ name: 'Google Chrome', value: 1, processes: 40 })).toBe('Google Chrome: its 40 processes added up');
     expect(appTip({ name: 'WindowServer', value: 1, processes: 1 })).toBe('WindowServer: one process');
+  });
+});
+
+describe('memory, and what Activity Monitor says of it', () => {
+  const MiB = 1024 ** 2;
+  const squeezed = snap(
+    [
+      // Its share of the memory in use, and its footprint, which counts what it has compressed at full size.
+      running('harbor', { host_mem: 7 * GiB, host_rss: 10 * GiB, host_cpu_mc: 3000 }),
+      // Measured before the share was kept: its footprint stands in.
+      running('atlas', { host_rss: 25 * GiB, host_cpu_mc: 400 }),
+    ],
+    host,
+  );
+
+  it("counts each VM's share of the memory in use, else its footprint, and keeps the footprint beside it", () => {
+    const s = shares(squeezed, 'mem')!;
+    expect(s.parts.map((p) => [p.name, p.now, p.reported])).toEqual([
+      ['atlas', 25 * GiB, 25 * GiB],
+      ['harbor', 7 * GiB, 10 * GiB],
+    ]);
+    expect(s.vms).toBe(32 * GiB);
+    // CPU and a disk have nothing else to say.
+    expect(shares(squeezed, 'cpu')!.parts.every((p) => p.reported == null)).toBe(true);
+  });
+
+  it("says Activity Monitor's figure in brackets where it differs, its unit only where that differs", () => {
+    expect(reportedFigure('mem', 7 * GiB, 10 * GiB)).toBe('(10.0)');
+    expect(reportedFigure('mem', 900 * MiB, 1.2 * GiB)).toBe('(1.2 GiB)');
+    expect(reportedFigure('mem', 25 * GiB, 25 * GiB)).toBeNull();
+    expect(reportedFigure('mem', 7 * GiB, null)).toBeNull();
+    expect(reportedFigure('mem', null, 10 * GiB)).toBeNull();
+    expect(reportedFigure('cpu', 300, 400)).toBeNull();
+  });
+
+  it('says what the figure in brackets is', () => {
+    expect(reportedTip(10 * GiB)).toBe(
+      'Activity Monitor says 10.0 GiB: it counts compressed memory at its full size. Counted at the size the compressor keeps it in, as the computer\'s use counts it, the figures add up.',
+    );
   });
 });
