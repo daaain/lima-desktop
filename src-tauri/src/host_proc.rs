@@ -52,6 +52,11 @@ pub fn is_alive_vm(pid: u32) -> bool {
     sys::exe(pid).is_some_and(|exe| is_vm_process(&exe))
 }
 
+/// The program `pid` runs, where it can be read.
+pub fn exe(pid: u32) -> Option<PathBuf> {
+    sys::exe(pid)
+}
+
 /// Bytes of physical footprint, where the OS keeps one (macOS); `None` elsewhere or when `pid`
 /// can't be read.
 pub fn footprint(pid: u32) -> Option<u64> {

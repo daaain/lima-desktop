@@ -6,7 +6,7 @@
 //! VM Lima says is running whose probe falls silent is recorded as stalled (`stall.rs`).
 
 use serde::Serialize;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -181,6 +181,8 @@ struct VmState {
     oom_pending: Vec<PendingKill>,
     oom_wake: Arc<Notify>,
     stall: Watch,
+    /// The host process its guest runs in (`host_proc`), as last found by the probe loop.
+    guest_pid: Option<u32>,
     workers: Vec<JoinHandle<()>>,
 }
 
@@ -345,6 +347,7 @@ impl Collector {
                 oom_pending: Vec::new(),
                 oom_wake: Arc::new(Notify::new()),
                 stall: Watch::default(),
+                guest_pid: None,
                 workers: Vec::new(),
             });
             state.live.instance = inst;
@@ -396,6 +399,22 @@ impl Collector {
             .expect("vms lock")
             .get(name)
             .map(|v| v.live.instance.clone())
+    }
+
+    /// The host processes each running VM's own cost is measured from (`host_columns`): its guest's
+    /// process and Lima's host agent and driver. Their use is already the VMs' bands in the menu
+    /// bar's popover, so its list of what else is running leaves them out.
+    pub fn vm_host_pids(&self) -> HashSet<u32> {
+        let vms = self.vms.lock().expect("vms lock");
+        vms.values()
+            .filter(|v| v.live.instance.running())
+            .flat_map(|v| {
+                let i = &v.live.instance;
+                [Some(i.driver_pid), Some(i.host_agent_pid), v.guest_pid]
+            })
+            .flatten()
+            .filter(|&p| p > 0)
+            .collect()
     }
 
     fn set_vm<F: FnOnce(&mut VmState)>(&self, name: &str, f: F) {
@@ -492,6 +511,7 @@ impl Collector {
                     .unwrap_or_default();
                 let uptime = block.uptime;
                 me.set_vm(&n, |v| {
+                    v.guest_pid = vm_pid;
                     v.live.latest = named(VM_METRICS, &row);
                     v.live.probe_error = None;
                     v.cgroups = cgroups;

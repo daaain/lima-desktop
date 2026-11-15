@@ -67,6 +67,26 @@ pub fn host_stack(
         .map_err(err)
 }
 
+/// The `n` apps using the most of a resource ("mem" or "cpu") now, leaving out the VMs' own
+/// processes: for the menu bar's popover to list under everything else, and asked only by it.
+#[tauri::command]
+pub async fn top_apps(
+    c: C<'_>,
+    sampler: State<'_, Arc<crate::top_apps::TopApps>>,
+    metric: String,
+    n: Option<usize>,
+) -> Result<crate::top_apps::Top, String> {
+    let metric = crate::top_apps::Metric::parse(&metric)?;
+    let exclude = c.vm_host_pids();
+    let sampler = sampler.inner().clone();
+    // A few tens of ms of system calls and a `ps`: off the main thread.
+    tauri::async_runtime::spawn_blocking(move || {
+        sampler.top(metric, n.unwrap_or(5).clamp(1, 50), &exclude)
+    })
+    .await
+    .map_err(err)?
+}
+
 /// Shows the main window, making it again if it was closed.
 #[tauri::command]
 pub fn open_main(app: tauri::AppHandle) {

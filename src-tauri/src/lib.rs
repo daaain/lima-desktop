@@ -13,6 +13,7 @@ pub mod probe;
 pub mod settings;
 pub mod stall;
 pub mod store;
+pub mod top_apps;
 #[cfg(target_os = "macos")]
 pub mod typeset;
 pub mod updates;
@@ -81,6 +82,8 @@ pub fn run() {
             apply_theme(app, saved.get().theme);
             app.manage(collector);
             app.manage(saved);
+            // The popover's list of what else is running, sampled only when it asks.
+            app.manage(Arc::new(top_apps::TopApps::default()));
             menubar::start(app.handle());
             let version = app.package_info().version.clone();
             app.manage(updates::Updates::load(dir.join("updates.json"), version));
@@ -122,6 +125,7 @@ pub fn run() {
             commands::oom_events,
             commands::stalls,
             commands::host_stack,
+            commands::top_apps,
             commands::open_main,
             commands::quit,
             commands::fit_popover,
