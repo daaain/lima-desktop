@@ -1291,16 +1291,6 @@ mod tests {
         ys.flat_map(|y| xs.clone().map(move |x| (x, y))).filter(|&(x, y)| px(i, x, y)[3] > 64).count()
     }
 
-    // A tray item shows no title without an image there: one with only its figure has the app's.
-    #[cfg(not(target_os = "macos"))]
-    #[test]
-    fn an_item_with_only_its_figure_still_has_an_image() {
-        let p = parts(item(Drawing::Off, true), false).unwrap();
-        let s = shown(Res::Cpu, p, &[used(0.4, 0.2)], false, Bar::Dark);
-        assert_eq!(s.icon, Some(glyph()));
-        assert!(s.title.is_some());
-    }
-
     #[cfg(target_os = "macos")]
     #[test]
     fn an_item_keeps_its_width_whatever_its_figure() {
@@ -1425,8 +1415,9 @@ mod tests {
         assert_eq!(s.title.as_deref(), Some("mem 40%"));
         let s = shown(Res::Mem, parts(item(Drawing::Bar, false), true).unwrap(), &now, false, Bar::Dark);
         assert_eq!((s.icon, s.title), (Some(bar(now[0])), None));
+        // A tray item shows no title without an image: one with only its figure has the app's.
         let s = shown(Res::Cpu, parts(item(Drawing::Off, true), false).unwrap(), &[], false, Bar::Dark);
-        assert_eq!((s.icon, s.title.as_deref()), (None, Some("–")));
+        assert_eq!((s.icon, s.title.as_deref()), (Some(glyph()), Some("–")));
     }
 
     /// Writes every kind of item to `LD_MENUBAR_PREVIEW` (a directory), as raw RGBA with a
