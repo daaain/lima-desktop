@@ -13,7 +13,8 @@ import { chromium } from 'playwright';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const shots = resolve(root, process.env.LD_SCREENSHOT_DIR ?? '.snapshots/ui');
-const PORT = 4173;
+// Another port where something else already serves on 4173 (another worktree's run), or the test would load that.
+const PORT = Number(process.env.LD_UI_PORT ?? 4173);
 const base = `http://127.0.0.1:${PORT}`;
 // A fixed moment, so the invented history (a function of time) draws the same picture every run.
 const NOW = new Date('2026-11-10T14:30:00Z');
@@ -23,6 +24,7 @@ let browser;
 
 before(async () => {
   await mkdir(shots, { recursive: true });
+  if (await fetch(base).then((r) => r.ok, () => false)) throw new Error(`something already serves ${base}: set LD_UI_PORT to another port`);
   server = spawn('pnpm', ['exec', 'vite', 'preview', '--port', String(PORT), '--strictPort', '--host', '127.0.0.1'], { cwd: root, stdio: 'pipe' });
   let log = '';
   server.stdout.on('data', (d) => (log += d));
@@ -86,6 +88,8 @@ for (const dark of [false, true]) {
     await atlas.locator('.sketch:not(.empty)').first().waitFor();
     // Capacity is drawn against the host.
     assert.match(await page.locator('.capacities').innerText(), /128\.0 GiB on this computer/);
+    // What the VMs hold of this computer's RAM, and less with compressed memory at its compressed size.
+    assert.match(await page.locator('[data-ram]').innerText(), /^The running VMs hold [\d.]+ GiB of this computer's RAM, as Activity Monitor counts it; [\d.]+ GiB with what macOS has compressed/);
     // A stopped VM's disk image counts, and hovering its block says whose it is.
     await page.locator('.capacity', { hasText: 'Disk' }).locator('.block[title^="foundry, not running"]').hover();
     assert.match(await page.locator('.capacity', { hasText: 'Disk' }).innerText(), /foundry not running · 61\.0 GiB/);
@@ -187,7 +191,400 @@ for (const dark of [false, true]) {
     assert.deepEqual(errors, []);
     await close();
   });
+
+  test(`Menu bar popover${suffix}`, async () => {
+    // As the backend opens it: a window 360 px wide, under the memory item.
+    const { page, errors, close } = await open('/menubar?tab=mem', { dark, width: 360, height: 560 });
+    await page.locator('.legend .row[data-vm]').first().waitFor();
+    // Only the page: none of the main window's chrome.
+    assert.equal(await page.getByRole('link', { name: 'Settings' }).count(), 0);
+    assert.equal(await page.getByRole('tab', { name: 'Memory' }).getAttribute('aria-selected'), 'true');
+    assert.match(await page.locator('.big').innerText(), /^\d+ %$/);
+    assert.match(
+      await page.locator('.of').innerText(),
+      /^of this computer's 128\.0 GiB in use: the VMs \d+\.\d GiB, wired \d+\.\d GiB, everything else \d+\.\d GiB$/,
+    );
+    // A row per running VM, the largest first, each with its peak over the range it opens on.
+    assert.deepEqual(await page.locator('.legend .row[data-vm] .name').allInnerTexts(), ['atlas', 'harbor', 'quill', 'lantern', 'ember']);
+    await page.waitForFunction(() => /peak \d+\.\d GiB in 1 h/.test(document.querySelector('.legend').innerText));
+    assert.equal(await page.getByRole('group', { name: 'Over the last' }).getByRole('button', { name: '1 h' }).getAttribute('aria-pressed'), 'true');
+    // ember has stopped answering.
+    assert.match(await page.locator('.row[data-vm="ember"] .name').getAttribute('class'), /\bhot\b/);
+    // Wired memory has its own row and band, between the VMs and everything else.
+    assert.match(await page.locator('.legend').innerText(), /ember[\s\S]*wired\s+\d+\.\d GiB\s+kernel, GPU and drivers[\s\S]*everything else[\s\S]*free/);
+    assert.equal(await page.locator('svg path.band.vm').count(), 5);
+    assert.equal(await page.locator('svg path.band.wired').count(), 1);
+    assert.match(await page.locator('footer').innerText(), /Recording every 1 s/);
+    // The busiest containers under the VM each runs in, and the busiest apps under everything else.
+    await page.locator('.legend .row[data-app]').first().waitFor();
+    assert.deepEqual(await page.locator('.legend .row .name').allInnerTexts(), [
+      'atlas', 'frontend', 'harbor', 'harbor-devbox', 'app', 'quill', 'quill-devbox', 'lantern', 'lantern-devbox', 'ember',
+      'wired', 'everything else', 'Google Chrome', 'Visual Studio Code', 'Slack', 'WindowServer', 'Mail', 'free',
+    ]);
+    assert.match(await page.locator('.row[data-container="harbor-devbox"]').innerText(), /^harbor-devbox\s+2\.\d GiB$/);
+    // Memory as its share of the use, Activity Monitor's figure in brackets beside it where it has one.
+    assert.match(await page.locator('.row[data-app="Google Chrome"]').innerText(), /^Google Chrome\s+5\.\d GiB\s*\(6\.\d\)$/);
+    assert.match(await page.locator('.row[data-app="WindowServer"]').innerText(), /^WindowServer\s+1\.\d GiB$/);
+    assert.match(await page.locator('.row[data-vm="harbor"] .fig').innerText(), /^[\d.]+ GiB\s*\([\d.]+\)$/);
+    assert.match(await page.locator('.row[data-vm="harbor"] .reported').innerText(), /^\([\d.]+\)$/);
+    assert.match(await page.locator('.row[data-vm="harbor"] .reported').getAttribute('title'), /^Activity Monitor says [\d.]+ GiB: it counts compressed memory at its full size/);
+    assert.equal(await page.locator('.row[data-container="app"]').getAttribute('title'), 'app (the container harbor-app-1)\nMeasured inside harbor: part of its memory above, not more on top of it');
+    assert.equal(await page.locator('.row[data-app="Google Chrome"]').getAttribute('title'), 'Google Chrome: its 38 processes added up');
+    // The window is asked to fit the page.
+    await page.waitForFunction(() => window.__fakeCalls.some((c) => c.cmd === 'fit_popover' && c.args.height > 200));
+    await shoot(page, `menubar${suffix}`);
+    // CPU's apps at once: the memory tab's samples are recent enough to measure from.
+    await page.getByRole('tab', { name: 'CPU' }).click();
+    await page.waitForFunction(() => /Google Chrome\s+[\d.]+ cores/.test(document.querySelector('.legend').innerText));
+    assert.equal(await page.locator('.row[data-apps]').count(), 0);
+    assert.match(await page.locator('.row[data-container="harbor-devbox"]').innerText(), /^harbor-devbox\s+\d\.\d cores$/);
+    assert.equal(await page.locator('.row[data-container="harbor-devbox"]').getAttribute('title'), 'harbor-devbox\nMeasured inside harbor: part of its CPU above, not more on top of it');
+    assert.equal(await page.locator('.row.sub[data-app]').count(), 5);
+    await shoot(page, `menubar-cpu${suffix}`);
+    await page.getByRole('tab', { name: 'Disk' }).click();
+    await page.waitForFunction(() => /grew [\d.]+ GB in 7 days/.test(document.querySelector('.legend').innerText));
+    // No apps or containers for a disk.
+    assert.equal(await page.locator('.legend .row.sub').count(), 0);
+    await shoot(page, `menubar-disk${suffix}`);
+    assert.deepEqual(errors, []);
+    await close();
+  });
 }
+
+test('The popover opens on the tab asked for, switches tabs and keeps each one\'s range', async () => {
+  const { page, errors, close } = await open('/menubar?tab=disk', { width: 360, height: 560 });
+  const tab = (name) => page.getByRole('tab', { name });
+  const range = (name) => page.getByRole('group', { name: 'Over the last' }).getByRole('button', { name });
+  await page.locator('.legend .row[data-vm]').first().waitFor();
+  assert.equal(await tab('Disk').getAttribute('aria-selected'), 'true');
+  assert.equal(await range('7 days').getAttribute('aria-pressed'), 'true');
+  // Under 50 GB of the disk free, as Settings has it by default: the figure warns.
+  await page.locator('.popover.warm .big.hot').waitFor();
+  // A stopped VM's disk image counts, drawn at its size now.
+  const foundry = page.locator('.row[data-vm="foundry"]');
+  // A disk in powers of 1000, as Finder says it.
+  assert.match(await page.locator('.of').innerText(), /^of this computer's 994\.7 GB in use: the VMs \d+\.\d GB, everything else \d+\.\d GB$/);
+  assert.match(await foundry.innerText(), /65\.5 GB\s+not running/);
+  await page.waitForFunction(() => /grew [\d.]+ GB in 7 days/.test(document.querySelector('.row[data-vm="quill"]').innerText));
+  assert.equal(await page.locator('svg path.band.vm').count(), 9);
+  assert.equal(await page.locator('svg path.band.wired').count(), 0);
+  assert.equal(await page.locator('.legend').getByText('wired').count(), 0);
+  // An hour, for a disk filling fast.
+  assert.deepEqual(await page.getByRole('group', { name: 'Over the last' }).getByRole('button').allInnerTexts(), ['1 h', '24 h', '7 days', '30 days']);
+
+  await range('30 days').click();
+  await page.waitForFunction(() => /in 30 days/.test(document.querySelector('.row[data-vm="quill"]').innerText));
+  await tab('CPU').click();
+  assert.equal(await tab('CPU').getAttribute('aria-selected'), 'true');
+  assert.match(await page.locator('.of').innerText(), /^of this computer's 16 cores in use: the VMs \d+\.\d cores, everything else \d+\.\d cores$/);
+  assert.equal(await range('1 h').getAttribute('aria-pressed'), 'true');
+  await range('6 h').click();
+  await page.waitForFunction(() => /peak [\d.]+ cores in 6 h/.test(document.querySelector('.legend').innerText));
+  // Hovering a VM's row brings its band forward, and everything else's its own.
+  await page.locator('.row[data-vm="harbor"]').hover();
+  assert.equal(await page.locator('svg path.band.vm.hl').count(), 1);
+  await page.locator('.row[data-part="rest"]').hover();
+  assert.equal(await page.locator('svg path.band.hl').count(), 1);
+  assert.equal(await page.locator('svg path.band.rest.hl').count(), 1);
+
+  // Each tab's range is kept for next time.
+  await page.reload();
+  await tab('Disk').waitFor();
+  assert.equal(await range('30 days').getAttribute('aria-pressed'), 'true');
+  await tab('CPU').click();
+  assert.equal(await range('6 h').getAttribute('aria-pressed'), 'true');
+
+  await page.getByRole('button', { name: 'Open Lima Desktop' }).click();
+  await page.getByRole('button', { name: 'Quit' }).click();
+  const calls = await page.evaluate(() => window.__fakeCalls.map((c) => c.cmd).filter((c) => c !== 'fit_popover' && c !== 'update_available'));
+  assert.deepEqual(calls, ['open_main', 'quit']);
+  assert.deepEqual(errors, []);
+  await close();
+});
+
+test('The popover is told its tab when shown again, watches 2 min move, and fetches nothing while hidden', async () => {
+  // Every fetch the page makes, with when (the clock runs, though Date.now is fixed).
+  const count = () => {
+    const invoke = window.__TAURI_INTERNALS__.invoke;
+    window.__asked = [];
+    window.__TAURI_INTERNALS__.invoke = (cmd, args) => {
+      if (cmd === 'host_stack' || cmd === 'snapshot' || cmd === 'top_apps') window.__asked.push({ cmd, args, at: performance.now() });
+      return invoke(cmd, args);
+    };
+  };
+  const { page, errors, close } = await open('/menubar?tab=mem', { width: 360, height: 560, init: count });
+  const tab = (name) => page.getByRole('tab', { name });
+  const range = (name) => page.getByRole('group', { name: 'Over the last' }).getByRole('button', { name });
+  await page.locator('.legend .row[data-vm]').first().waitFor();
+  assert.deepEqual(await page.getByRole('group', { name: 'Over the last' }).getByRole('button').allInnerTexts(), ['2 min', '15 min', '1 h', '6 h', '24 h']);
+
+  // Shown again under the CPU item, with Settings now dark: the same page, on that tab.
+  await page.evaluate(() => window.__fakeEmit('popover-shown', { tab: 'cpu', theme: 'dark' }));
+  await page.waitForFunction(() => document.querySelector('[role=tab][aria-selected=true]')?.textContent === 'CPU');
+  assert.equal(await page.evaluate(() => document.documentElement.dataset.theme), 'dark');
+
+  // 2 min moves a column a second: fetched again each second.
+  await range('2 min').click();
+  await page.waitForFunction(() => /peak [\d.]+ cores in 2 min/.test(document.querySelector('.legend').innerText));
+  const stacks = () => page.evaluate(() => window.__asked.filter((a) => a.cmd === 'host_stack' && a.args.to - a.args.from === 120_000).length);
+  const before = await stacks();
+  await page.waitForTimeout(3200);
+  assert.ok((await stacks()) - before >= 2, 'fetched again about every second');
+
+  // The busiest apps are asked for at the measuring interval too.
+  const appsAsked = () => page.evaluate(() => window.__asked.filter((a) => a.cmd === 'top_apps' && a.args.metric === 'cpu').length);
+  assert.ok((await appsAsked()) >= 3, 'apps asked for about every second');
+
+  // Hidden, it fetches nothing, the busiest apps included; shown again, it fetches at once.
+  const asked = () => page.evaluate(() => window.__asked.length);
+  const visibility = (state) =>
+    page.evaluate((s) => {
+      Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => s });
+      document.dispatchEvent(new Event('visibilitychange'));
+    }, state);
+  await visibility('hidden');
+  await page.waitForTimeout(300);
+  const hidden = await asked();
+  await page.waitForTimeout(2500);
+  assert.equal(await asked(), hidden);
+  await visibility('visible');
+  await page.waitForFunction((n) => window.__asked.length >= n + 2, hidden);
+  assert.equal(await tab('CPU').getAttribute('aria-selected'), 'true');
+  assert.deepEqual(errors, []);
+  await close();
+});
+
+for (const dark of [false, true]) {
+  test(`The popover's hover${dark ? ', dark' : ''}: a VM, wired memory and everything else come forward`, async () => {
+    const { page, errors, close } = await open('/menubar?tab=mem', { dark, width: 360, height: 560 });
+    await page.locator('svg path.band.wired').waitFor();
+    // Pointing at a band lights its row too.
+    await page.locator('svg path.band.wired').dispatchEvent('pointermove');
+    await page.waitForFunction(() => document.querySelector('.row[data-part="wired"]')?.classList.contains('hl'));
+    assert.equal(await page.locator('svg path.band.hl').count(), 1);
+    await page.locator('.row[data-part="rest"]').hover();
+    assert.equal(await page.locator('svg path.band.rest.hl').count(), 1);
+    await shoot(page, `menubar-hover${dark ? '-dark' : ''}`);
+    await page.locator('.row[data-vm="atlas"]').hover();
+    assert.equal(await page.locator('svg path.band.vm.hl').count(), 1);
+    assert.deepEqual(errors, []);
+    await close();
+  });
+}
+
+test("The popover's CPU apps wait for a second sample, and one that can't be read says so", async () => {
+  const { page, errors, close } = await open('/menubar?tab=cpu', { width: 360, height: 560 });
+  // Opened on CPU: nothing to measure from yet, so no figures that look real.
+  await page.locator('.row[data-apps="pending"]').waitFor();
+  assert.equal(await page.locator('.row[data-apps="pending"] .name').innerText(), 'measuring the busiest apps…');
+  assert.equal(await page.locator('.row[data-app]').count(), 0);
+  // A second later, at the measuring interval, the apps.
+  await page.locator('.row[data-app]').first().waitFor();
+  assert.equal(await page.locator('.row[data-apps]').count(), 0);
+  // Hovering an app lights everything else, which it is part of; a container lights its VM.
+  await page.locator('.row[data-app="Google Chrome"]').hover();
+  assert.equal(await page.locator('svg path.band.rest.hl').count(), 1);
+  await page.locator('.row[data-container="harbor-devbox"]').hover();
+  assert.equal(await page.locator('svg path.band.vm.hl').count(), 1);
+  assert.match(await page.locator('.row[data-vm="harbor"]').getAttribute('class'), /\bhl\b/);
+  // Failing (ps missing, say), the apps already listed stay; a tab with none says it couldn't read them.
+  await page.evaluate(() => (window.__fakeTopApps = () => { throw new Error("can't run ps"); }));
+  await page.waitForTimeout(1500);
+  assert.equal(await page.locator('.row[data-app]').count(), 5);
+  await page.getByRole('tab', { name: 'Memory' }).click();
+  await page.locator('.row[data-apps="failed"]').waitFor();
+  assert.equal(await page.locator('.row[data-apps="failed"] .name').innerText(), "the busiest apps couldn't be read");
+  assert.equal(await page.locator('.row[data-apps="failed"]').getAttribute('title'), "Error: can't run ps");
+  assert.deepEqual(errors, []);
+  await close();
+});
+
+test('The popover warns as Settings has it, read again each time it is shown', async () => {
+  // Memory about half in use: not past the 75 % it warns past by default.
+  const { page, errors, close } = await open('/menubar?tab=mem', { width: 360, height: 560 });
+  const tab = (name) => page.getByRole('tab', { name });
+  const hot = () => page.locator('.big').evaluate((el) => el.classList.contains('hot'));
+  await page.locator('.legend .row[data-vm]').first().waitFor();
+  assert.equal(await hot(), false);
+  // The disk, with less than the 50 GB free it warns under by default.
+  await tab('Disk').click();
+  await page.locator('.popover.warm .big.hot').waitFor();
+
+  // Settings changed while the popover was hidden: the disk warns under 25 GB free, and has more.
+  await page.evaluate(async () => {
+    const s = await window.__TAURI_INTERNALS__.invoke('settings');
+    const warn = { ...s.menuBar.warn, diskFreeGb: 25 };
+    await window.__TAURI_INTERNALS__.invoke('set_settings', { settings: { ...s, menuBar: { ...s.menuBar, warn } } });
+  });
+  await page.waitForTimeout(300);
+  assert.equal(await hot(), true, 'as it was, until it is shown again');
+  await page.evaluate(() => window.__fakeEmit('popover-shown', { tab: 'disk', theme: 'system' }));
+  await page.locator('.popover:not(.warm) .big:not(.hot)').waitFor();
+  assert.deepEqual(errors, []);
+  await close();
+});
+
+test('Settings chooses when each menu bar item warns: memory and CPU by the percent in use, the disk by the space left', async () => {
+  const { page, errors, close } = await open('/settings');
+  const warns = (label) => page.getByRole('combobox', { name: `${label} warns` });
+  await warns('Memory').waitFor();
+  assert.equal(await warns('Memory').locator('option:checked').innerText(), 'past 75 %');
+  assert.equal(await warns('CPU').locator('option:checked').innerText(), 'past 75 %');
+  assert.equal(await warns('Disk').locator('option:checked').innerText(), 'under 50 GB free');
+  assert.deepEqual(await warns('Memory').locator('option').allInnerTexts(), [
+    'past 50 %', 'past 60 %', 'past 70 %', 'past 75 %', 'past 80 %', 'past 85 %', 'past 90 %', 'past 95 %', 'never',
+  ]);
+  assert.deepEqual(await warns('Disk').locator('option').allInnerTexts(), [
+    'under 10 GB free', 'under 25 GB free', 'under 50 GB free', 'under 100 GB free', 'under 200 GB free', 'never',
+  ]);
+
+  await warns('Memory').selectOption({ label: 'past 90 %' });
+  await page.waitForFunction(async () => (await window.__TAURI_INTERNALS__.invoke('settings')).menuBar.warn.memoryPct === 90);
+  await warns('CPU').selectOption({ label: 'never' });
+  await page.waitForFunction(async () => (await window.__TAURI_INTERNALS__.invoke('settings')).menuBar.warn.cpuPct === null);
+  await warns('Disk').selectOption({ label: 'under 200 GB free' });
+  await page.waitForFunction(async () => (await window.__TAURI_INTERNALS__.invoke('settings')).menuBar.warn.diskFreeGb === 200);
+  assert.deepEqual((await page.evaluate(() => window.__TAURI_INTERNALS__.invoke('settings'))).menuBar.warn, {
+    memoryPct: 90, cpuPct: null, diskFreeGb: 200,
+  });
+  assert.equal(await warns('CPU').locator('option:checked').innerText(), 'never');
+  assert.deepEqual(errors, []);
+  await close();
+});
+
+test('Settings chooses each menu bar item\'s drawing and figure, and whether closing the window keeps recording', async () => {
+  const { page, errors, close } = await open('/settings');
+  const stored = () => page.evaluate(() => window.__TAURI_INTERNALS__.invoke('settings'));
+  const drawing = (label) => page.getByRole('group', { name: `${label} drawn in the menu bar as` });
+  const figure = (label) => page.getByRole('checkbox', { name: `${label} figure` });
+  const memory = drawing('Memory');
+  await memory.waitFor();
+  assert.equal(await memory.getByRole('button', { name: 'Trace' }).getAttribute('aria-pressed'), 'true');
+  assert.equal(await drawing('Disk').getByRole('button', { name: 'Bar' }).getAttribute('aria-pressed'), 'true');
+  for (const label of ['Memory', 'CPU', 'Disk']) assert.equal(await figure(label).isChecked(), true);
+
+  // The drawing and the figure are chosen apart: memory as its figure alone, the CPU as a trace alone.
+  await memory.getByRole('button', { name: 'None' }).click();
+  await page.waitForFunction(() => document.querySelector('[aria-label="Memory drawn in the menu bar as"] [aria-pressed="true"]')?.textContent === 'None');
+  await figure('CPU').click();
+  await page.waitForFunction(async () => !(await window.__TAURI_INTERNALS__.invoke('settings')).menuBar.cpu.figure);
+  assert.equal(await figure('CPU').isChecked(), false);
+  assert.deepEqual((await stored()).menuBar, {
+    memory: { drawing: 'off', figure: true },
+    cpu: { drawing: 'trace', figure: false },
+    disk: { drawing: 'bar', figure: true },
+    names: true,
+    warn: { memoryPct: 75, cpuPct: 75, diskFreeGb: 50 },
+  });
+
+  const names = page.getByRole('checkbox', { name: /Name each one/ });
+  assert.equal(await names.isChecked(), true);
+  await names.click();
+  await page.waitForFunction(async () => !(await window.__TAURI_INTERNALS__.invoke('settings')).menuBar.names);
+
+  const keep = page.getByRole('checkbox', { name: 'Keep recording, in the menu bar' });
+  assert.equal(await keep.isChecked(), true);
+  await keep.click();
+  await page.waitForFunction(async () => !(await window.__TAURI_INTERNALS__.invoke('settings')).keepRunning);
+  assert.equal(await keep.isChecked(), false);
+  assert.deepEqual(errors, []);
+  await close();
+});
+
+const V030 = { version: '0.3.0', url: 'https://github.com/daaain/lima-desktop/releases/tag/v0.3.0' };
+const V040 = { version: '0.4.0', url: 'https://github.com/daaain/lima-desktop/releases/tag/v0.4.0' };
+
+/** Two frames: long enough for an answer the fake backend has just given to be drawn. */
+const settle = (page) => page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+/** Waits until the app has asked about new versions `n` times in all, and the answer is drawn. */
+async function asked(page, n) {
+  await page.waitForFunction((n) => window.__fakeCalls.filter((c) => c.cmd === 'update_available').length >= n, n);
+  await settle(page);
+}
+
+for (const dark of [false, true]) {
+  test(`A newer version is said beside the status line${dark ? ', dark' : ''}`, async () => {
+    const { page, errors, close } = await open('/', { dark, init: `window.__fakeUpdate = ${JSON.stringify(V030)};` });
+    const notice = page.locator('.update');
+    await notice.waitFor();
+    assert.equal((await notice.textContent()).replace(/\s+/g, ' ').trim(), 'Lima Desktop 0.3.0 is out · Download ×');
+    await page.locator('.status').waitFor();
+    await page.evaluate(() => document.fonts.ready);
+    await page.mouse.move(0, 0);
+    await page.screenshot({ path: join(shots, `update-notice${dark ? '-dark' : ''}.png`), clip: { x: 0, y: 0, width: 1320, height: 150 }, animations: 'disabled' });
+    assert.deepEqual(errors, []);
+    await close();
+  });
+}
+
+test('The new version opens its release page, stays dismissed, and a later one shows again', async () => {
+  const { page, errors, close } = await open('/', { init: `window.__fakeUpdate = ${JSON.stringify(V030)};` });
+  const notice = page.locator('.update');
+  await notice.getByRole('button', { name: 'Download' }).click();
+  await page.waitForFunction(() => window.__fakeCalls.some((c) => c.cmd === 'open_url'));
+  assert.equal((await page.evaluate(() => window.__fakeCalls.find((c) => c.cmd === 'open_url'))).args.url, V030.url);
+
+  await notice.getByRole('button', { name: 'Dismiss' }).click();
+  await notice.waitFor({ state: 'detached' });
+  // Remembered: the next time the window opens, 0.3.0 stays put away.
+  await page.reload();
+  await asked(page, 1);
+  assert.equal(await notice.count(), 0);
+
+  // A later version is out: it shows, once the app next asks (here, as the check is switched back on).
+  await page.evaluate((v) => (window.__fakeUpdate = v), V040);
+  await page.getByRole('link', { name: 'Settings' }).click();
+  const check = page.getByRole('checkbox', { name: 'Say when a new version is out' });
+  assert.equal(await check.isChecked(), true);
+  await check.click();
+  await page.waitForFunction(async () => !(await window.__TAURI_INTERNALS__.invoke('settings')).checkUpdates);
+  await asked(page, 2);
+  assert.equal(await notice.count(), 0, 'nothing is said with the check off');
+  await check.click();
+  await page.waitForFunction(async () => (await window.__TAURI_INTERNALS__.invoke('settings')).checkUpdates);
+  await notice.getByText('Lima Desktop 0.4.0 is out').waitFor();
+  assert.deepEqual(errors, []);
+  await close();
+});
+
+test('The popover says a newer version too, above its footer', async () => {
+  const { page, errors, close } = await open('/menubar?tab=mem', { width: 360, height: 560, init: `window.__fakeUpdate = ${JSON.stringify(V030)};` });
+  const notice = page.locator('.newer .update');
+  await notice.waitFor();
+  assert.equal((await notice.textContent()).replace(/\s+/g, ' ').trim(), 'Lima Desktop 0.3.0 is out · Download ×');
+  await notice.getByRole('button', { name: 'Dismiss' }).click();
+  await notice.waitFor({ state: 'detached' });
+  assert.equal(await page.locator('.newer').isVisible(), false, 'nothing is left of it');
+  assert.deepEqual(errors, []);
+  await close();
+});
+
+test('The popover, shown again after the check was switched off in Settings, no longer says a newer version', async () => {
+  const { page, errors, close } = await open('/menubar?tab=mem', { width: 360, height: 560, init: `window.__fakeUpdate = ${JSON.stringify(V030)};` });
+  const notice = page.locator('.newer .update');
+  await notice.waitFor();
+  // Switched off in the main window's Settings while the popover was hidden.
+  await page.evaluate(async () => {
+    const s = await window.__TAURI_INTERNALS__.invoke('settings');
+    await window.__TAURI_INTERNALS__.invoke('set_settings', { settings: { ...s, checkUpdates: false } });
+  });
+  await page.evaluate(() => window.__fakeEmit('popover-shown', { tab: 'mem', theme: 'system' }));
+  await notice.waitFor({ state: 'detached' });
+  assert.deepEqual(errors, []);
+  await close();
+});
+
+test('With the check switched off, no new version is said', async () => {
+  const init = `window.__fakeUpdate = ${JSON.stringify(V030)}; window.__fakeSettings.checkUpdates = false;`;
+  const { page, errors, close } = await open('/settings', { init });
+  const check = page.getByRole('checkbox', { name: 'Say when a new version is out' });
+  await check.waitFor();
+  assert.equal(await check.isChecked(), false);
+  await asked(page, 1);
+  assert.equal(await page.locator('.update').count(), 0);
+  assert.deepEqual(errors, []);
+  await close();
+});
 
 test('A VM that has stopped responding says so on the overview and on its page', async () => {
   const { page, errors, close } = await open('/');

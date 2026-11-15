@@ -9,8 +9,18 @@ export const RANGES = [
   { key: '30d', label: '30 days', ms: 30 * 86_400_000, last: 'the last 30 days' },
 ] as const;
 export type RangeKey = (typeof RANGES)[number]['key'];
-const range = (k: RangeKey) => RANGES.find((r) => r.key === k)!;
-export const rangeMs = (k: RangeKey) => range(k).ms;
+/**
+ * Shorter than any range the app offers, and so not among them (not in the masthead, nor ever
+ * widened to): only the menu bar's popover has it, to watch memory and CPU move a second at a time.
+ */
+export const SHORT_RANGES = [{ key: '2m', label: '2 min', ms: 2 * 60_000, last: 'the last 2 min' }] as const;
+/** The app's ranges or the popover's shorter one: anything a chart can be drawn over. */
+export type AnyRangeKey = RangeKey | (typeof SHORT_RANGES)[number]['key'];
+const EVERY = [...SHORT_RANGES, ...RANGES];
+const range = (k: AnyRangeKey) => EVERY.find((r) => r.key === k)!;
+export const rangeMs = (k: AnyRangeKey) => range(k).ms;
+/** As the picker labels it: "15 min", "7 days". */
+export const rangeLabel = (k: AnyRangeKey) => range(k).label;
 
 /** On first run: long enough to hold a day's rhythm, which is what most questions here are about. */
 export const DEFAULT_RANGE: RangeKey = '24h';
@@ -25,12 +35,12 @@ export function parseRange(saved: string | null): RangeKey {
  * samples, cheap to fetch again. Longer ones are fetched once per choice.
  */
 const LIVE_MS = 6 * 3_600_000;
-export const followsLive = (k: RangeKey) => rangeMs(k) <= LIVE_MS;
+export const followsLive = (k: AnyRangeKey) => rangeMs(k) <= LIVE_MS;
 
 /** Mid-sentence: "the last hour", "the last 6 h". */
-export const theLast = (k: RangeKey) => range(k).last;
+export const theLast = (k: AnyRangeKey) => range(k).last;
 /** Where a column has room for a few words only, as the picker labels it: "in 6 h". */
-export const inRange = (k: RangeKey) => `in ${range(k).label}`;
+export const inRange = (k: AnyRangeKey) => `in ${range(k).label}`;
 
 /** The shortest range that reaches `ageMs` back from now; the longest if none does. */
 export function rangeReaching(ageMs: number): RangeKey {

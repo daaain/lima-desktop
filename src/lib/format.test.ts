@@ -1,5 +1,19 @@
 import { describe, expect, it } from 'vitest';
-import { age, prunedText, shortId, uptime } from './format';
+import { age, bytes, decimalBytes, prunedText, shortId, uptime } from './format';
+
+describe('decimalBytes', () => {
+  it('says a size in powers of 1000, as Finder does', () => {
+    expect(decimalBytes(994.66e9)).toBe('994.7 GB');
+    expect(decimalBytes(1.2e12)).toBe('1.2 TB');
+    expect(decimalBytes(1_000_000)).toBe('1.0 MB');
+    expect(decimalBytes(512)).toBe('512 B');
+    expect(decimalBytes(null)).toBe('–');
+    expect(decimalBytes(-1)).toBe('–');
+  });
+  it('differs from the binary units the rest of the app says', () => {
+    expect(bytes(994.66e9)).toBe('926.3 GiB');
+  });
+});
 
 describe('age', () => {
   const now = Date.parse('2026-11-09T12:00:00Z');

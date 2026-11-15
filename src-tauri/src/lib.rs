@@ -1,15 +1,22 @@
 pub mod collector;
 pub mod commands;
 pub mod guest_files;
+pub mod host_proc;
+pub mod host_use;
 pub mod journal;
 pub mod lima;
 pub mod marker;
+pub mod menubar;
 pub mod oom;
 pub mod podman;
 pub mod probe;
 pub mod settings;
 pub mod stall;
 pub mod store;
+pub mod top_apps;
+#[cfg(target_os = "macos")]
+pub mod typeset;
+pub mod updates;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -56,7 +63,12 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         // Remembers the window's size and place between runs (saved as it closes).
-        .plugin(tauri_plugin_window_state::Builder::default().build())
+        // The popover opens under the menu bar item clicked, so it's never put back somewhere else.
+        .plugin(
+            tauri_plugin_window_state::Builder::default()
+                .with_denylist(&[menubar::POPOVER])
+                .build(),
+        )
         .setup(|app| {
             let dir = data_dir(app)?;
             std::fs::create_dir_all(&dir)?;
@@ -70,13 +82,22 @@ pub fn run() {
             apply_theme(app, saved.get().theme);
             app.manage(collector);
             app.manage(saved);
+            // The popover's list of what else is running, sampled only when it asks.
+            app.manage(Arc::new(top_apps::TopApps::default()));
+            menubar::start(app.handle());
+            let version = app.package_info().version.clone();
+            app.manage(updates::Updates::load(dir.join("updates.json"), version));
+            updates::start(app.handle());
             Ok(())
         })
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::Destroyed = event
-                && let Some(c) = window.try_state::<Arc<collector::Collector>>()
+                && window.label() == "main"
             {
-                c.flush_now();
+                if let Some(c) = window.try_state::<Arc<collector::Collector>>() {
+                    c.flush_now();
+                }
+                menubar::main_closed(window.app_handle());
             }
         })
         .invoke_handler(tauri::generate_handler![
@@ -103,7 +124,29 @@ pub fn run() {
             commands::entities,
             commands::oom_events,
             commands::stalls,
+            commands::host_stack,
+            commands::top_apps,
+            commands::open_main,
+            commands::quit,
+            commands::fit_popover,
+            commands::update_available,
         ])
-        .run(ctx)
-        .expect("error while running tauri application");
+        .build(ctx)
+        .expect("error while building tauri application")
+        .run(|app, event| match event {
+            // The last window closed (an exit asked for has a code): keep recording, in the menu
+            // bar, if Settings says so and the menu bar is there to come back by.
+            tauri::RunEvent::ExitRequested { code: None, api, .. } if menubar::keeps_running(app) => {
+                api.prevent_exit();
+            }
+            // The Dock icon clicked with no window open.
+            #[cfg(target_os = "macos")]
+            tauri::RunEvent::Reopen { .. } => menubar::open_main(app),
+            tauri::RunEvent::Exit => {
+                if let Some(c) = app.try_state::<Arc<collector::Collector>>() {
+                    c.flush_now();
+                }
+            }
+            _ => {}
+        });
 }

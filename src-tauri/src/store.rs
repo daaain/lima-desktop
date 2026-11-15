@@ -32,6 +32,8 @@ const RAW_QUERY_SPAN: i64 = 6 * HOUR;
 pub enum Kind {
     Vm,
     Container,
+    /// The computer itself (`host_use.rs`): one entity.
+    Host,
 }
 
 impl Kind {
@@ -39,10 +41,15 @@ impl Kind {
         match self {
             Kind::Vm => "vm",
             Kind::Container => "container",
+            Kind::Host => "host",
         }
     }
     fn parse(s: &str) -> Kind {
-        if s == "vm" { Kind::Vm } else { Kind::Container }
+        match s {
+            "vm" => Kind::Vm,
+            "host" => Kind::Host,
+            _ => Kind::Container,
+        }
     }
     /// Column names, in storage order. Only ever APPEND to these: old chunks decode with the
     /// columns they had, the rest read as absent.
@@ -50,6 +57,7 @@ impl Kind {
         match self {
             Kind::Vm => VM_METRICS,
             Kind::Container => CT_METRICS,
+            Kind::Host => HOST_METRICS,
         }
     }
 }
@@ -73,6 +81,7 @@ pub const VM_METRICS: &[&str] = &[
     "host_rss",
     "host_cpu_mc",
     "host_disk_alloc",
+    "host_mem",
 ];
 /// cpu in millicores; memory in bytes (mem_peak: the cgroup's high-water mark since start);
 /// *_bps in bytes/s; oom_kills cumulative.
@@ -87,6 +96,21 @@ pub const CT_METRICS: &[&str] = &[
     "net_tx_bps",
     "blk_r_bps",
     "blk_w_bps",
+];
+
+/// The whole computer (`host_use.rs`): memory in bytes (used as Activity Monitor counts it, total,
+/// wired, compressed), cpu in millicores (busy, and all the cores), and the disk Lima's instances
+/// are on in bytes (used, total).
+pub const HOST_METRICS: &[&str] = &[
+    "mem_used",
+    "mem_total",
+    "mem_wired",
+    "mem_compressed",
+    "cpu_mc",
+    "cpu_total_mc",
+    "disk_used",
+    "disk_total",
+    "mem_stored",
 ];
 
 /// Decoded chunk rows: `(ts_ms, values)`.
@@ -268,6 +292,82 @@ pub struct Series {
     pub sample_secs: i64,
     pub ts: Vec<i64>,
     pub metrics: HashMap<String, Band>,
+}
+
+/// One of the computer's resources over a range, for the menu bar's stacked chart: the whole
+/// computer's use and size, and each VM's own part, all on the computer's buckets (`ts`, bucket
+/// starts). Values are bucket averages; `None` where nothing was measured.
+#[derive(Debug, Default, Serialize)]
+pub struct Stack {
+    pub ts: Vec<i64>,
+    pub used: Vec<Option<i64>>,
+    pub total: Vec<Option<i64>>,
+    /// Memory only: the computer's wired memory (the kernel's, the GPU's and drivers'), which is
+    /// never paged out or compressed. No VM's process has any, so it's drawn on top of the VMs.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub wired: Option<Vec<Option<i64>>>,
+    pub vms: Vec<StackVm>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct StackVm {
+    pub name: String,
+    pub avg: Vec<Option<i64>>,
+    /// The most it reached in the range.
+    pub peak: Option<i64>,
+}
+
+/// What a stack of one resource reads: the computer's used and total columns, its wired one (memory
+/// only), and a VM's own part, and where that wasn't kept yet, what stands in for it.
+pub struct StackColumns {
+    pub used: &'static str,
+    pub total: &'static str,
+    pub wired: Option<&'static str>,
+    pub part: &'static str,
+    pub before: Option<&'static str>,
+}
+
+/// How many buckets in a row a VM may be missing a reading because it's late or lost, not because
+/// the VM stopped: each guest's come over ssh, each at its own moment after the computer's own, so
+/// the newest bucket often has the computer's reading and not yet a VM's.
+const LATE_BUCKETS: usize = 2;
+
+/// The buckets (of `n`) where a VM wasn't measured though it ran: up to [`LATE_BUCKETS`] between
+/// two of its readings, or after its newest. A stack shows the computer there as a gap rather
+/// than with a VM that uses nothing, which would drop its band, and those above it, to nothing.
+/// A longer while without a reading, it was stopped: the computer goes on without it.
+fn unmeasured_vms(vms: &[StackVm], n: usize) -> Vec<usize> {
+    let mut gap = vec![false; n];
+    for v in vms {
+        let known: Vec<usize> = (0..n).filter(|&j| v.avg[j].is_some()).collect();
+        for w in known.windows(2) {
+            if w[1] - w[0] - 1 <= LATE_BUCKETS {
+                gap[w[0] + 1..w[1]].fill(true);
+            }
+        }
+        if let Some(&last) = known.last() {
+            gap[last + 1..n.min(last + 1 + LATE_BUCKETS)].fill(true);
+        }
+    }
+    (0..n).filter(|&j| gap[j]).collect()
+}
+
+pub fn stack_columns(metric: &str) -> Option<StackColumns> {
+    // A VM's memory: its share of the computer's use (host_mem); before that was kept, its
+    // footprint (host_rss), which counts its compressed memory at full size.
+    let (used, total, wired, part, before) = match metric {
+        "mem" => ("mem_used", "mem_total", Some("mem_wired"), "host_mem", Some("host_rss")),
+        "cpu" => ("cpu_mc", "cpu_total_mc", None, "host_cpu_mc", None),
+        "disk" => ("disk_used", "disk_total", None, "host_disk_alloc", None),
+        _ => return None,
+    };
+    Some(StackColumns {
+        used,
+        total,
+        wired,
+        part,
+        before,
+    })
 }
 
 #[derive(Debug, Default, Serialize)]
@@ -599,6 +699,81 @@ impl Store {
 
     /// Chart data for `entity` in [from, to], at most `points` buckets. Raw samples for spans up
     /// to 6 h, minute rollups beyond; a bucket keeps the min, max and average of what fell in it.
+    /// `metric` ("mem", "cpu" or "disk") over [from, to]: the computer's use and size, and the part
+    /// of every VM measured in the range, on the computer's buckets. Empty before the computer
+    /// has been measured.
+    pub fn stack(
+        &mut self,
+        metric: &str,
+        from: i64,
+        to: i64,
+        points: usize,
+    ) -> rusqlite::Result<Stack> {
+        let Some(cols) = stack_columns(metric) else {
+            return Ok(Stack::default());
+        };
+        let host: Option<i64> = self
+            .db
+            .query_row("SELECT id FROM entity WHERE kind='host' LIMIT 1", [], |r| r.get(0))
+            .optional()?;
+        let Some(host) = host else {
+            return Ok(Stack::default());
+        };
+        let (mut h, width) = self.bucketed(host, from, to, points, None)?;
+        let band = |s: &mut Series, col: &str| s.metrics.remove(col).unwrap_or_default();
+        let (mut used, mut total) = (band(&mut h, cols.used).avg, band(&mut h, cols.total).avg);
+        let mut wired = cols.wired.map(|c| band(&mut h, c).avg);
+        let at: HashMap<i64, usize> = h.ts.iter().enumerate().map(|(i, &t)| (t, i)).collect();
+        let vms: Vec<(i64, String)> = {
+            let mut st = self.db.prepare(
+                "SELECT id, name FROM entity WHERE kind='vm' AND last_seen >= ?1 ORDER BY name",
+            )?;
+            st.query_map(params![from], |r| Ok((r.get(0)?, r.get(1)?)))?
+                .collect::<Result<_, _>>()?
+        };
+        let mut out = Vec::new();
+        for (id, name) in vms {
+            // On the computer's buckets, not ones of its own: each VM is measured at its own
+            // moment, with ssh's jitter, so its own would be wider and skip some of the computer's.
+            let (mut s, _) = self.bucketed(id, from, to, points, Some(width))?;
+            let mut b = band(&mut s, cols.part);
+            if let Some(before) = cols.before {
+                let old = band(&mut s, before);
+                let or = |new: &mut Vec<Option<i64>>, old: Vec<Option<i64>>| {
+                    for (n, o) in new.iter_mut().zip(old) {
+                        *n = n.or(o);
+                    }
+                };
+                or(&mut b.avg, old.avg);
+                or(&mut b.max, old.max);
+            }
+            let mut avg = vec![None; h.ts.len()];
+            for (i, t) in s.ts.iter().enumerate() {
+                if let (Some(&j), Some(v)) = (at.get(t), b.avg.get(i).copied().flatten()) {
+                    avg[j] = Some(v);
+                }
+            }
+            if avg.iter().any(Option::is_some) {
+                let peak = b.max.iter().flatten().copied().max();
+                out.push(StackVm { name, avg, peak });
+            }
+        }
+        for j in unmeasured_vms(&out, h.ts.len()) {
+            used[j] = None;
+            total[j] = None;
+            if let Some(w) = wired.as_mut() {
+                w[j] = None;
+            }
+        }
+        Ok(Stack {
+            ts: h.ts,
+            used,
+            total,
+            wired,
+            vms: out,
+        })
+    }
+
     pub fn series(
         &mut self,
         entity: i64,
@@ -606,6 +781,19 @@ impl Store {
         to: i64,
         points: usize,
     ) -> rusqlite::Result<Series> {
+        Ok(self.bucketed(entity, from, to, points, None)?.0)
+    }
+
+    /// [`Store::series`], and the width of its buckets: `width` if given, so another entity's
+    /// series can be on the same buckets, else as `series` picks it.
+    fn bucketed(
+        &mut self,
+        entity: i64,
+        from: i64,
+        to: i64,
+        points: usize,
+        width: Option<i64>,
+    ) -> rusqlite::Result<(Series, i64)> {
         self.write_dirty()?;
         let ncols = self.ncols(entity);
         let names = self.kinds.get(&entity).map(|k| k.metrics()).unwrap_or(&[]);
@@ -619,7 +807,7 @@ impl Store {
         // window), with a quarter to spare for late ones: else most buckets would be empty, and
         // the chart's line nothing but breaks. Fewer buckets, then.
         let spacing = steady_spacing(rows.iter().map(|r| r.0));
-        let width = ((to - from) / points.max(1) as i64).max(spacing + spacing / 4).max(1);
+        let width = width.unwrap_or_else(|| ((to - from) / points.max(1) as i64).max(spacing + spacing / 4)).max(1);
         let points = ((to - from + width - 1) / width).max(1) as usize;
         let sample_secs = if use_raw {
             (spacing + 500) / 1000
@@ -693,7 +881,7 @@ impl Store {
                 series.metrics.insert(name.to_string(), band);
             }
         }
-        Ok(series)
+        Ok((series, width))
     }
 
     /// Max / average / p95 of every metric of `entity` over [from, to] — the right-sizing numbers.
@@ -1090,6 +1278,253 @@ mod tests {
         let sum = s.summary(id, t, t + MINUTE, 0).unwrap();
         assert_eq!(sum["mem_used"].samples, 60);
         assert_eq!(sum["mem_used"].max, Some(59));
+    }
+
+    #[test]
+    fn the_computer_keeps_its_own_columns_across_a_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("m.db");
+        let t = 7 * MINUTE;
+        let row = |i: i64| (0..HOST_METRICS.len() as i64).map(|c| c * 100 + i).collect::<Vec<_>>();
+        {
+            let mut s = Store::open(&path).unwrap();
+            let id = s.entity(Kind::Host, "", "host", "this computer", 0).unwrap();
+            for i in 0..30 {
+                s.ingest(id, t + i * 1000, row(i));
+            }
+            s.flush(t + MINUTE).unwrap();
+        }
+        let mut s = Store::open(&path).unwrap();
+        let e = s.entities(None).unwrap();
+        assert_eq!((e.len(), e[0].kind), (1, Kind::Host));
+        let sum = s.summary(e[0].id, t, t + MINUTE, 0).unwrap();
+        assert_eq!(sum["disk_total"].max, Some(729));
+        assert_eq!(sum["mem_used"].samples, 30);
+    }
+
+    #[test]
+    fn a_stack_puts_each_vm_on_the_computer_s_buckets() {
+        let mut s = Store::in_memory().unwrap();
+        let t = 10 * MINUTE;
+        let host = s.entity(Kind::Host, "", "host", "this computer", 0).unwrap();
+        let web = s.entity(Kind::Vm, "web", "web", "web", 0).unwrap();
+        let db = s.entity(Kind::Vm, "db", "db", "db", 0).unwrap();
+        let rss = VM_METRICS.iter().position(|m| *m == "host_rss").unwrap();
+        for i in 0..60 {
+            let mut h = vec![ABSENT; HOST_METRICS.len()];
+            h[0] = 50 + i; // mem_used
+            h[1] = 100; // mem_total
+            s.ingest(host, t + i * 1000, h);
+            let mut v = vec![ABSENT; VM_METRICS.len()];
+            v[rss] = 20 + i % 3;
+            s.ingest(web, t + i * 1000, v);
+            // db only for the second half.
+            if i >= 30 {
+                let mut v = vec![ABSENT; VM_METRICS.len()];
+                v[rss] = 10;
+                s.ingest(db, t + i * 1000, v);
+            }
+        }
+        let st = s.stack("mem", t, t + MINUTE, 6).unwrap();
+        assert_eq!(st.ts.len(), 6);
+        assert_eq!(st.total, vec![Some(100); 6]);
+        assert_eq!(st.used[0], Some(54));
+        let names: Vec<&str> = st.vms.iter().map(|v| v.name.as_str()).collect();
+        assert_eq!(names, ["db", "web"]);
+        assert_eq!(st.vms[0].avg, [None, None, None, Some(10), Some(10), Some(10)]);
+        assert!(st.vms[1].avg.iter().all(|v| v.is_some_and(|v| (20..=22).contains(&v))));
+        assert_eq!(st.vms[1].peak, Some(22));
+        assert!(s.stack("swap", t, t + MINUTE, 6).unwrap().ts.is_empty());
+    }
+
+    #[test]
+    fn a_memory_stack_has_the_computer_s_wired_memory_too() {
+        let mut s = Store::in_memory().unwrap();
+        let t = 10 * MINUTE;
+        let host = s
+            .entity(Kind::Host, "", "host", "this computer", 0)
+            .unwrap();
+        let col = |m: &str| HOST_METRICS.iter().position(|c| *c == m).unwrap();
+        for i in 0..60 {
+            let mut h = vec![ABSENT; HOST_METRICS.len()];
+            h[col("mem_used")] = 50;
+            h[col("mem_total")] = 100;
+            // Not read for the first half.
+            if i >= 30 {
+                h[col("mem_wired")] = 8;
+            }
+            h[col("cpu_mc")] = 1;
+            h[col("cpu_total_mc")] = 4;
+            s.ingest(host, t + i * 1000, h);
+        }
+        let st = s.stack("mem", t, t + MINUTE, 6).unwrap();
+        assert_eq!(
+            st.wired,
+            Some(vec![None, None, None, Some(8), Some(8), Some(8)])
+        );
+        // Only memory has it.
+        assert_eq!(s.stack("cpu", t, t + MINUTE, 6).unwrap().wired, None);
+        let json = serde_json::to_value(s.stack("cpu", t, t + MINUTE, 6).unwrap()).unwrap();
+        assert!(json.get("wired").is_none());
+    }
+
+    #[test]
+    fn a_bucket_the_vms_have_no_reading_in_yet_is_a_gap_not_vms_using_nothing() {
+        let mut s = Store::in_memory().unwrap();
+        let t = 10 * MINUTE;
+        let host = s.entity(Kind::Host, "", "host", "this computer", 0).unwrap();
+        let web = s.entity(Kind::Vm, "web", "web", "web", 0).unwrap();
+        let col = |m: &str| HOST_METRICS.iter().position(|c| *c == m).unwrap();
+        let rss = VM_METRICS.iter().position(|m| *m == "host_rss").unwrap();
+        for i in 0..60 {
+            let mut h = vec![ABSENT; HOST_METRICS.len()];
+            h[col("mem_used")] = 50;
+            h[col("mem_total")] = 100;
+            h[col("mem_wired")] = 8;
+            s.ingest(host, t + i * 1000, h);
+            // The guest's readings come in batches, after the computer's own: none yet for the
+            // last ten seconds, and a batch lost in the middle.
+            if i < 50 && !(20..30).contains(&i) {
+                let mut v = vec![ABSENT; VM_METRICS.len()];
+                v[rss] = 20;
+                s.ingest(web, t + i * 1000, v);
+            }
+        }
+        let st = s.stack("mem", t, t + MINUTE, 6).unwrap();
+        let gaps = [false, false, true, false, false, true];
+        let want = |v: i64| gaps.iter().map(|&g| (!g).then_some(v)).collect::<Vec<_>>();
+        assert_eq!(st.used, want(50));
+        assert_eq!(st.total, want(100));
+        assert_eq!(st.wired, Some(want(8)));
+        assert_eq!(st.vms[0].avg, want(20));
+    }
+
+    #[test]
+    fn every_vm_is_in_every_bucket_the_computer_is_drawn_in_though_each_was_measured_at_its_own_moment() {
+        let mut s = Store::in_memory().unwrap();
+        let t = 10 * MINUTE;
+        let to = t + 2 * MINUTE;
+        let host = s.entity(Kind::Host, "", "host", "this computer", 0).unwrap();
+        let col = |m: &str| HOST_METRICS.iter().position(|c| *c == m).unwrap();
+        let rss = VM_METRICS.iter().position(|m| *m == "host_rss").unwrap();
+        let vm_row = |v: i64| {
+            let mut r = vec![ABSENT; VM_METRICS.len()];
+            r[rss] = v;
+            r
+        };
+        // The computer on the dot every 2 s; each guest's readings over ssh at its own moment
+        // after it, give or take a fifth of a second, and the newest of one of them still to come.
+        let (a, b) = (
+            s.entity(Kind::Vm, "a", "a", "a", 0).unwrap(),
+            s.entity(Kind::Vm, "b", "b", "b", 0).unwrap(),
+        );
+        let mut at = t;
+        let mut i = 0;
+        while at < to {
+            let mut h = vec![ABSENT; HOST_METRICS.len()];
+            h[col("mem_used")] = 50;
+            h[col("mem_total")] = 100;
+            s.ingest(host, at, h);
+            let jitter = [0, 200, -150, 100, -200][i % 5];
+            s.ingest(a, at + 300 + jitter, vm_row(20));
+            if at + 1_700 < to - 2_000 {
+                s.ingest(b, at + 1_700 - jitter, vm_row(10));
+            }
+            at += 2_000;
+            i += 1;
+        }
+        let st = s.stack("mem", t, to, 120).unwrap();
+        for (j, used) in st.used.iter().enumerate() {
+            if used.is_some() {
+                for v in &st.vms {
+                    assert!(v.avg[j].is_some(), "{} has no reading in bucket {j} of {}", v.name, st.used.len());
+                }
+            }
+        }
+        assert!(st.used.iter().filter(|u| u.is_some()).count() > st.used.len() * 9 / 10);
+    }
+
+    #[test]
+    fn a_vm_s_memory_in_a_stack_is_its_share_of_the_use_or_its_footprint_before_that_was_kept() {
+        let mut s = Store::in_memory().unwrap();
+        let t = 10 * MINUTE;
+        let host = s.entity(Kind::Host, "", "host", "this computer", 0).unwrap();
+        let web = s.entity(Kind::Vm, "web", "web", "web", 0).unwrap();
+        let col = |m: &str| HOST_METRICS.iter().position(|c| *c == m).unwrap();
+        let vcol = |m: &str| VM_METRICS.iter().position(|c| *c == m).unwrap();
+        for i in 0..60 {
+            let mut h = vec![ABSENT; HOST_METRICS.len()];
+            h[col("mem_used")] = 50;
+            h[col("mem_total")] = 100;
+            s.ingest(host, t + i * 1000, h);
+            let mut v = vec![ABSENT; VM_METRICS.len()];
+            v[vcol("host_rss")] = 40;
+            // An older version kept only the footprint: the first half minute has no share.
+            if i >= 30 {
+                v[vcol("host_mem")] = 25;
+            }
+            s.ingest(web, t + i * 1000, v);
+        }
+        let st = s.stack("mem", t, t + MINUTE, 6).unwrap();
+        assert_eq!(st.vms[0].avg, [Some(40), Some(40), Some(40), Some(25), Some(25), Some(25)]);
+        assert_eq!(st.vms[0].peak, Some(40));
+    }
+
+    #[test]
+    fn a_vm_stopped_for_a_while_leaves_the_computer_alone_meanwhile() {
+        let mut s = Store::in_memory().unwrap();
+        let t = 10 * MINUTE;
+        let host = s.entity(Kind::Host, "", "host", "this computer", 0).unwrap();
+        let web = s.entity(Kind::Vm, "web", "web", "web", 0).unwrap();
+        let col = |m: &str| HOST_METRICS.iter().position(|c| *c == m).unwrap();
+        let rss = VM_METRICS.iter().position(|m| *m == "host_rss").unwrap();
+        for i in 0..120 {
+            let mut h = vec![ABSENT; HOST_METRICS.len()];
+            h[col("mem_used")] = 50;
+            h[col("mem_total")] = 100;
+            s.ingest(host, t + i * 1000, h);
+            if !(20..100).contains(&i) {
+                let mut v = vec![ABSENT; VM_METRICS.len()];
+                v[rss] = 20;
+                s.ingest(web, t + i * 1000, v);
+            }
+        }
+        let st = s.stack("mem", t, t + 2 * MINUTE, 12).unwrap();
+        // Its readings again after a while say it was stopped, not late: the computer alone meanwhile.
+        assert!(st.used.iter().all(Option::is_some));
+        assert_eq!(st.vms[0].avg.iter().filter(|v| v.is_none()).count(), 8);
+    }
+
+    #[test]
+    fn after_the_vms_stop_the_computer_goes_on_alone() {
+        let mut s = Store::in_memory().unwrap();
+        let t = 10 * MINUTE;
+        let host = s.entity(Kind::Host, "", "host", "this computer", 0).unwrap();
+        let web = s.entity(Kind::Vm, "web", "web", "web", 0).unwrap();
+        let col = |m: &str| HOST_METRICS.iter().position(|c| *c == m).unwrap();
+        let rss = VM_METRICS.iter().position(|m| *m == "host_rss").unwrap();
+        for i in 0..60 {
+            let mut h = vec![ABSENT; HOST_METRICS.len()];
+            h[col("mem_used")] = 50;
+            h[col("mem_total")] = 100;
+            s.ingest(host, t + i * 1000, h);
+            if i < 20 {
+                let mut v = vec![ABSENT; VM_METRICS.len()];
+                v[rss] = 20;
+                s.ingest(web, t + i * 1000, v);
+            }
+        }
+        let st = s.stack("mem", t, t + MINUTE, 6).unwrap();
+        // Two buckets' grace for readings still to come, then the computer alone.
+        assert_eq!(st.used, [Some(50), Some(50), None, None, Some(50), Some(50)]);
+    }
+
+    #[test]
+    fn no_stack_before_the_computer_is_measured() {
+        let mut s = Store::in_memory().unwrap();
+        s.entity(Kind::Vm, "web", "web", "web", 0).unwrap();
+        let st = s.stack("cpu", 0, MINUTE, 6).unwrap();
+        assert!(st.ts.is_empty() && st.vms.is_empty());
     }
 
     #[test]

@@ -1,7 +1,8 @@
 <script lang="ts">
   // The masthead: the app's name, then its two levels — Lima's VMs, and the podman things inside
   // every running one (containers, images, volumes) — and the app's settings. Under it, the time
-  // range every page with history follows (range.svelte.ts), where there is any.
+  // range every page with history follows (range.svelte.ts), where there is any. Beside the status
+  // line, a newer version of the app when one is out (UpdateNotice.svelte).
   import { page } from '$app/state';
   import { live } from './live.svelte';
   import { bytes } from './format';
@@ -9,6 +10,7 @@
   import { range } from './range.svelte';
   import { RANGES } from './ranges';
   import { hasHistory, section } from './url';
+  import UpdateNotice from './UpdateNotice.svelte';
 
   const vms = $derived(live.snapshot?.vms ?? []);
   const runningVms = $derived(vms.filter((v) => v.instance.status === 'Running').length);
@@ -36,6 +38,7 @@
       <span title="Metrics history on disk; raw samples kept {live.snapshot.retention?.rawDays} days, minute rollups {live.snapshot.retention?.rollupDays}">history {bytes(live.snapshot.storeBytes)}</span>
     </p>
   {/if}
+  <UpdateNotice />
   {#if hasHistory(here)}
     <div class="ranges" role="group" aria-label="Time range" title="Every chart, peak and verdict in the app is over this range">
       <span class="label">over the last</span>

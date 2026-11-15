@@ -1,16 +1,23 @@
 <script lang="ts">
-  // A metric over the app's range above its bar: hairline columns over time on a ground that rises
-  // to the maximum; on hover, where the time was spent instead, on the bar's own scale.
+  // A metric over the app's range above its bar: columns over time, touching, on a ground that
+  // rises to the maximum; on hover, where the time was spent instead, on the bar's own scale. Each
+  // drawing is one stepped path, so touching columns leave no anti-aliased seam between them.
   import type { Sketch } from './almanac';
   import { range } from './range.svelte';
   import { theLast } from './ranges';
 
   let { sketch, hot = false, label }: { sketch: Sketch | null; hot?: boolean; label: string } = $props();
 
-  const columns = $derived(
-    (sketch?.columns ?? []).map((c, i, all) => ({ x: (i / all.length) * 100, w: (100 / all.length) * 0.6, h: c == null ? 0 : Math.max(1.5, c) })),
-  );
-  const spent = $derived((sketch?.distribution ?? []).map((share, i) => ({ x: i + 0.2, h: share * 100 })).filter((d) => d.h > 0));
+  // Heights in percent of the box, side by side across its width, as one area of columns.
+  function steps(heights: number[]): string {
+    if (!heights.length) return '';
+    const n = (x: number) => String(+x.toFixed(2));
+    const w = 100 / heights.length;
+    return `M0,100${heights.map((h, i) => `V${n(100 - h)}H${n((i + 1) * w)}`).join('')}V100Z`;
+  }
+
+  const columns = $derived(steps((sketch?.columns ?? []).map((c) => (c == null ? 0 : Math.max(1.5, c)))));
+  const spent = $derived(steps((sketch?.distribution ?? []).map((share) => share * 100)));
 </script>
 
 <div class="sketch" class:hot class:empty={!sketch}
@@ -18,10 +25,10 @@
   {#if sketch}
     <svg class="time" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
       <rect class="ground" x="0" y={100 - sketch.max} width="100" height={sketch.max} />
-      {#each columns as c}<rect class="col" x={c.x} y={100 - c.h} width={c.w} height={c.h} />{/each}
+      <path class="col" d={columns} />
     </svg>
     <svg class="spent" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
-      {#each spent as d}<rect class="col" x={d.x} y={100 - d.h} width="0.6" height={d.h} />{/each}
+      <path class="col" d={spent} />
       <line class="max" x1={sketch.max} y1="0" x2={sketch.max} y2="100" />
     </svg>
   {/if}

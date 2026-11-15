@@ -10,7 +10,7 @@ use crate::podman::{ContainerAction, Image, Layer, Libpod, Pruned, Volume};
 use crate::guest_files::{self, Folder, Listing, Peek};
 use serde::Deserialize;
 use crate::settings::{Saved, Settings};
-use crate::store::{Entity, OomRecord, Series, StallRecord, Summary};
+use crate::store::{Entity, OomRecord, Series, Stack, StallRecord, Summary};
 
 type C<'a> = State<'a, Arc<Collector>>;
 
@@ -39,7 +39,71 @@ pub fn set_settings(
     saved.set(settings)?;
     c.set_interval(settings.interval_secs);
     crate::apply_theme(&app, settings.theme);
+    crate::menubar::apply(&app);
     Ok(saved.get())
+}
+
+/// A newer version than this one, if the last check found one and Settings still allows checking.
+#[tauri::command]
+pub fn update_available(
+    saved: State<'_, Saved>,
+    updates: State<'_, crate::updates::Updates>,
+) -> Option<crate::updates::Update> {
+    if saved.get().check_updates { updates.available() } else { None }
+}
+
+/// One of the computer's resources ("mem", "cpu", "disk") over [from, to], for the menu bar's
+/// stacked chart: the computer's use and size and each VM's part, on the same buckets.
+#[tauri::command]
+pub fn host_stack(
+    c: C<'_>,
+    metric: String,
+    from: i64,
+    to: i64,
+    points: Option<usize>,
+) -> Result<Stack, String> {
+    c.store()
+        .stack(&metric, from, to, points.unwrap_or(120).clamp(10, 2000))
+        .map_err(err)
+}
+
+/// The `n` apps using the most of a resource ("mem" or "cpu") now, leaving out the VMs' own
+/// processes: for the menu bar's popover to list under everything else, and asked only by it.
+#[tauri::command]
+pub async fn top_apps(
+    c: C<'_>,
+    sampler: State<'_, Arc<crate::top_apps::TopApps>>,
+    metric: String,
+    n: Option<usize>,
+) -> Result<crate::top_apps::Top, String> {
+    let metric = crate::top_apps::Metric::parse(&metric)?;
+    let exclude = c.vm_host_pids();
+    let squeeze = c.squeeze();
+    let sampler = sampler.inner().clone();
+    // A few tens of ms of system calls and a `ps`: off the main thread.
+    tauri::async_runtime::spawn_blocking(move || {
+        sampler.top(metric, n.unwrap_or(5).clamp(1, 50), &exclude, squeeze)
+    })
+    .await
+    .map_err(err)?
+}
+
+/// Shows the main window, making it again if it was closed.
+#[tauri::command]
+pub fn open_main(app: tauri::AppHandle) {
+    crate::menubar::open_main(&app);
+}
+
+/// Quits the app, and with it the recording.
+#[tauri::command]
+pub fn quit(app: tauri::AppHandle) {
+    app.exit(0);
+}
+
+/// The menu bar's popover, sized to its page.
+#[tauri::command]
+pub fn fit_popover(app: tauri::AppHandle, height: f64) {
+    crate::menubar::fit_popover(&app, height);
 }
 
 #[tauri::command]

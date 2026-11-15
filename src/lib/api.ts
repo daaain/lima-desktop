@@ -140,17 +140,75 @@ export interface Snapshot {
   retention?: { rawDays: number; rollupDays: number };
   /** Seconds between measurements of each running VM; the UI polls at the same pace. */
   intervalSecs?: number;
+  /** What the whole computer is using now (collector.rs `HostLive`); absent before its first reading. */
+  hostUse?: HostLive | null;
+}
+
+/**
+ * The whole computer's latest reading, named as `store::HOST_METRICS`: memory in bytes (`mem_used` as
+ * Activity Monitor counts it, `mem_total`, `mem_wired`, `mem_compressed`), CPU in millicores (`cpu_mc`
+ * busy, `cpu_total_mc` all the cores) and the disk Lima's instances are on (`disk_used`, `disk_total`).
+ * A value that couldn't be read is absent. `entity` is its history's, for `series`.
+ */
+export interface HostLive {
+  entity?: number | null;
+  latest: Record<string, number>;
 }
 
 /** Light or dark: as the computer is, or always one (settings::Theme). */
 export type Theme = 'system' | 'light' | 'dark';
 export const THEMES: readonly Theme[] = ['system', 'light', 'dark'];
 
+/** What one of the menu bar's items draws (settings::Drawing): a moving trace, an upright bar, or nothing. */
+export type Drawing = 'off' | 'trace' | 'bar';
+export const DRAWINGS: readonly Drawing[] = ['trace', 'bar', 'off'];
+
+/** One of the menu bar's items (settings::Item): its drawing, and whether its figure is beside it. With neither, it isn't there. */
+export interface MenuBarItem {
+  drawing: Drawing;
+  figure: boolean;
+}
+
+/**
+ * The menu bar's items (settings::MenuBar): one per resource, each the whole computer's use as a figure,
+ * the VMs' part drawn solid and everything else pale. With all three off, the app's own icon stays as the
+ * way back in. `names` puts "mem", "cpu", "disk" small under each figure, or on its side beside a drawing alone.
+ */
+export interface MenuBar {
+  memory: MenuBarItem;
+  cpu: MenuBarItem;
+  disk: MenuBarItem;
+  names: boolean;
+  warn: Warn;
+}
+
+/**
+ * When each menu bar item, and the popover's figure, turns the warning colour (settings::Warn); null is
+ * never. The main window's warnings are another matter: each VM's are past three quarters of its own size.
+ */
+export interface Warn {
+  /** Past this percent of the computer's memory in use: one of `WARN_PCTS`. */
+  memoryPct: number | null;
+  /** Past this percent of the computer's CPU in use: one of `WARN_PCTS`. */
+  cpuPct: number | null;
+  /** With less than this many GB (powers of 1000, as Finder counts a disk) free: one of `WARN_FREE_GB`. */
+  diskFreeGb: number | null;
+}
+/** The percents in use memory and CPU can warn past (settings::WARN_PCTS). */
+export const WARN_PCTS = [50, 60, 70, 75, 80, 85, 90, 95] as const;
+/** The GB free a disk can warn under (settings::WARN_FREE_GB). */
+export const WARN_FREE_GB = [10, 25, 50, 100, 200] as const;
+
 /** What's chosen in Settings (settings.rs). */
 export interface Settings {
   /** One of `INTERVALS`. */
   intervalSecs: number;
   theme: Theme;
+  menuBar: MenuBar;
+  /** Closing the window leaves the app recording, in the menu bar; Quit (⌘Q, or the popover's) stops it. */
+  keepRunning: boolean;
+  /** Ask GitHub once a day whether a newer version is out; off, nothing is asked. */
+  checkUpdates: boolean;
 }
 /** How often a running VM can be measured, in seconds (settings::INTERVALS). */
 export const INTERVALS = [1, 2, 5, 10] as const;
@@ -255,6 +313,43 @@ export interface Pruned {
   errors: string[];
 }
 
+/** Which of the computer's resources a stack is of: memory (bytes), CPU (millicores), the disk Lima uses (bytes). */
+export type StackMetric = 'mem' | 'cpu' | 'disk';
+
+/**
+ * One resource over a range, for the menu bar's stacked chart (commands::host_stack): the whole computer's
+ * use and size, and each VM's own part (what its processes hold on the host: memory footprint, CPU, disk
+ * image), all on the same buckets `ts` (bucket starts, unix ms). A bucket's value is the average of its
+ * samples; null where nothing was measured. A VM's `peak` is the most it reached in the range.
+ * Memory has the computer's wired memory too (the kernel's, the GPU's and drivers': never paged out or
+ * compressed, and none of it the VMs'). Everything else is `used` less the VMs (and wired).
+ */
+export interface Stack {
+  ts: number[];
+  used: (number | null)[];
+  total: (number | null)[];
+  /** Memory only. */
+  wired?: (number | null)[];
+  vms: { name: string; avg: (number | null)[]; peak: number | null }[];
+}
+
+/** One app on this computer (commands::top_apps): its processes added up, those in an `.app` bundle under the outermost one. */
+export interface TopApp {
+  name: string;
+  /** Bytes of memory (its share of the memory in use), or millicores of CPU. */
+  value: number;
+  processes: number;
+  /** Memory only: what Activity Monitor says, its processes' footprints added up, where they can be read. */
+  reported?: number;
+}
+
+/** The apps using the most of a resource now, the largest first, leaving out the VMs' own processes. */
+export interface TopApps {
+  apps: TopApp[];
+  /** CPU only: the first sample after a while, with nothing yet to measure from. */
+  pending: boolean;
+}
+
 export type VmAction = 'start' | 'stop' | 'restart' | 'delete';
 export type ContainerAction = 'start' | 'stop' | 'restart' | 'remove';
 
@@ -262,6 +357,17 @@ export const api = {
   snapshot: () => invoke<Snapshot>('snapshot'),
   settings: () => invoke<Settings>('settings'),
   setSettings: (settings: Settings) => invoke<Settings>('set_settings', { settings }),
+  /** The menu bar popover's chart: `metric` over [from, to] in about `points` buckets. */
+  hostStack: (metric: StackMetric, from: number, to: number, points = 120) =>
+    invoke<Stack>('host_stack', { metric, from, to, points }),
+  /** The `n` apps using the most memory or CPU now, for the popover to list under everything else. */
+  topApps: (metric: 'mem' | 'cpu', n = 5) => invoke<TopApps>('top_apps', { metric, n }),
+  /** Shows the main window, making it again if it was closed. */
+  openMain: () => invoke<void>('open_main'),
+  /** Quits the app, and with it the recording. */
+  quit: () => invoke<void>('quit'),
+  /** Sizes the menu bar's popover window to its page: `height` in logical px (the backend keeps it to 200–900). */
+  fitPopover: (height: number) => invoke<void>('fit_popover', { height }),
   vmAction: (name: string, action: VmAction) => invoke<void>('vm_action', { name, action }),
   vmResize: (name: string, resize: { cpus?: number; memory?: number; disk?: number }) =>
     invoke<void>('vm_resize', { name, resize }),
@@ -295,7 +401,15 @@ export const api = {
   /** VM stalls overlapping [from, to] (one going on included), newest first; every VM's when `vm` is null. */
   stalls: (vm: string | null, from: number, to: number, limit = 500) =>
     invoke<VmStall[]>('stalls', { vm, from, to, limit }),
+  /** A newer version than this one, if the last daily check found one (null with the check off). */
+  updateAvailable: () => invoke<Update | null>('update_available'),
 };
+
+/** A newer Lima Desktop (updates.rs): its version ("0.3.0") and its release page on GitHub. */
+export interface Update {
+  version: string;
+  url: string;
+}
 
 /** Is `action` locked by the instance's marker (or `limactl protect`)? */
 export function locked(inst: Instance, action: string): boolean {

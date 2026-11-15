@@ -3,7 +3,8 @@
 // made to exercise the UI: a VM past three quarters of its memory (a leak) with a container restarted after growing for hours, a CPU-bound one with
 // an OOM kill and a stall from memory, one with a nearly full disk and a managed-by marker, one whose podman is
 // too old and that has stopped responding, an idle one, and stopped and broken ones; image stores with superseded tags, dangling images and
-// an image with two tags, and volumes some no container uses (anonymous ones among them). Every value is a function of the entity and the time,
+// an image with two tags, and volumes some no container uses (anonymous ones among them); and the computer's
+// busiest apps besides the VMs, as the menu bar's popover lists them. Every value is a function of the entity and the time,
 // so two runs at the same (fixed) time draw the same picture.
 (() => {
   const GiB = 1024 ** 3;
@@ -145,6 +146,8 @@
       store_used: scaled(shape.disk, inst.disk),
       store_size: inst.disk - 0.1 * GiB,
       host_rss: scaled(shape.hostRss ?? shape.mem, mem * 0.9),
+      // Its share of the memory in use: its compressed memory at the size the compressor keeps it in.
+      host_mem: scaled(shape.hostRss ?? shape.mem, mem * 0.9 * 0.8),
       host_cpu_mc: scaled(shape.cpu, inst.cpus * 1100),
       host_disk_alloc: scaled(shape.disk, inst.disk * 1.05),
     }, o.silent);
@@ -205,11 +208,13 @@
       instance('quill', 'Running', 4, 8, 60, {
         marker: marker({ state: 'active', manager: 'foldyard', group: 'quill', hint: 'Use `fy` to stop or delete it.', locked: ['stop', 'delete', 'resize'], source: 'file' }),
       }),
-      { cpu: shapes.bursty(0.01, 0.2, 0.08), mem: shapes.flat(0.3, 0.02), disk: shapes.filling(0.48, 0.83, NOW) },
-      [container('quill-devbox', local('quill-devbox-packages'), { memMiB: 2300, upHours: 15 }), container('wasm-build', local('wasm-builder'), { state: 'exited' })],
+      // On this computer, a little more than its guest uses: its devbox, measured inside, is part of it.
+      { cpu: shapes.bursty(0.01, 0.2, 0.08), mem: shapes.flat(0.3, 0.02), hostRss: shapes.flat(0.36, 0.02), disk: shapes.filling(0.48, 0.83, NOW) },
+      [container('quill-devbox', local('quill-devbox-packages'), { memMiB: 2300, upHours: 15, cpu: shapes.flat(0.002, 0.001) }), container('wasm-build', local('wasm-builder'), { state: 'exited' })],
     ),
-    vm(instance('lantern', 'Running', 8, 16, 60), { cpu: shapes.flat(0.006, 0.004), mem: shapes.flat(0.06, 0.004), disk: shapes.flat(0.14, 0) }, [
-      container('lantern-devbox', local('lantern-devbox-packages'), { memMiB: 895, upHours: 15 }),
+    vm(instance('lantern', 'Running', 8, 16, 60), { cpu: shapes.flat(0.006, 0.004), mem: shapes.flat(0.06, 0.004), hostRss: shapes.flat(0.085, 0.004), disk: shapes.flat(0.14, 0) }, [
+      // Idle as its VM is: a container never uses more than the VM it's in.
+      container('lantern-devbox', local('lantern-devbox-packages'), { memMiB: 895, upHours: 15, cpu: shapes.flat(0.002, 0.001) }),
     ]),
     vm(instance('ember', 'Running', 2, 4, 20), { cpu: shapes.flat(0.02, 0.01), mem: shapes.flat(0.21, 0.01), disk: shapes.flat(0.36, 0) }, [], {
       podmanError: 'podman 4.3.1 in this VM is too old: Lima Desktop needs podman 5 or newer',
@@ -222,6 +227,92 @@
     vm(instance('relic', 'Broken', 2, 2, 20)),
   ];
 
+  // The whole computer (collector.rs HostLive): 128 GiB, 16 cores and a 1 TB disk (994.7 GB as Finder
+  // says it, 926.4 GiB), as `host` says.
+  // Its use is the VMs' own costs on it (each VM's host_* readings, a stopped VM's disk image too)
+  // and everything else this computer does: a steady 19 GiB or so of memory, a few busy cores now and
+  // then, and the rest of a disk with under 50 GB free, so the disk tab warns.
+  const HOST = { cpus: 16, memory: 128 * GiB, disk: 994.66e9 };
+  const runningFleet = () => fleet.filter((v) => v.entity);
+  const vmCost = (key, t) => runningFleet().reduce((sum, v) => sum + metricsOf.get(v.entity)[key](t), 0);
+  const imagesAtRest = () => fleet.filter((v) => !v.entity).reduce((sum, v) => sum + (v.latest.host_disk_alloc ?? 0), 0);
+  const rest = {
+    mem: scaled(shapes.flat(0.15, 0.04), HOST.memory),
+    cpu: scaled(shapes.bursty(0.1, 0.3, 0.2), HOST.cpus * 1000),
+    disk: scaled(shapes.filling(0.7, 0.715, NOW), HOST.disk),
+  };
+  let hostEntity;
+  const hostMetrics = () => ({
+    mem_used: (t, id) => vmCost('host_mem', t) + rest.mem(t, id),
+    mem_total: HOST.memory,
+    // The kernel's, the GPU's and drivers': part of everything else, as none of it is a VM's.
+    mem_wired: (t, id) => 5.2 * GiB + (noise(id, 3, t / 60_000) - 0.5) * 0.4 * GiB,
+    mem_compressed: (t, id) => 1.4 * GiB + rest.mem(t, id) * 0.05,
+    mem_stored: (t, id) => (1.4 * GiB + rest.mem(t, id) * 0.05) * 1.6,
+    cpu_mc: (t, id) => vmCost('host_cpu_mc', t) + rest.cpu(t, id),
+    cpu_total_mc: HOST.cpus * 1000,
+    disk_used: (t, id) => vmCost('host_disk_alloc', t) + imagesAtRest() + rest.disk(t, id),
+    disk_total: HOST.disk,
+  });
+
+  // The menu bar's stack (commands::host_stack): the computer's use and size (and for memory, its
+  // wired part) and each running VM's own cost, averaged over the same buckets; a stopped VM has no
+  // history. A bucket is never narrower than the samples are apart, with a quarter to spare.
+  const STACK_KEYS = { mem: ['mem_used', 'mem_total', 'host_mem'], cpu: ['cpu_mc', 'cpu_total_mc', 'host_cpu_mc'], disk: ['disk_used', 'disk_total', 'host_disk_alloc'] };
+  hostEntity = entity(hostMetrics());
+
+  function hostStack({ metric, from, to, points = 120 }) {
+    const [usedKey, totalKey, vmKey] = STACK_KEYS[metric];
+    const lo = Math.max(from, START);
+    const step = Math.max(1250 * settings.intervalSecs, (to - lo) / points);
+    const ts = [];
+    for (let t = lo; t + step <= to + 1; t += step) ts.push(Math.round(t));
+    const samples = (f, t) => [0, 1, 2, 3, 4].map((i) => f(t + (step * i) / 5));
+    const avg = (f) => ts.map((t) => Math.round(samples(f, t).reduce((a, b) => a + b, 0) / 5));
+    const host = metricsOf.get(hostEntity);
+    return {
+      ts,
+      used: avg(host[usedKey]),
+      total: avg(host[totalKey]),
+      ...(metric === 'mem' ? { wired: avg(host.mem_wired) } : {}),
+      vms: runningFleet().map((v) => {
+        const f = metricsOf.get(v.entity)[vmKey];
+        return { name: v.instance.name, avg: avg(f), peak: Math.round(Math.max(...ts.flatMap((t) => samples(f, t)))) };
+      }),
+    };
+  }
+
+  // The busiest apps besides the VMs (commands::top_apps): memory as each app's processes' footprints
+  // added up, CPU in millicores, a little different each minute. CPU needs two samples, so the first
+  // asking after a while (as when the popover is first shown) has none yet, as the backend's.
+  // Another user's processes have no footprint to read, so nothing reported beside them.
+  const UNREPORTED = new Set(['WindowServer', 'kernel_task']);
+  const APPS = [
+    // name, processes, memory (GiB), CPU (cores)
+    ['Google Chrome', 38, 5.4, 0.8],
+    ['Visual Studio Code', 21, 1.9, 0.25],
+    ['Slack', 7, 1.3, 0.12],
+    ['WindowServer', 1, 1.1, 0.45],
+    ['Mail', 4, 0.6, 0.02],
+    ['kernel_task', 1, 0.4, 0.35],
+    ['Lima Desktop', 3, 0.25, 0.04],
+    ['Finder', 1, 0.2, 0.01],
+  ];
+  let appsSampledAt = -Infinity;
+  function topApps({ metric, n = 5 }) {
+    const t = Date.now();
+    const pending = metric === 'cpu' && performance.now() - appsSampledAt > 25_000;
+    appsSampledAt = performance.now();
+    if (pending) return { apps: [], pending: true };
+    const apps = APPS.map(([name, processes, mem, cpu], i) => {
+      const value = Math.round(metric === 'mem' ? mem * GiB * (0.95 + 0.1 * noise(i, t / 60_000)) : cpu * 1000 * (0.6 + 0.8 * noise(i, 9, t / 60_000)));
+      // What Activity Monitor says: the footprints, compressed memory at full size.
+      const reported = metric === 'mem' && !UNREPORTED.has(name) ? Math.round(value * 1.15) : undefined;
+      return { name, processes, value, ...(reported != null && { reported }) };
+    });
+    return { apps: apps.sort((a, b) => b.value - a.value).slice(0, n), pending: false };
+  }
+
   function snapshot() {
     const t = Date.now();
     return {
@@ -230,22 +321,55 @@
         latest: v.entity ? latest(v.entity, t) : v.latest,
         containers: v.containers.map((c) => ({ ...c, latest: c.state === 'running' ? latest(c.entity, t) : {} })),
       })),
-      host: { cpus: 16, memory: 128 * GiB, disk: 994 * GiB },
+      host: HOST,
       limaProblem: null,
       updated: t,
       storeBytes: 412 * MiB,
       retention: { rawDays: 7, rollupDays: 365 },
       intervalSecs: settings.intervalSecs,
+      hostUse: { entity: hostEntity, latest: latest(hostEntity, t) },
     };
   }
 
-  // As settings.rs: one of the intervals offered, or refused.
-  const settings = { intervalSecs: 1, theme: 'system' };
+  // As settings.rs: one of the intervals and warnings offered, or refused.
+  const settings = {
+    intervalSecs: 1,
+    theme: 'system',
+    menuBar: {
+      memory: { drawing: 'trace', figure: true },
+      cpu: { drawing: 'trace', figure: true },
+      disk: { drawing: 'bar', figure: true },
+      names: true,
+      warn: { memoryPct: 75, cpuPct: 75, diskFreeGb: 50 },
+    },
+    keepRunning: true,
+  };
+  // Looking for new versions is on unless switched off; a test can switch it off before the app
+  // loads through __fakeSettings.
+  settings.checkUpdates = true;
+  window.__fakeSettings = settings;
+  const ITEMS = ['memory', 'cpu', 'disk'];
+  const copyMenuBar = (m) => ({ ...m, ...Object.fromEntries(ITEMS.map((k) => [k, { ...m[k] }])), warn: { ...m.warn } });
+  const WARN_PCTS = [50, 60, 70, 75, 80, 85, 90, 95];
+  const WARN_FREE_GB = [10, 25, 50, 100, 200];
+  const copy = () => ({ ...settings, menuBar: copyMenuBar(settings.menuBar) });
   function setSettings({ settings: s }) {
     if (![1, 2, 5, 10].includes(s.intervalSecs)) throw `${s.intervalSecs} s isn't one of the intervals offered (1 s, 2 s, 5 s, 10 s)`;
     if (!['system', 'light', 'dark'].includes(s.theme)) throw `unknown variant \`${s.theme}\``;
-    Object.assign(settings, s);
-    return { ...settings };
+    for (const k of ITEMS) {
+      const item = s.menuBar?.[k];
+      if (!['off', 'trace', 'bar'].includes(item?.drawing)) throw `unknown variant \`${item?.drawing}\``;
+      if (typeof item.figure !== 'boolean') throw 'invalid type: expected a boolean';
+    }
+    for (const pct of [s.menuBar.warn?.memoryPct, s.menuBar.warn?.cpuPct]) {
+      if (pct != null && !WARN_PCTS.includes(pct)) throw `${pct} % isn't one of the warnings offered (${WARN_PCTS.map((p) => `${p} %`).join(', ')})`;
+    }
+    const gb = s.menuBar.warn?.diskFreeGb;
+    if (gb != null && !WARN_FREE_GB.includes(gb)) throw `${gb} GB free isn't one of the warnings offered (${WARN_FREE_GB.map((g) => `${g} GB`).join(', ')})`;
+    if (typeof s.menuBar.names !== 'boolean' || typeof s.keepRunning !== 'boolean') throw 'invalid type: expected a boolean';
+    if (typeof s.checkUpdates !== 'boolean') throw 'invalid type: expected a boolean';
+    Object.assign(settings, s, { menuBar: copyMenuBar(s.menuBar) });
+    return copy();
   }
 
   // Each point's band: five sub-samples spread across the point's span, leaving out those taken
@@ -253,7 +377,7 @@
   function series({ entity: id, from, to, points = 600 }) {
     const metrics = metricsOf.get(id) ?? {};
     const lo = Math.max(from, START);
-    const step = Math.max(60_000, (to - lo) / points);
+    const step = Math.max(1250 * settings.intervalSecs, (to - lo) / points);
     const ts = [];
     for (let t = lo + step; t <= to; t += step) ts.push(Math.round(t));
     const out = {};
@@ -451,7 +575,7 @@
   const later = (value) => new Promise((resolve) => setTimeout(() => resolve(value), 150));
   const commands = {
     snapshot,
-    settings: () => ({ ...settings }),
+    settings: () => copy(),
     set_settings: (args) => later(setSettings(args)),
     // A test can set __fakeSeries to stand between the app and an answer: to change it, or have it
     // land late (a promise), so answers arrive out of order.
@@ -480,6 +604,15 @@
     guest_file: (args) => later(guestFile(args)),
     container_logs: ({ id }) => containerLogs(id),
     container_inspect: ({ id }) => ({ Id: id, State: { Status: 'running' } }),
+    // A newer version only when a test sets __fakeUpdate ({ version, url }), so the gallery's
+    // pictures don't carry the notice; none with the check off, as updates.rs. Each asking is in
+    // __fakeCalls, so a test can wait for an answer that shows nothing.
+    update_available: (args) => {
+      calls.push({ cmd: 'update_available', args });
+      return settings.checkUpdates ? (window.__fakeUpdate ?? null) : null;
+    },
+    // The opener plugin's command (a link opened in the browser): a test reads it from __fakeCalls.
+    'plugin:opener|open_url': (args) => void calls.push({ cmd: 'open_url', args }),
     vm_action: () => later(),
     vm_resize: () => later(),
     container_action: () => later(),
@@ -487,12 +620,43 @@
     images_prune: () => later({ removed: 1, reclaimed: 2.5 * GiB, errors: [] }),
     volume_remove: () => later(),
     volumes_prune: () => later({ removed: 1, reclaimed: 1260 * MiB, errors: [] }),
+    host_stack: (args) => hostStack(args),
+    // A test can set __fakeTopApps to stand between the app and an answer (to have it fail, say).
+    top_apps: (args) => (window.__fakeTopApps ? window.__fakeTopApps(args, () => topApps(args)) : topApps(args)),
+    // The window commands do nothing here; a test reads what was asked from __fakeCalls.
+    open_main: (args) => void calls.push({ cmd: 'open_main', args }),
+    quit: (args) => void calls.push({ cmd: 'quit', args }),
+    fit_popover: (args) => void calls.push({ cmd: 'fit_popover', args }),
+  };
+  const calls = (window.__fakeCalls = []);
+
+  // Events from the backend, as Tauri's event plugin delivers them: what the page listens for, and
+  // `__fakeEmit(event, payload)` for a test to send one (as the backend does the popover's tab).
+  const callbacks = new Map();
+  const listeners = new Map(); // id → { event, handler }
+  let nextId = 1;
+  Object.assign(commands, {
+    'plugin:event|listen': ({ event, handler }) => {
+      const id = nextId++;
+      listeners.set(id, { event, handler });
+      return id;
+    },
+    'plugin:event|unlisten': ({ eventId }) => void listeners.delete(eventId),
+  });
+  window.__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener: (_event, id) => listeners.delete(id) };
+  window.__fakeEmit = (event, payload) => {
+    for (const [id, l] of listeners) if (l.event === event) callbacks.get(l.handler)?.({ event, id, payload });
   };
 
   window.__TAURI_INTERNALS__ = {
     invoke: async (cmd, args = {}) => {
       if (!(cmd in commands)) throw new Error(`fake backend: no command '${cmd}'`);
       return commands[cmd](args);
+    },
+    transformCallback: (callback) => {
+      const id = nextId++;
+      callbacks.set(id, callback);
+      return id;
     },
   };
 })();

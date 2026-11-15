@@ -6,7 +6,7 @@
 //! VM Lima says is running whose probe falls silent is recorded as stalled (`stall.rs`).
 
 use serde::Serialize;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -21,7 +21,7 @@ use crate::oom::{self, OomEvent};
 use crate::podman::{Container, Libpod, PodmanError, RawStat};
 use crate::probe::{self, Block};
 use crate::stall::{self, Change, Watch};
-use crate::store::{ABSENT, CT_METRICS, Kind, Store, VM_METRICS};
+use crate::store::{ABSENT, CT_METRICS, HOST_METRICS, Kind, Store, VM_METRICS};
 
 const LIST_EVERY: Duration = Duration::from_secs(3);
 /// How often each VM's container list is read again, at most (and at least once a stats tick).
@@ -152,6 +152,17 @@ pub struct Snapshot {
     pub retention: Option<Retention>,
     /// Seconds between measurements of each running VM; the UI polls at the same pace.
     pub interval_secs: u64,
+    /// What the whole computer is using now; `None` before its first reading.
+    pub host_use: Option<HostLive>,
+}
+
+/// The whole computer's latest reading (`host_use.rs`), named by `HOST_METRICS`, and the entity
+/// its history is kept under.
+#[derive(Debug, Clone, Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct HostLive {
+    pub entity: Option<i64>,
+    pub latest: HashMap<String, i64>,
 }
 
 /// A kill the counters saw, waiting for the journal reader: it becomes an event of its own only
@@ -170,6 +181,8 @@ struct VmState {
     oom_pending: Vec<PendingKill>,
     oom_wake: Arc<Notify>,
     stall: Watch,
+    /// The host process its guest runs in (`host_proc`), as last found by the probe loop.
+    guest_pid: Option<u32>,
     workers: Vec<JoinHandle<()>>,
 }
 
@@ -187,6 +200,7 @@ pub struct Collector {
     lima_problem: Mutex<Option<lima::LimaProblem>>,
     retention: Retention,
     host: Mutex<Option<Host>>,
+    host_use: Mutex<Option<HostLive>>,
     /// Seconds between measurements; the loops watch it and follow a change at once.
     interval: watch::Sender<u64>,
 }
@@ -199,6 +213,7 @@ impl Collector {
             lima_problem: Mutex::new(None),
             retention,
             host: Mutex::new(None),
+            host_use: Mutex::new(None),
             interval: watch::Sender::new(1),
         })
     }
@@ -232,6 +247,7 @@ impl Collector {
             store_bytes: self.store().file_size().unwrap_or(0),
             retention: Some(self.retention),
             interval_secs: self.interval_secs(),
+            host_use: self.host_use.lock().expect("lock").clone(),
         }
     }
 
@@ -253,6 +269,7 @@ impl Collector {
 
     /// Start the background loops on the current tokio runtime.
     pub fn start(self: &Arc<Self>) {
+        tauri::async_runtime::spawn(self.clone().host_loop());
         let me = self.clone();
         tauri::async_runtime::spawn(async move {
             loop {
@@ -330,6 +347,7 @@ impl Collector {
                 oom_pending: Vec::new(),
                 oom_wake: Arc::new(Notify::new()),
                 stall: Watch::default(),
+                guest_pid: None,
                 workers: Vec::new(),
             });
             state.live.instance = inst;
@@ -364,7 +382,7 @@ impl Collector {
             // Stopped, a VM still takes its disk image's real size on this computer: the one
             // reading it has. (A running VM's comes with each probe row.)
             if !running {
-                match disk_image_alloc(&state.live.instance) {
+                match disk_image_alloc(Path::new(&state.live.instance.dir)) {
                     0 => state.live.latest.remove("host_disk_alloc"),
                     alloc => state
                         .live
@@ -381,6 +399,30 @@ impl Collector {
             .expect("vms lock")
             .get(name)
             .map(|v| v.live.instance.clone())
+    }
+
+    /// The host processes each running VM's own cost is measured from (`host_columns`): its guest's
+    /// process and Lima's host agent and driver. Their use is already the VMs' bands in the menu
+    /// bar's popover, so its list of what else is running leaves them out.
+    /// The share of its size the compressor keeps what it holds in, as last read
+    /// (`host_use::squeeze`), so a process's memory can be counted as the computer's use counts it.
+    pub fn squeeze(&self) -> Option<f64> {
+        let host = self.host_use.lock().expect("lock");
+        let get = |k: &str| host.as_ref()?.latest.get(k).copied();
+        crate::host_use::squeeze(get("mem_compressed")?, get("mem_stored")?)
+    }
+
+    pub fn vm_host_pids(&self) -> HashSet<u32> {
+        let vms = self.vms.lock().expect("vms lock");
+        vms.values()
+            .filter(|v| v.live.instance.running())
+            .flat_map(|v| {
+                let i = &v.live.instance;
+                [Some(i.driver_pid), Some(i.host_agent_pid), v.guest_pid]
+            })
+            .flatten()
+            .filter(|&p| p > 0)
+            .collect()
     }
 
     fn set_vm<F: FnOnce(&mut VmState)>(&self, name: &str, f: F) {
@@ -423,6 +465,8 @@ impl Collector {
 
     async fn probe_loop(self: Arc<Self>, name: String) {
         let mut sys = sysinfo::System::new().ok();
+        // Found once, from the instance's files it holds open; looked for again only if it goes.
+        let mut vm_proc = self.instance(&name).map(|i| crate::host_proc::VmProcess::new(i.dir));
         let mut interval = self.interval.subscribe();
         // The last block before a restart for a new interval, so the first block after it still
         // has a rate. (After a failure there's none: the VM may have rebooted.)
@@ -462,7 +506,8 @@ impl Collector {
             let n = name.clone();
             let reading = probe::read_blocks(stdout, |block| {
                 let mut row = probe::vm_row(prev.as_ref(), &block, inst.cpus);
-                host_columns(&mut row, &inst, sys.as_mut());
+                let vm_pid = vm_proc.as_mut().and_then(|p| p.pid(Instant::now()));
+                host_columns(&mut row, &inst, sys.as_mut(), vm_pid, me.squeeze());
                 let ts = now_ms();
                 if let Some(id) = entity {
                     me.store().ingest(id, ts, row.clone());
@@ -474,6 +519,7 @@ impl Collector {
                     .unwrap_or_default();
                 let uptime = block.uptime;
                 me.set_vm(&n, |v| {
+                    v.guest_pid = vm_pid;
                     v.live.latest = named(VM_METRICS, &row);
                     v.live.probe_error = None;
                     v.cgroups = cgroups;
@@ -506,6 +552,45 @@ impl Collector {
             let last = last.to_string();
             self.set_vm(&name, |v| v.live.probe_error = Some(last));
             tokio::time::sleep(PROBE_RETRY).await;
+        }
+    }
+
+    /// The whole computer, at the measuring interval: its memory, CPU, and the disk Lima's
+    /// instances are on (once one says where).
+    async fn host_loop(self: Arc<Self>) {
+        let mut reader = crate::host_use::Reader::new();
+        // Asked for again each time until the store gives it: storage that failed once may recover.
+        let mut entity = None;
+        let mut said = false;
+        let mut every = self.interval.subscribe();
+        let mut interval = stats_interval(*every.borrow_and_update());
+        loop {
+            if every.has_changed().unwrap_or(false) {
+                interval = stats_interval(*every.borrow_and_update());
+            }
+            interval.tick().await;
+            let lima_dir = {
+                let vms = self.vms.lock().expect("vms lock");
+                vms.values().map(|v| v.live.instance.dir.clone()).find(|d| !d.is_empty())
+            };
+            let row = reader.read(lima_dir.as_deref().map(Path::new)).row();
+            if entity.is_none() {
+                match self.store().entity(Kind::Host, "", "host", "this computer", now_ms()) {
+                    Ok(id) => entity = Some(id),
+                    Err(e) if !said => {
+                        log::error!("recording the computer's use: {e}");
+                        said = true;
+                    }
+                    Err(_) => {}
+                }
+            }
+            if let Some(id) = entity {
+                self.store().ingest(id, now_ms(), row.clone());
+            }
+            *self.host_use.lock().expect("lock") = Some(HostLive {
+                entity,
+                latest: named(HOST_METRICS, &row),
+            });
         }
     }
 
@@ -749,10 +834,19 @@ fn counter_events(vm: &str, pending: Vec<PendingKill>, reason: &str) -> Vec<OomE
         .collect()
 }
 
-/// Host-side columns for a VM row: the hypervisor's RSS and CPU (Lima's driver process — on vz
-/// the VM runs inside the host agent, so its pid is the driver's too) and the disk image's real,
-/// allocated size (a sparse file's blocks, not its virtual length).
-fn host_columns(row: &mut [i64], inst: &Instance, sys: Option<&mut sysinfo::System>) {
+/// Host-side columns for a VM row: what it costs this computer in memory and CPU — the process the
+/// guest runs in (`host_proc`), plus Lima's host agent and driver — and the disk image's real,
+/// allocated size (a sparse file's blocks, not its virtual length). Memory twice: `host_rss`, each
+/// process's physical footprint where the OS keeps one (as Activity Monitor shows it), else its
+/// resident memory; and `host_mem`, its share of the computer's memory in use, its compressed
+/// memory counted at the compressor's `squeeze` (`host_proc::in_use`).
+fn host_columns(
+    row: &mut [i64],
+    inst: &Instance,
+    sys: Option<&mut sysinfo::System>,
+    vm_pid: Option<u32>,
+    squeeze: Option<f64>,
+) {
     let col = |name: &str| {
         VM_METRICS
             .iter()
@@ -762,9 +856,11 @@ fn host_columns(row: &mut [i64], inst: &Instance, sys: Option<&mut sysinfo::Syst
     if let Some(sys) = sys {
         let mut pids: Vec<sysinfo::Pid> = [inst.driver_pid, inst.host_agent_pid]
             .into_iter()
+            .chain(vm_pid)
             .filter(|&p| p > 0)
             .map(sysinfo::Pid::from_u32)
             .collect();
+        pids.sort();
         pids.dedup();
         if !pids.is_empty() {
             sys.refresh_processes_specifics(
@@ -774,32 +870,36 @@ fn host_columns(row: &mut [i64], inst: &Instance, sys: Option<&mut sysinfo::Syst
                     .with_memory()
                     .with_cpu(),
             );
-            let (mut rss, mut cpu, mut seen) = (0u64, 0f32, false);
+            let (mut rss, mut mem, mut cpu, mut seen) = (0u64, 0u64, 0f32, false);
             for pid in &pids {
                 if let Some(p) = sys.process(*pid) {
-                    rss += p.memory();
+                    let footprint = crate::host_proc::footprint(pid.as_u32());
+                    rss += footprint.unwrap_or_else(|| p.memory());
+                    mem += crate::host_proc::in_use(footprint, p.memory(), squeeze);
                     cpu += p.cpu_usage();
                     seen = true;
                 }
             }
             if seen {
                 row[col("host_rss")] = rss as i64;
+                row[col("host_mem")] = mem as i64;
                 row[col("host_cpu_mc")] = (cpu * 10.0).round() as i64;
             }
         }
     }
-    let alloc = disk_image_alloc(inst);
+    let alloc = disk_image_alloc(Path::new(&inst.dir));
     if alloc > 0 {
         row[col("host_disk_alloc")] = alloc as i64;
     }
 }
 
 /// The bytes an instance's disk image really takes on the host: a sparse file's blocks, not its
-/// virtual length. 0 when there is no image to measure.
-fn disk_image_alloc(inst: &Instance) -> u64 {
-    ["diffdisk", "basedisk"]
+/// virtual length. 0 when there is no image to measure. Lima 2 calls the image `disk`; Lima 1
+/// called it `diffdisk`, over a `basedisk`.
+fn disk_image_alloc(dir: &Path) -> u64 {
+    ["disk", "diffdisk", "basedisk"]
         .iter()
-        .filter_map(|f| std::fs::metadata(Path::new(&inst.dir).join(f)).ok())
+        .filter_map(|f| std::fs::metadata(dir.join(f)).ok())
         .map(|m| m.blocks() * 512)
         .sum()
 }
@@ -851,6 +951,29 @@ pub fn container_row(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_disk_image_is_measured_by_what_it_takes_by_either_lima_s_name() {
+        use std::io::Write;
+        let write = |dir: &Path, name: &str, bytes: usize| {
+            std::fs::File::create(dir.join(name)).unwrap().write_all(&vec![1u8; bytes]).unwrap();
+        };
+        let lima2 = tempfile::tempdir().unwrap();
+        write(lima2.path(), "disk", 1 << 20);
+        let got = super::disk_image_alloc(lima2.path());
+        assert!((1 << 20..2 << 20).contains(&got), "{got}");
+
+        let lima1 = tempfile::tempdir().unwrap();
+        write(lima1.path(), "diffdisk", 1 << 20);
+        write(lima1.path(), "basedisk", 1 << 20);
+        assert!(super::disk_image_alloc(lima1.path()) >= 2 << 20);
+
+        // A sparse image counts the blocks written, not its length.
+        let sparse = tempfile::tempdir().unwrap();
+        std::fs::File::create(sparse.path().join("disk")).unwrap().set_len(10 << 30).unwrap();
+        assert!(super::disk_image_alloc(sparse.path()) < 1 << 20);
+        assert_eq!(super::disk_image_alloc(Path::new("/nonexistent")), 0);
+    }
+
     use super::*;
 
     #[test]

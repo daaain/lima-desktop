@@ -10,7 +10,7 @@ rather than a row each. A row per sample would be ~8 GB.
 
 | entity | metrics | series |
 | --- | --- | --- |
-| VM (×10) | 16 — guest CPU, memory used/available/total, swap, PSI memory some/full, PSI CPU, OOM kills, root and container-store disk used/size, and host-side hypervisor RSS, CPU and allocated disk | 160 |
+| VM (×10) | 16 — guest CPU, memory used/available/total, swap, PSI memory some/full, PSI CPU, OOM kills, root and container-store disk used/size, and host-side memory footprint, CPU and allocated disk | 160 |
 | container (×100) | 10 — CPU, memory, limit, peak, OOM kills, pids, net rx/tx, block read/write | 1,000 |
 
 1,160 series × 604,800 s ≈ **700 M samples a week**.

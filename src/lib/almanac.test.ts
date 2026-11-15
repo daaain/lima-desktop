@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   bandPeak, bandRise, containersHeadline, containersSentence, countWord, exitedSentence, fullWindow, holdsSentence, intervalPhrase, ownLimit, pressureSentence, rowMemory,
-  runsSentence, fleetHeadline, hostBar, quarters, selfMemory, share, shareChart, shareTip, sketch, unusedHeadline, unusedLede, vmHeadline, vmSentence,
+  runsSentence, fleetHeadline, hostBar, hostRamSentence, quarters, selfMemory, share, shareChart, shareTip, sketch, unusedHeadline, unusedLede, vmHeadline, vmSentence,
 } from './almanac';
 import type { Hint } from './rightsize';
 import { container, vm } from './testing';
@@ -422,5 +422,21 @@ describe('pressureSentence', () => {
   it('says what waited, and the worst of it, over the range', () => {
     expect(pressureSentence(sum(30, 250), '24h')).toBe('In the last 24 h, work waited on CPU up to 3.0 % of the time, and on memory up to 25.0 %.');
     expect(pressureSentence(sum(0, 250), '7d')).toBe('In the last 7 days, work waited on memory up to 25.0 % of the time.');
+  });
+});
+
+describe('hostRamSentence', () => {
+  const on = (name: string, rss: number, mem?: number) => running(name, 1, { host_rss: rss * GiB, ...(mem != null && { host_mem: mem * GiB }) });
+
+  it("says what the running VMs hold of this computer's RAM, and how much less with compressed memory at its compressed size", () => {
+    expect(hostRamSentence([on('a', 47.1, 33), on('b', 16.2, 12)])).toBe(
+      "The running VMs hold 63.3 GiB of this computer's RAM, as Activity Monitor counts it; 45.0 GiB with what macOS has compressed counted at its compressed size.",
+    );
+  });
+
+  it('says nothing where compression changes nothing, or before both were measured', () => {
+    expect(hostRamSentence([on('a', 8, 8)])).toBeNull();
+    expect(hostRamSentence([on('a', 8)])).toBeNull();
+    expect(hostRamSentence([])).toBeNull();
   });
 });

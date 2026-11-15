@@ -2,6 +2,7 @@
   import '@fontsource-variable/inter';
   import '@fontsource-variable/newsreader/opsz.css';
   import { onMount } from 'svelte';
+  import { page } from '$app/state';
   import { api } from '$lib/api';
   import { live } from '$lib/live.svelte';
   import { followPodman } from '$lib/podmanLists.svelte';
@@ -10,14 +11,20 @@
   import LimaProblem from '$lib/LimaProblem.svelte';
   import Tooltip from '$lib/Tooltip.svelte';
   let { children } = $props();
+  // The menu bar's popover is a window of its own that only ever shows /menubar: just the page, which
+  // polls what it needs itself, without the masthead or what the main window keeps up to date.
+  const popover = page.route.id === '/menubar';
   onMount(() => {
-    live.start();
+    if (!popover) live.start();
     // Settings has the say; what app.html put on <html> was only last time's.
     api.settings().then((s) => theme.apply(s.theme), () => {});
   });
-  followPodman();
+  if (!popover) followPodman();
 </script>
 
+{#if popover}
+  {@render children()}
+{:else}
 <div class="app">
   <Masthead />
   {#if live.snapshot?.limaProblem}
@@ -28,6 +35,7 @@
   {/if}
   <main>{@render children()}</main>
 </div>
+{/if}
 <Tooltip />
 
 <style>
