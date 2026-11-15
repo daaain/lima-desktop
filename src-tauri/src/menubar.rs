@@ -10,7 +10,7 @@
 //! (three quarters unless chosen otherwise), the disk with less than so many GB free. Elsewhere the
 //! image is the drawing alone and the figure its title.
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::time::{Duration, Instant};
@@ -122,6 +122,12 @@ pub fn share(used: Option<i64>, total: Option<i64>, vms: impl Iterator<Item = i6
     })
 }
 
+/// A VM's part of the memory in use: its share (`host_mem`, its compressed memory at the compressor's
+/// size, as the computer's use counts it), else, before that was measured, its footprint.
+fn vm_memory(latest: &HashMap<String, i64>) -> Option<i64> {
+    latest.get("host_mem").or_else(|| latest.get("host_rss")).copied()
+}
+
 /// Memory, CPU and disk from a snapshot: memory and CPU from the running VMs, disk from every VM
 /// (a stopped one's image still takes its space).
 pub fn shares(s: &Snapshot) -> [Option<Share>; 3] {
@@ -131,7 +137,7 @@ pub fn shares(s: &Snapshot) -> [Option<Share>; 3] {
     let h = |k: &str| host.latest.get(k).copied();
     let running = || s.vms.iter().filter(|v| v.instance.running());
     [
-        share(h("mem_used"), h("mem_total"), running().filter_map(|v| v.latest.get("host_rss").copied())),
+        share(h("mem_used"), h("mem_total"), running().filter_map(|v| vm_memory(&v.latest))),
         share(h("cpu_mc"), h("cpu_total_mc"), running().filter_map(|v| v.latest.get("host_cpu_mc").copied())),
         share(h("disk_used"), h("disk_total"), s.vms.iter().filter_map(|v| v.latest.get("host_disk_alloc").copied())),
     ]
@@ -1341,5 +1347,13 @@ mod tests {
             Drawing::Trace => "trace",
             Drawing::Bar => "bar",
         }
+    }
+
+    #[test]
+    fn a_vm_s_memory_is_its_share_of_the_use_else_its_footprint() {
+        let latest = |kv: &[(&str, i64)]| kv.iter().map(|(k, v)| (k.to_string(), *v)).collect::<HashMap<_, _>>();
+        assert_eq!(vm_memory(&latest(&[("host_mem", 25), ("host_rss", 40)])), Some(25));
+        assert_eq!(vm_memory(&latest(&[("host_rss", 40)])), Some(40));
+        assert_eq!(vm_memory(&latest(&[])), None);
     }
 }
