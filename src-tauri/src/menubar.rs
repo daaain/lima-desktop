@@ -796,17 +796,21 @@ fn toggle_popover(app: &AppHandle, res: Res, rect: tauri::Rect) {
     match popover.click(res, shown, Instant::now()) {
         Click::Nothing => {}
         Click::Hide => hide_popover(app),
-        Click::Show => {
-            let w = match window.map_or_else(|| build_popover(app, res), Ok) {
-                Ok(w) => w,
-                Err(e) => {
-                    log::warn!("can't open the menu bar's popover: {e}");
-                    return;
-                }
-            };
-            show_popover(app, &w, res, rect);
-        }
+        Click::Show => open_popover(app, res, Some(rect)),
     }
+}
+
+/// Shows the popover on `res`'s tab, under the item at `item` (none: see [`place_alone`]), making
+/// its window the first time.
+fn open_popover(app: &AppHandle, res: Res, item: Option<tauri::Rect>) {
+    let w = match app.get_webview_window(POPOVER).map_or_else(|| build_popover(app, res), Ok) {
+        Ok(w) => w,
+        Err(e) => {
+            log::warn!("can't open the menu bar's popover: {e}");
+            return;
+        }
+    };
+    show_popover(app, &w, res, item);
 }
 
 /// The popover's window, hidden until it's put under an item. Its page opens on `res`'s tab; it's
@@ -852,22 +856,85 @@ struct PopoverShown {
     theme: crate::settings::Theme,
 }
 
-/// Puts the popover under the item at `rect`, on `res`'s tab, and gives it the focus: losing it
-/// hides the popover again, and WebKit follows the pointer (for hover) only in the key window of
-/// the active app. `set_focus` makes it key and asks for the app to be activated; macOS may say no
-/// to an activation that doesn't follow the person's own click.
-fn show_popover(app: &AppHandle, w: &tauri::WebviewWindow, res: Res, rect: tauri::Rect) {
+/// A rectangle on the screens, in physical pixels.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Area {
+    x: f64,
+    y: f64,
+    w: f64,
+    h: f64,
+}
+
+impl Area {
+    fn holds(&self, x: f64, y: f64) -> bool {
+        (self.x..self.x + self.w).contains(&x) && (self.y..self.y + self.h).contains(&y)
+    }
+}
+
+/// Between the popover and its item, and the popover and a screen's edge (logical pixels).
+const GAP: f64 = 4.0;
+
+/// Where the popover goes: centred under `item`, kept whole on `screen` (a screen left of the main
+/// one has negative coordinates). Physical pixels, at the screen's `scale`.
+fn place(item: Area, screen: Area, scale: f64) -> (f64, f64) {
+    let (width, gap) = (POPOVER_WIDTH * scale, GAP * scale);
+    let x = item.x + item.w / 2.0 - width / 2.0;
+    let x = x.clamp(screen.x + gap, (screen.x + screen.w - width - gap).max(screen.x + gap));
+    (x, item.y + item.h + gap)
+}
+
+/// Where the popover goes with no item to go under (on Linux, opened from a menu): the top right of
+/// the screen's work area.
+fn place_alone(work_area: Area, scale: f64) -> (f64, f64) {
+    let corner = Area { x: work_area.x + work_area.w, y: work_area.y, w: 0.0, h: 0.0 };
+    place(corner, work_area, scale)
+}
+
+/// A monitor's whole screen, or its work area (less the menu bar, panels and Dock).
+fn area_of(m: &tauri::Monitor, work: bool) -> Area {
+    let (x, y, w, h) = if work {
+        let a = m.work_area();
+        (a.position.x, a.position.y, a.size.width, a.size.height)
+    } else {
+        (m.position().x, m.position().y, m.size().width, m.size().height)
+    };
+    Area { x: x.into(), y: y.into(), w: w.into(), h: h.into() }
+}
+
+/// Puts the popover where it goes ([`place`]), on its item's screen, or with no item ([`place_alone`]),
+/// on the main one.
+fn position_popover(app: &AppHandle, w: &tauri::WebviewWindow, item: Option<tauri::Rect>) {
+    let monitors = app.available_monitors().unwrap_or_default();
+    let primary = app.primary_monitor().ok().flatten();
+    let (x, y) = match item {
+        Some(rect) => {
+            // The tray reports physical pixels; the scale only matters were it to say logical ones.
+            let scale = primary.as_ref().map_or(1.0, |m| m.scale_factor());
+            let pos = rect.position.to_physical::<f64>(scale);
+            let size = rect.size.to_physical::<f64>(scale);
+            let item = Area { x: pos.x, y: pos.y, w: size.width, h: size.height };
+            let middle = (item.x + item.w / 2.0, item.y + item.h / 2.0);
+            let Some(m) = monitors.iter().find(|m| area_of(m, false).holds(middle.0, middle.1)).or(primary.as_ref())
+            else {
+                return;
+            };
+            place(item, area_of(m, false), m.scale_factor())
+        }
+        None => {
+            let Some(m) = primary.as_ref().or(monitors.first()) else { return };
+            place_alone(area_of(m, true), m.scale_factor())
+        }
+    };
+    let _ = w.set_position(tauri::PhysicalPosition::new(x.round() as i32, y.round() as i32));
+}
+
+/// Puts the popover under the item at `item` (none: see [`place_alone`]), on `res`'s tab, and gives
+/// it the focus: losing it hides the popover again, and WebKit follows the pointer (for hover) only
+/// in the key window of the active app. `set_focus` makes it key and asks for the app to be
+/// activated; macOS may say no to an activation that doesn't follow the person's own click.
+fn show_popover(app: &AppHandle, w: &tauri::WebviewWindow, res: Res, item: Option<tauri::Rect>) {
     use tauri::Emitter as _;
-    let scale = app
-        .primary_monitor()
-        .ok()
-        .flatten()
-        .map_or(1.0, |m| m.scale_factor());
-    let pos = rect.position.to_logical::<f64>(scale);
-    let size = rect.size.to_logical::<f64>(scale);
-    let x = pos.x + size.width / 2.0 - POPOVER_WIDTH / 2.0;
-    let y = pos.y + size.height + 4.0;
-    let _ = w.set_position(tauri::LogicalPosition::new(x.max(0.0), y));
+    position_popover(app, w, item);
     if let Ok(t) = w.theme() {
         let _ = w.set_background_color(Some(background(t)));
     }
@@ -947,6 +1014,44 @@ mod tests {
     fn px(i: &Icon, x: u32, y: u32) -> [u8; 4] {
         let k = ((y * i.width + x) * 4) as usize;
         i.rgba[k..k + 4].try_into().unwrap()
+    }
+
+    /// A screen at `x`, 1000 by 800 physical pixels.
+    fn screen_at(x: f64) -> Area {
+        Area { x, y: 0.0, w: 1000.0, h: 800.0 }
+    }
+
+    #[test]
+    fn the_popover_goes_centred_under_its_item() {
+        let item = Area { x: 480.0, y: 0.0, w: 40.0, h: 24.0 };
+        assert_eq!(place(item, screen_at(0.0), 1.0), (500.0 - POPOVER_WIDTH / 2.0, 24.0 + GAP));
+        let (x, y) = place(Area { x: 960.0, y: 0.0, w: 80.0, h: 48.0 }, screen_at(0.0), 2.0);
+        assert_eq!(x, 0.0 + 1000.0 - 2.0 * (POPOVER_WIDTH + GAP), "kept whole on its screen");
+        assert_eq!(y, 48.0 + 2.0 * GAP, "the gap in the screen's own pixels");
+    }
+
+    // A screen left of the main one has negative coordinates: the popover stays on it.
+    #[test]
+    fn the_popover_stays_on_its_items_screen() {
+        let item = Area { x: -1000.0, y: 0.0, w: 40.0, h: 24.0 };
+        assert_eq!(place(item, screen_at(-1000.0), 1.0).0, -1000.0 + GAP);
+        let item = Area { x: -30.0, y: 0.0, w: 20.0, h: 24.0 };
+        assert_eq!(place(item, screen_at(-1000.0), 1.0).0, -POPOVER_WIDTH - GAP);
+    }
+
+    #[test]
+    fn with_no_item_the_popover_goes_top_right() {
+        let screen = Area { x: 1000.0, y: 30.0, w: 1000.0, h: 770.0 };
+        assert_eq!(place_alone(screen, 1.0), (2000.0 - POPOVER_WIDTH - GAP, 30.0 + GAP));
+    }
+
+    #[test]
+    fn an_item_is_on_the_screen_that_holds_its_middle() {
+        let screens = [screen_at(-1000.0), screen_at(0.0)];
+        let on = |x: f64| screens.iter().position(|s| s.holds(x, 10.0));
+        assert_eq!(on(-500.0), Some(0));
+        assert_eq!(on(0.0), Some(1));
+        assert_eq!(on(1000.0), None);
     }
 
     /// A share with nothing said about what's left of the computer.
