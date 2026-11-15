@@ -101,6 +101,18 @@ icon:
     for f in src-tauri/icons/*; do cp "$tmp/icons/$(basename "$f")" "$f"; done
     git status --short src-tauri/icons
 
+# The README's menu bar pictures (docs/img/menubar*.webp, committed), on a Mac only as CoreText sets the items' text: the items as the app draws them, on a light and a dark menu bar, with the popover as the browser tests draw it (tools/menubar-readme.mjs). Needs cwebp (brew install webp)
+readme-menubar:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    [ "$(uname)" = Darwin ] || { echo "The menu bar's items are drawn with CoreText: run this on a Mac." >&2; exit 1; }
+    command -v cwebp >/dev/null || { echo "Needs cwebp: brew install webp" >&2; exit 1; }
+    items=$(mktemp -d)
+    trap 'rm -rf "$items"' EXIT
+    (cd src-tauri && LD_MENUBAR_README="$items" cargo test -q --lib menubar_readme -- --ignored)
+    pnpm build
+    node tools/menubar-readme.mjs "$items" docs/img
+
 # Everything CI would run: type checks, all tests, clippy (the browser run is `just ui-e2e`)
 check:
     pnpm check

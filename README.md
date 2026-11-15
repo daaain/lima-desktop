@@ -19,6 +19,9 @@ for each container — so you can see OOMs coming and right-size VMs.
   restart, remove, logs, inspect; `podman system df`.
 - History at 1 Hz kept 7 days, per-minute rollups a year, in SQLite (~0.7 GB/week for 10 VMs and
   100 containers — [measured](./docs/design/metrics-storage.md)).
+- The whole computer's memory, CPU and disk in the menu bar, the VMs' part drawn in, in orange
+  past a threshold you choose; click one for what's using it: each VM and its containers, and the
+  busiest apps outside them.
 - Instances owned by another tool (e.g. foldyard) can say so with a
   [managed-by marker](./docs/design/managed-by.md); the app leaves the operations they keep alone.
 
@@ -53,9 +56,18 @@ over the socket Lima already forwards.
   <img src="https://daaain.github.io/lima-desktop/volumes.png" alt="The Volumes view: how many volumes no container uses and what removing them would free, then each VM's volumes with their size and the containers using them" width="760">
 </picture>
 
+**The menu bar**: memory, CPU and disk at a glance, and the popover under each.
+
+<p>
+  <img src="./docs/img/menubar.webp" alt="The menu bar's items for memory (45 %), CPU (86 %, in orange as it's past its warning) and disk (63 %), each a small drawing of its recent use with the VMs' part solid, and the popover open under memory: the computer's memory in use as a stacked chart of each VM, wired memory and everything else over the last hour, then each VM with its containers and its peak, and the busiest apps outside the VMs" width="380">
+  <img src="./docs/img/menubar-dark.webp" alt="The same menu bar items and popover on a dark menu bar" width="380">
+</p>
+
 The screenshots are of invented data: CI draws them from the UI's browser tests
 ([e2e-ui/](./e2e-ui/)) after each merge to main and publishes them
-[here](https://daaain.github.io/lima-desktop/). The look is described in
+[here](https://daaain.github.io/lima-desktop/). The menu bar's pictures are the exception, as only
+macOS can draw its items: `just readme-menubar` redraws them on a Mac, into
+[docs/img/](./docs/img/), to commit. The look is described in
 [docs/design/ui.md](./docs/design/ui.md).
 
 ## Install

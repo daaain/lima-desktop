@@ -1420,6 +1420,48 @@ mod tests {
         assert_eq!((s.icon, s.title.as_deref()), (Some(glyph()), Some("–")));
     }
 
+    /// Writes an item's image to `dir/name.rgba`: a header line (width, height, and 1 for a template
+    /// image), then its RGBA.
+    fn write_rgba(dir: &std::path::Path, name: &str, s: &Shown) {
+        let i = s.icon.as_ref().unwrap();
+        let mut out = format!("{} {} {}\n", i.width, i.height, s.template as u8).into_bytes();
+        out.extend_from_slice(&i.rgba);
+        std::fs::write(dir.join(format!("{name}.rgba")), out).unwrap();
+    }
+
+    /// The README's menu bar (`just readme-menubar`, tools/menubar-readme.mjs): Settings' default
+    /// items, memory at the popover screenshot's 45 % and CPU past its warning, on a light and a dark
+    /// menu bar, as `{light,dark}-{mem,cpu,disk}.rgba` in `LD_MENUBAR_README`.
+    #[cfg(target_os = "macos")]
+    #[test]
+    #[ignore]
+    fn menubar_readme() {
+        let Ok(dir) = std::env::var("LD_MENUBAR_README") else { return };
+        let dir = std::path::PathBuf::from(dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        // Each column a little off a level: `lift` over the last few, the VMs a share of it.
+        let history = |level: f32, vms: f32, lift: f32| -> Vec<Share> {
+            (0..COLUMNS)
+                .map(|i| {
+                    let ripple = 0.03 * ((i as f32) * 1.3).sin();
+                    let late = lift * (i as f32 - (COLUMNS - 4) as f32).max(0.0) / 3.0;
+                    used(level + ripple + late, vms + ripple / 2.0 + late * 0.7)
+                })
+                .collect()
+        };
+        let mut mem = history(0.43, 0.27, 0.0);
+        *mem.last_mut().unwrap() = used(0.45, 0.278);
+        let chosen = crate::settings::MenuBar::default();
+        for (res, h, hot) in
+            [(Res::Mem, mem, false), (Res::Cpu, history(0.3, 0.18, 0.55), true), (Res::Disk, history(0.62, 0.35, 0.0), false)]
+        {
+            let p = parts(res.item(&chosen), chosen.names).unwrap();
+            for (theme, bar) in [("light", Bar::Light), ("dark", Bar::Dark)] {
+                write_rgba(&dir, &format!("{theme}-{}", res.id()), &shown(res, p, &h, hot, bar));
+            }
+        }
+    }
+
     /// Writes every kind of item to `LD_MENUBAR_PREVIEW` (a directory), as raw RGBA with a
     /// one-line header, for a look: `cargo test menubar_preview -- --ignored`.
     #[test]
@@ -1428,12 +1470,7 @@ mod tests {
         let Ok(dir) = std::env::var("LD_MENUBAR_PREVIEW") else { return };
         let dir = std::path::PathBuf::from(dir);
         std::fs::create_dir_all(&dir).unwrap();
-        let write = |name: &str, s: &Shown| {
-            let i = s.icon.as_ref().unwrap();
-            let mut out = format!("{} {} {}\n", i.width, i.height, s.template as u8).into_bytes();
-            out.extend_from_slice(&i.rgba);
-            std::fs::write(dir.join(format!("{name}.rgba")), out).unwrap();
-        };
+        let write = |name: &str, s: &Shown| write_rgba(&dir, name, s);
         let wave: Vec<Share> = (0..COLUMNS)
             .map(|i| used(0.3 + 0.25 * ((i as f32) * 0.7).sin().abs(), 0.15 + 0.05 * (i % 3) as f32))
             .collect();
