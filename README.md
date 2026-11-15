@@ -6,10 +6,10 @@ for each container — so you can see OOMs coming and right-size VMs.
 
 **Status:** early. macOS first (Linux builds too). Podman 5 or newer only (an older one is named, not half-read); compose projects shown read-only.
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="https://daaain.github.io/lima-desktop/overview-dark.png">
-  <img src="https://daaain.github.io/lima-desktop/overview.png" alt="Lima Desktop's VM overview: a headline saying how many VMs are past three quarters of their memory or disk, the host's memory, CPU and disk with what the VMs are allocated and using, then each running VM in a sentence with its memory, CPU and disk as figures, a day of history and a bar, and the stopped VMs below" width="760">
-</picture>
+<p>
+  <img src="https://daaain.github.io/lima-desktop/overview.png" alt="Lima Desktop's VM overview: a headline saying how many VMs are past three quarters of their memory or disk, the host's memory, CPU and disk with what the VMs are allocated and using, then each running VM in a sentence with its memory, CPU and disk as figures, a day of history and a bar, and the stopped VMs below" width="400">
+  <img src="https://daaain.github.io/lima-desktop/overview-dark.png" alt="The same VM overview in the dark theme" width="400">
+</p>
 
 - Every Lima instance, live: status, allocation vs use, memory/CPU pressure (PSI), OOM kills, and
   what each VM costs your computer (hypervisor RAM/CPU, the disk image's real size).
