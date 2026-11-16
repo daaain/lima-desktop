@@ -813,7 +813,7 @@ test("A container's log is searched by its words, filtered by level, stream and 
   assert.equal(await note.innerText(), 'All 6 lines of the last hour.');
   assert.equal(await log.locator('.ln').count(), 6);
   await detail.getByRole('combobox', { name: 'Time' }).selectOption({ label: 'any time' });
-  await page.waitForFunction(() => document.querySelector('.logs p.note')?.textContent === 'All 120 lines.');
+  await page.waitForFunction(() => document.querySelector('.logs p.note')?.textContent?.trim() === 'All 120 lines.');
 
   // The full window: the log fills it, the search keeps its words and is ready to type in; Escape closes it.
   await search.fill('items');
@@ -828,7 +828,9 @@ test("A container's log is searched by its words, filtered by level, stream and 
   const box = await win.locator('.log').boundingBox();
   const viewport = page.viewportSize();
   assert.ok(box.height > viewport.height * 0.7, `the log fills the window (${box.height} of ${viewport.height})`);
-  await shoot(page, 'container-log-window');
+  // The window, not the full page: the dialog covers the window, and the page under it would show below.
+  await page.evaluate(() => document.fonts.ready);
+  await page.screenshot({ path: join(shots, 'container-log-window.png'), animations: 'disabled' });
   await page.keyboard.press('Escape');
   await win.waitFor({ state: 'hidden' });
   assert.equal(await detail.locator('.log .ln').count(), shown);
