@@ -493,22 +493,76 @@ pub enum ContainerAction {
     Remove,
 }
 
+/// The stream a log line was written to. A TTY container's output is one stream, said as neither.
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum LogStream {
+    Stdout,
+    Stderr,
+}
+
+/// One line of a container's log as podman sent it (with the time it prefixes, when asked to),
+/// without its newline, and the stream it was written to (`None` for a TTY container's).
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct LogLine {
+    pub stream: Option<LogStream>,
+    pub line: String,
+}
+
 /// Docker's multiplexed log stream: 8-byte frames `[stream, 0, 0, 0, len (u32 BE)]` + payload.
 /// A TTY container's logs come raw, without frames; detected by the first header's shape.
-pub fn demux_logs(buf: &[u8]) -> String {
+/// A line can come over more than one frame (podman splits long ones), so each stream's pending
+/// text waits for its newline; a frame of the other stream between them doesn't break it. With
+/// timestamps on, podman stamps every frame, a line's later parts too: theirs are dropped.
+pub fn demux_logs(buf: &[u8]) -> Vec<LogLine> {
     let framed = buf.len() >= 8 && matches!(buf[0], 0..=2) && buf[1..4] == [0, 0, 0];
+    let text = |b: &[u8]| String::from_utf8_lossy(b).into_owned();
     if !framed {
-        return String::from_utf8_lossy(buf).into_owned();
+        let mut lines: Vec<&[u8]> = buf.split(|&b| b == b'\n').collect();
+        if lines.last().is_some_and(|l| l.is_empty()) {
+            lines.pop();
+        }
+        return lines.into_iter().map(|l| LogLine { stream: None, line: text(l) }).collect();
     }
-    let mut out = Vec::with_capacity(buf.len());
+    let mut out = Vec::new();
+    // stdout's and stderr's unfinished lines; stdin (0), which logs never carry, counts as stdout.
+    let mut pending: [Vec<u8>; 2] = [Vec::new(), Vec::new()];
+    let streams = [LogStream::Stdout, LogStream::Stderr];
     let mut rest = buf;
     while rest.len() >= 8 {
+        let s = usize::from(rest[0] == 2);
         let len = u32::from_be_bytes([rest[4], rest[5], rest[6], rest[7]]) as usize;
         let end = (8 + len).min(rest.len());
-        out.extend_from_slice(&rest[8..end]);
+        let mut payload = &rest[8..end];
+        if !pending[s].is_empty() {
+            payload = &payload[stamp_len(payload)..];
+        }
+        while let Some(nl) = payload.iter().position(|&b| b == b'\n') {
+            pending[s].extend_from_slice(&payload[..nl]);
+            out.push(LogLine { stream: Some(streams[s]), line: text(&std::mem::take(&mut pending[s])) });
+            payload = &payload[nl + 1..];
+        }
+        pending[s].extend_from_slice(payload);
         rest = &rest[end..];
     }
-    String::from_utf8_lossy(&out).into_owned()
+    for (s, p) in pending.iter().enumerate() {
+        if !p.is_empty() {
+            out.push(LogLine { stream: Some(streams[s]), line: text(p) });
+        }
+    }
+    out
+}
+
+/// The length of an RFC 3339 time and the space after it at the start of `b` ("2026-11-16T10:00:00.123Z "), else 0.
+fn stamp_len(b: &[u8]) -> usize {
+    let digits = |r: std::ops::Range<usize>| b.get(r).is_some_and(|d| d.iter().all(u8::is_ascii_digit));
+    if !(digits(0..4) && b.get(4) == Some(&b'-') && digits(5..7) && b.get(10) == Some(&b'T') && digits(11..13)) {
+        return 0;
+    }
+    match b.iter().take(48).position(|&c| c == b' ') {
+        Some(sp) => sp + 1,
+        None => 0,
+    }
 }
 
 fn encode_component(s: &str) -> String {
@@ -632,10 +686,12 @@ impl Libpod {
             .await
     }
 
-    /// The last `tail` lines, each starting with the RFC 3339 time podman recorded it at and a space.
-    pub async fn logs(&self, id: &str, tail: u32) -> Result<String, PodmanError> {
+    /// The last `tail` lines, each starting with the RFC 3339 time podman recorded it at and a
+    /// space; with `since` (Unix seconds), only those written since then.
+    pub async fn logs(&self, id: &str, tail: u32, since: Option<i64>) -> Result<Vec<LogLine>, PodmanError> {
+        let since = since.map(|s| format!("&since={s}")).unwrap_or_default();
         let path = format!(
-            "/containers/{}/logs?stdout=true&stderr=true&timestamps=true&tail={tail}",
+            "/containers/{}/logs?stdout=true&stderr=true&timestamps=true&tail={tail}{since}",
             encode_component(id)
         );
         Ok(demux_logs(&self.request(Method::GET, &path).await?))
@@ -999,13 +1055,24 @@ mod tests {
     }
 
     #[test]
-    fn demuxes_framed_logs_and_passes_tty_logs_through() {
-        let mut framed = vec![1, 0, 0, 0, 0, 0, 0, 6];
-        framed.extend_from_slice(b"hello\n");
-        framed.extend_from_slice(&[2, 0, 0, 0, 0, 0, 0, 4]);
-        framed.extend_from_slice(b"err\n");
-        assert_eq!(demux_logs(&framed), "hello\nerr\n");
-        assert_eq!(demux_logs(b"plain tty output\n"), "plain tty output\n");
+    fn demuxes_framed_logs_into_lines_with_their_streams_and_passes_tty_logs_through() {
+        let frame = |stream: u8, payload: &[u8]| {
+            let mut f = vec![stream, 0, 0, 0];
+            f.extend_from_slice(&(payload.len() as u32).to_be_bytes());
+            f.extend_from_slice(payload);
+            f
+        };
+        let out = |line: &str| LogLine { stream: Some(LogStream::Stdout), line: line.into() };
+        let err = |line: &str| LogLine { stream: Some(LogStream::Stderr), line: line.into() };
+        // A line split over frames, with the other stream's between them, is one line.
+        let framed = [frame(1, b"hello\nhal"), frame(2, b"err\n"), frame(1, b"f a line\n"), frame(2, b"no newline")].concat();
+        assert_eq!(demux_logs(&framed), vec![out("hello"), err("err"), out("half a line"), err("no newline")]);
+        // With timestamps, a line's later parts come stamped too: the line keeps its first time only.
+        let stamped = [frame(1, b"2026-11-16T10:00:00.5Z a long"), frame(1, b"2026-11-16T10:00:00.6Z  line\n")].concat();
+        assert_eq!(demux_logs(&stamped), vec![out("2026-11-16T10:00:00.5Z a long line")]);
+        let tty = |line: &str| LogLine { stream: None, line: line.into() };
+        assert_eq!(demux_logs(b"plain tty\noutput\n"), vec![tty("plain tty"), tty("output")]);
+        assert_eq!(demux_logs(b""), vec![]);
     }
 
     #[test]

@@ -1,13 +1,12 @@
 <script lang="ts">
   import { api, type ContainerLive, type Series } from './api';
-  import { tick } from 'svelte';
   import { bytes, cpuLabel } from './format';
-  import { logLines, logTime, type LogLine } from './logs';
   import { band, ownLimit, selfMemory } from './almanac';
   import { inOrder } from './inOrder';
   import type { RangeKey } from './ranges';
   import Bar from './Bar.svelte';
   import Chart from './Chart.svelte';
+  import LogView from './LogView.svelte';
 
   let { vm, c, from, to, over, vmMemory, oomMarkers = [], onclose }: {
     vm: string; c: ContainerLive; from: number; to: number;
@@ -26,8 +25,6 @@
   const seriesOver = $derived(fetchedOver ?? over);
   // The container against itself over the charts' range, from the series they already fetched.
   const self = $derived(selfMemory(c.latest, { over: seriesOver, range: band(series, 'mem'), limit, startedAt: c.startedAt, now: to }));
-  let logs = $state<LogLine[] | null>(null);
-  let logBox = $state<HTMLElement>();
   let inspect = $state('');
   let error = $state<string | null>(null);
 
@@ -40,22 +37,13 @@
     const asked = over;
     seriesInOrder(api.series(entity, from, to)).then((s) => ((series = s), (fetchedOver = asked)), (e) => (error = String(e)));
   });
-  // Likewise its id and VM (a row of the live list, also new every second): the log is fetched when
-  // the tab opens, not every second, which would also scroll it back down under the reader.
+  // Likewise its id and VM (a row of the live list, also new every second): the log and inspect are
+  // fetched when their tab opens, not every second (LogView would scroll back down under the reader).
   const id = $derived(c.id);
   const where = $derived(vm);
+  const name = $derived(c.name);
+  const image = $derived(c.image);
   $effect(() => {
-    if (tab === 'logs') {
-      api.containerLogs(where, id).then(
-        async (l) => {
-          logs = logLines(l);
-          // The newest lines are what's wanted: start at the end.
-          await tick();
-          if (logBox) logBox.scrollTop = logBox.scrollHeight;
-        },
-        (e) => (error = String(e)),
-      );
-    }
     if (tab === 'inspect') api.containerInspect(where, id).then((j) => (inspect = JSON.stringify(j, null, 2)), (e) => (error = String(e)));
   });
 </script>
@@ -94,13 +82,7 @@
       </div>
     {/if}
   {:else if tab === 'logs'}
-    <div class="log" bind:this={logBox}>
-      {#if logs == null}…{:else if logs.length === 0}<span class="muted">Nothing logged.</span>{/if}
-      {#each logs ?? [] as line, n (n)}
-        {#if line.day}<div class="day">{line.day}</div>{/if}
-        <div class="ln"><span class="t" title={line.at != null ? new Date(line.at).toISOString() : undefined}>{line.at != null ? logTime(line.at) : ''}</span><span>{line.text}</span></div>
-      {/each}
-    </div>
+    <LogView vm={where} {id} {name} {image} />
   {:else}
     <pre>{inspect || '…'}</pre>
   {/if}
@@ -118,12 +100,5 @@
   .self .serif { font-size: 1.1rem; font-weight: 500; }
   .self :global(.bar) { margin-top: 0.3rem; }
   .charts { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 1rem; }
-  .log { max-height: 26rem; overflow: auto; background: var(--bg); padding: 0.75rem; font-family: ui-monospace, 'SF Mono', Menlo, monospace; font-size: 0.8rem; line-height: 1.45; }
-  /* The time in its own column, so a wrapped line hangs clear of it. */
-  .ln { display: grid; grid-template-columns: 4.6rem minmax(0, 1fr); column-gap: 0.6rem; }
-  .ln span:last-child { white-space: pre-wrap; overflow-wrap: anywhere; }
-  .t { color: var(--muted); font-variant-numeric: tabular-nums; }
-  .day { font-family: var(--sans); font-size: 0.78rem; color: var(--muted); padding: 0.5rem 0 0.2rem; }
-  .day:first-child { padding-top: 0; }
   pre { margin: 0; max-height: 26rem; overflow: auto; font-size: 0.8rem; background: var(--bg); padding: 0.75rem; white-space: pre-wrap; word-break: break-all; }
 </style>

@@ -557,19 +557,26 @@
     return { path, size, text: text ?? null, truncated: false };
   };
 
-  // A container's last 120 log lines, every ten minutes back across midnight, as podman sends them
-  // with timestamps on: an RFC 3339 time and a space before each line.
-  const containerLogs = (id) => {
+  // A container's log: 120 lines, every ten minutes back across midnight, as podman sends them with
+  // timestamps on (an RFC 3339 time and a space before each line), each with its stream. Mostly
+  // requests; some slow-query warnings and failed requests, to stderr, one with a stack trace under
+  // it. The newest `tail` of those since `since` (Unix ms), as podman would.
+  const containerLogs = (id, tail = 500, since = null) => {
     const seed = parseInt(id.slice(0, 4), 16);
     const routes = ['/api/health', '/api/items', '/api/items/42', '/login', '/static/app.js'];
-    return Array.from({ length: 120 }, (_, i) => {
-      const t = new Date(NOW - (119 - i) * 10 * 60_000 - Math.floor(noise(seed, i) * 9000));
+    const lines = Array.from({ length: 120 }, (_, i) => {
+      const at = NOW - (119 - i) * 10 * 60_000 - Math.floor(noise(seed, i) * 9000);
+      const t = new Date(at).toISOString().replace('Z', '123456Z');
       const n = noise(seed, i, 1);
-      const text = i === 0 ? 'listening on :8080'
-        : n < 0.06 ? `WARN slow query took ${Math.round(800 + n * 9000)} ms: SELECT * FROM items WHERE owner_id = $1 ORDER BY updated_at DESC LIMIT 50`
-        : `GET ${routes[Math.floor(n * routes.length)]} ${n < 0.1 ? 404 : 200} ${Math.round(2 + n * 40)} ms`;
-      return `${t.toISOString().replace('Z', '123456Z')} ${text}`;
-    }).join('\n') + '\n';
+      if (i === 0) return [{ at, stream: 'stdout', line: `${t} INFO listening on :8080` }];
+      if (n < 0.06) return [{ at, stream: 'stderr', line: `${t} WARN slow query took ${Math.round(800 + n * 9000)} ms: SELECT * FROM items WHERE owner_id = $1 ORDER BY updated_at DESC LIMIT 50` }];
+      if (n > 0.97) return [
+        { at, stream: 'stderr', line: `${t} ERROR GET /api/items failed: connect ECONNREFUSED 10.89.0.4:5432` },
+        { at, stream: 'stderr', line: `${t}     at TCPConnectWrap.afterConnect (node:net:1607:16)` },
+      ];
+      return [{ at, stream: 'stdout', line: `${t} GET ${routes[Math.floor(n * routes.length)]} ${n < 0.1 ? 404 : 200} ${Math.round(2 + n * 40)} ms` }];
+    }).flat().slice(-120);
+    return lines.filter((l) => since == null || l.at >= since).slice(-tail).map(({ stream, line }) => ({ stream, line }));
   };
 
   const later = (value) => new Promise((resolve) => setTimeout(() => resolve(value), 150));
@@ -602,7 +609,7 @@
     image_history: ({ vm, id }) => later(imageHistory(vm, id)),
     guest_files: (args) => later(guestFiles(args)),
     guest_file: (args) => later(guestFile(args)),
-    container_logs: ({ id }) => containerLogs(id),
+    container_logs: ({ id, tail, since }) => containerLogs(id, tail, since),
     container_inspect: ({ id }) => ({ Id: id, State: { Status: 'running' } }),
     // A newer version only when a test sets __fakeUpdate ({ version, url }), so the gallery's
     // pictures don't carry the notice; none with the check off, as updates.rs. Each asking is in

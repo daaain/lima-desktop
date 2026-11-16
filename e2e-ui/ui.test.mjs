@@ -767,6 +767,75 @@ test("A container's log opens at its newest line, each with podman's time", asyn
   await close();
 });
 
+test("A container's log is searched by its words, filtered by level, stream and time, and opens in a full window", async () => {
+  const { page, errors, close } = await open('/containers');
+  await page.locator('.line', { has: page.locator('.name', { hasText: /^frontend/ }) }).first().click();
+  const detail = page.locator('section.detail');
+  await detail.getByRole('button', { name: 'logs' }).click();
+  const log = detail.locator('.log');
+  await log.locator('.ln').first().waitFor();
+  const note = detail.locator('.logs p.note');
+  assert.equal(await note.innerText(), 'All 120 lines.');
+
+  // The levels the lines say, and the streams, each with its count; a stack trace's lines are its error's.
+  const chip = (name) => detail.getByRole('button', { name, exact: true });
+  for (const name of ['errors 4', 'warnings 4', 'no level 112', 'stdout 112', 'stderr 8']) assert.ok(await chip(name).isVisible(), name);
+  assert.equal(await detail.getByRole('button', { name: /^info / }).count(), 0, 'no chip for a level no line says');
+  assert.equal(await log.locator('.ln[data-level="error"]').count(), 4);
+
+  // Words, each marked; every one must be there; the last may be the start of one.
+  const search = detail.getByRole('searchbox', { name: 'Search the log' });
+  await search.fill('slow quer');
+  assert.equal(await log.locator('.ln').count(), 4);
+  assert.match(await note.innerText(), /4 of 120 lines match\.$/);
+  assert.deepEqual(new Set(await log.locator('mark').allInnerTexts()), new Set(['slow', 'quer']));
+  await search.fill('slow -select');
+  assert.equal(await log.locator('.ln').count(), 0);
+  assert.match(await note.innerText(), /No line matches\.$/);
+  await search.fill('');
+
+  // A level chip shows only its level's lines; another adds its own.
+  await chip('errors 4').click();
+  assert.equal(await chip('errors 4').getAttribute('aria-pressed'), 'true');
+  assert.equal(await log.locator('.ln').count(), 4);
+  assert.match(await log.innerText(), /at TCPConnectWrap/);
+  await chip('warnings 4').click();
+  assert.equal(await log.locator('.ln').count(), 8);
+  await chip('errors 4').click();
+  await chip('warnings 4').click();
+  await chip('stderr 8').click();
+  assert.equal(await log.locator('.ln').count(), 8);
+  await chip('stderr 8').click();
+
+  // The time asks podman for that window only, and says so.
+  await detail.getByRole('combobox', { name: 'Time' }).selectOption({ label: 'last 1 h' });
+  await page.waitForFunction(() => document.querySelector('.logs p.note')?.textContent?.includes('the last hour'));
+  assert.equal(await note.innerText(), 'All 6 lines of the last hour.');
+  assert.equal(await log.locator('.ln').count(), 6);
+  await detail.getByRole('combobox', { name: 'Time' }).selectOption({ label: 'any time' });
+  await page.waitForFunction(() => document.querySelector('.logs p.note')?.textContent === 'All 120 lines.');
+
+  // The full window: the log fills it, the search keeps its words and is ready to type in; Escape closes it.
+  await search.fill('items');
+  const shown = await log.locator('.ln').count();
+  await detail.getByRole('button', { name: 'Full window' }).click();
+  const win = page.getByRole('dialog', { name: /frontend-1's log$/ });
+  await win.waitFor();
+  assert.match(await win.locator('h3').innerText(), /frontend-1$/);
+  assert.equal(await win.locator('.ln').count(), shown);
+  assert.equal(await win.getByRole('searchbox').inputValue(), 'items');
+  assert.ok(await win.getByRole('searchbox').evaluate((el) => el === document.activeElement), 'the search has the focus');
+  const box = await win.locator('.log').boundingBox();
+  const viewport = page.viewportSize();
+  assert.ok(box.height > viewport.height * 0.7, `the log fills the window (${box.height} of ${viewport.height})`);
+  await shoot(page, 'container-log-window');
+  await page.keyboard.press('Escape');
+  await win.waitFor({ state: 'hidden' });
+  assert.equal(await detail.locator('.log .ln').count(), shown);
+  assert.deepEqual(errors, []);
+  await close();
+});
+
 test("An image's layers open under its line, config steps folded away, each layer's files under it", async () => {
   const { page, errors, close } = await open('/images');
   const line = page.locator('.line', { has: page.locator('.name', { hasText: 'atlas_frontend' }) }).first();
