@@ -6,7 +6,8 @@
 //!
 //! On macOS each item is one image, its figure and name set in it beside the drawing (`typeset`),
 //! a template image that macOS tints for a light or dark menu bar; one that warns is drawn in the
-//! warning colour instead. When each warns is set in Settings: memory and CPU past a percent in use
+//! warning colour instead (and, as macOS can't invert it while it's highlighted, again for that, as
+//! for the other menu bar). When each warns is set in Settings: memory and CPU past a percent in use
 //! (three quarters unless chosen otherwise), the disk with less than so many GB free. Elsewhere the
 //! image is the drawing alone and the figure its title.
 
@@ -242,6 +243,15 @@ impl Bar {
         match self {
             Bar::Dark => HOT,
             Bar::Light => HOT_ON_LIGHT,
+        }
+    }
+
+    /// The menu bar as an item it highlights shows it: inverted (a light highlight on a dark bar).
+    #[cfg(target_os = "macos")]
+    fn inverted(self) -> Bar {
+        match self {
+            Bar::Dark => Bar::Light,
+            Bar::Light => Bar::Dark,
         }
     }
 }
@@ -705,6 +715,9 @@ fn tick(app: &AppHandle) {
 pub struct Shown {
     pub icon: Option<Icon>,
     pub template: bool,
+    /// The image while the item is highlighted (pressed, or its menu open), for when macOS can't
+    /// invert it as it does a template image: a warning item's, drawn as for the other menu bar.
+    pub highlighted: Option<Icon>,
     pub title: Option<String>,
     pub tooltip: Option<String>,
 }
@@ -723,7 +736,12 @@ pub fn shown(res: Res, p: Parts, history: &[Share], hot: bool, bar: Bar) -> Show
         drawing(p.drawing, history, hot).or_else(|| Some(glyph())),
         p.figure.then(|| title(res, now, p.name_under)),
     );
-    Shown { icon, template: ink(hot).1, title, tooltip: now.map(|s| tooltip(res, s)) }
+    // Highlighted, macOS inverts a template image itself; one that warns is drawn again, inverted.
+    #[cfg(target_os = "macos")]
+    let highlighted = hot.then(|| item(res, p, history, hot, bar.inverted()));
+    #[cfg(not(target_os = "macos"))]
+    let highlighted = None;
+    Shown { icon, template: ink(hot).1, highlighted, title, tooltip: now.map(|s| tooltip(res, s)) }
 }
 
 /// Redraws every item, changing only what has changed. Never on the main thread: each change
@@ -756,6 +774,9 @@ fn draw(app: &AppHandle) {
             if (&new.icon, new.template) != (&old.icon, old.template) {
                 let image = new.icon.clone().map(|i| Image::new_owned(i.rgba, i.width, i.height));
                 tray.set_icon_with_as_template(image, new.template)?;
+            }
+            if new.highlighted != old.highlighted {
+                set_highlighted(&tray, new.highlighted.as_ref())?;
             }
             if new.title != old.title {
                 tray.set_title(new.title.as_deref())?;
@@ -791,6 +812,49 @@ fn appearance(tray: &tauri::tray::TrayIcon) -> Bar {
 #[cfg(not(target_os = "macos"))]
 fn appearance(_: &tauri::tray::TrayIcon) -> Bar {
     Bar::default()
+}
+
+/// The image `tray` shows while it's highlighted (pressed, or its menu open): `icon`, else its own,
+/// as macOS shows it then (a template image inverted, any other as it is). It's the button's
+/// alternate image, at the size Tauri gives its image (18 points tall), which its cell shows only
+/// while it highlights its contents: on a status item, by default, it highlights nothing itself.
+#[cfg(target_os = "macos")]
+fn set_highlighted(tray: &tauri::tray::TrayIcon, icon: Option<&Icon>) -> tauri::Result<()> {
+    use objc2::AllocAnyThread;
+    use objc2_app_kit::{NSButtonCell, NSCellStyleMask, NSImage};
+    use objc2_foundation::{NSData, NSSize};
+    let png = match icon {
+        Some(i) => {
+            let mut png = Vec::new();
+            let mut e = png::Encoder::new(&mut png, i.width, i.height);
+            e.set_color(png::ColorType::Rgba);
+            e.set_depth(png::BitDepth::Eight);
+            e.write_header().and_then(|mut w| w.write_image_data(&i.rgba)).map_err(std::io::Error::from)?;
+            Some((png, NSSize::new(f64::from(i.width) * 18.0 / f64::from(i.height), 18.0)))
+        }
+        None => None,
+    };
+    tray.with_inner_tray_icon(move |t| {
+        let mtm = objc2::MainThreadMarker::new()?;
+        let button = t.ns_status_item()?.button(mtm)?;
+        let image = png.and_then(|(png, size)| {
+            let image = NSImage::initWithData(NSImage::alloc(), &NSData::from_vec(png))?;
+            image.setSize(size);
+            Some(image)
+        });
+        button.setAlternateImage(image.as_deref());
+        let cell = button.cell()?.downcast::<NSButtonCell>().ok()?;
+        let mut by = cell.highlightsBy();
+        by.set(NSCellStyleMask::ContentsCellMask, image.is_some());
+        cell.setHighlightsBy(by);
+        Some(())
+    })?;
+    Ok(())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn set_highlighted(_: &tauri::tray::TrayIcon, _: Option<&Icon>) -> tauri::Result<()> {
+    Ok(())
 }
 
 /// Shows the popover under the item clicked, on its tab; a second click on the same item hides it.
@@ -1427,6 +1491,25 @@ mod tests {
         }
     }
 
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn highlighted_a_warning_item_is_drawn_as_for_the_other_menu_bar() {
+        let hot = [used(0.9, 0.2)];
+        let p = parts(item(Drawing::Trace, true), true).unwrap();
+        // macOS inverts an item it highlights: on a dark menu bar its names go black, and the
+        // warning colour the deeper one, to read on the light highlight; the other way round on a
+        // light one.
+        for (bar, own, warn) in [(Bar::Dark, INK, HOT_ON_LIGHT), (Bar::Light, WHITE, HOT)] {
+            let i = shown(Res::Mem, p, &hot, true, bar).highlighted.expect("an image while highlighted");
+            assert_eq!(&px(&i, 0, 0)[..3], &warn, "{bar:?}");
+            let fig = TRACE_WIDTH + FIGURE_GAP..i.width;
+            assert_eq!(colours_in(&i, fig.clone(), 0..18).iter().map(|c| c.0).collect::<Vec<_>>(), [warn], "{bar:?}");
+            assert_eq!(colours_in(&i, fig, 22..H).iter().map(|c| c.0).collect::<Vec<_>>(), [own], "{bar:?}");
+        }
+        // Not warning, it's a template image, which macOS inverts itself.
+        assert_eq!(shown(Res::Mem, p, &[used(0.4, 0.2)], false, Bar::Dark).highlighted, None);
+    }
+
     /// WCAG's contrast ratio between two colours.
     fn contrast(a: [u8; 3], b: [u8; 3]) -> f64 {
         let lum = |c: [u8; 3]| {
@@ -1535,6 +1618,13 @@ mod tests {
                 write(&format!("{}-{}-{tag}", res.id(), d_name(d)), &shown(res, p, &wave, false, Bar::Dark));
                 write(&format!("{}-{}-{tag}-hot", res.id(), d_name(d)), &shown(res, p, &hot, true, Bar::Dark));
                 write(&format!("{}-{}-{tag}-hot-light", res.id(), d_name(d)), &shown(res, p, &hot, true, Bar::Light));
+                // While highlighted (macOS only).
+                for (theme, bar) in [("dark", Bar::Dark), ("light", Bar::Light)] {
+                    if let Some(i) = shown(res, p, &hot, true, bar).highlighted {
+                        let s = Shown { icon: Some(i), ..Shown::default() };
+                        write(&format!("{}-{}-{tag}-hot-{theme}-highlighted", res.id(), d_name(d)), &s);
+                    }
+                }
             }
             let p = parts(item(Drawing::Off, true), true).unwrap();
             write(&format!("{}-figure-named", res.id()), &shown(res, p, &wave, false, Bar::Dark));

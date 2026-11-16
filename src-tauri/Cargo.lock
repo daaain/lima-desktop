@@ -2107,6 +2107,7 @@ dependencies = [
  "objc2-core-graphics",
  "objc2-core-text",
  "objc2-foundation",
+ "png",
  "rusqlite",
  "semver",
  "serde",
