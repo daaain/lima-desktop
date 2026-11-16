@@ -311,11 +311,11 @@ pub fn compose_series(
 ) -> Result<Series, String> {
     let mut store = c.store();
     let line = service.as_deref().zip(name.as_deref());
-    let ids = store
+    let lines = store
         .compose_entities(&vm, &project, line, from, to)
         .map_err(err)?;
     store
-        .summed_series(&ids, from, to, points.unwrap_or(600).clamp(10, 5000))
+        .summed_series(&lines, from, to, points.unwrap_or(600).clamp(10, 5000))
         .map_err(err)
 }
 
