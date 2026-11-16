@@ -2,11 +2,11 @@
   // A compose project's heading row, over its containers' lines on Containers and a VM's page: its
   // name, how many run, and what its running containers use between them now, drawn in the lines'
   // own columns against the same scales (the VM's memory, the VM's cores). Above each bar, the
-  // project over the app's range: every container's history added up, those that have exited
-  // included, so a container counts for the part of the range it ran. Read-only: a project isn't
-  // acted on whole.
+  // project over the app's range, its containers added up moment by moment by the backend (those
+  // removed or recreated included, each for the part of the range it ran). Read-only: a project
+  // isn't acted on whole.
   import type { ContainerLive, Series } from './api';
-  import { band, projectSaid, rowMemory, share, sketch, sumSeries } from './almanac';
+  import { band, projectSaid, rowMemory, share, sketch } from './almanac';
   import { projectTotals } from './containers';
   import { bytes, cores } from './format';
   import { range } from './range.svelte';
@@ -14,15 +14,14 @@
   import MemoryShare from './MemoryShare.svelte';
   import Sketch from './Sketch.svelte';
 
-  let { project, containers, histories, vmHistory, vmMemory, vmCpus }: {
+  let { project, containers, history, vmHistory, vmMemory, vmCpus }: {
     project: string; containers: readonly ContainerLive[];
-    /** Each container's range, in any order (history.svelte.ts); and its VM's. */
-    histories: (Series | undefined)[]; vmHistory: Series | undefined;
+    /** The project's range (api.composeSeries), and its VM's (history.svelte.ts). */
+    history: Series | undefined; vmHistory: Series | undefined;
     vmMemory: number; vmCpus: number;
   } = $props();
 
   const t = $derived(projectTotals(containers));
-  const history = $derived(sumSeries(histories, ['mem', 'cpu_mc']));
   // No limit of its own, so measured against the VM, its peak the sum's in the range.
   const memory = $derived(rowMemory({ mem: t.mem }, { vmMemory, over: range.key, history: band(history, 'mem'), startedAt: null }));
 </script>

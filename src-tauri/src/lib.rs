@@ -120,6 +120,7 @@ pub fn run() {
             commands::volumes_prune,
             commands::system_df,
             commands::series,
+            commands::compose_series,
             commands::summary,
             commands::entities,
             commands::oom_events,

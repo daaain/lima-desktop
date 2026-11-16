@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   bandPeak, bandRise, containersHeadline, containersSentence, countWord, projectSaid, exitedSentence, fullWindow, holdsSentence, intervalPhrase, ownLimit, pressureSentence, rowMemory,
-  runsSentence, fleetHeadline, hostBar, hostRamSentence, quarters, selfMemory, share, shareChart, shareTip, sketch, sumSeries, unusedHeadline, unusedLede, vmHeadline, vmSentence,
+  runsSentence, fleetHeadline, hostBar, hostRamSentence, quarters, selfMemory, share, shareChart, shareTip, sketch, unusedHeadline, unusedLede, vmHeadline, vmSentence,
 } from './almanac';
 import type { Hint } from './rightsize';
 import { container, vm } from './testing';
@@ -203,32 +203,6 @@ describe('containersSentence', () => {
     expect(containersSentence([c('shop'), c('shop')])).toBe('Two containers, all in shop.');
     expect(containersSentence([c('shop'), c('shop'), c()])).toBe('Three containers, 2 of them in shop.');
     expect(containersSentence([c('shop'), c('blog')])).toBe('Two containers, in 2 compose projects.');
-  });
-});
-
-describe('sumSeries', () => {
-  const band = (avg: (number | null)[], max = avg) => ({ min: avg, max, avg });
-  const series = (ts: number[], mem: (number | null)[], cpu?: (number | null)[]) =>
-    ({ sampleSecs: 1, ts, metrics: { mem: band(mem), ...(cpu ? { cpu_mc: band(cpu) } : {}) } });
-
-  it('adds up each column, a member counted only where it has a sample', () => {
-    const sum = sumSeries([series([1, 2, 3], [null, 10, 20], [1, 1, 1]), series([1, 2, 3], [5, null, 7])], ['mem', 'cpu_mc']);
-    expect(sum?.ts).toEqual([1, 2, 3]);
-    expect(sum?.metrics.mem).toEqual(band([5, 10, 27]));
-    expect(sum?.metrics.cpu_mc).toEqual(band([1, 1, 1]));
-  });
-
-  it('leaves a column no member has a sample in empty', () => {
-    expect(sumSeries([series([1, 2], [null, 3]), series([1, 2], [null, 4])], ['mem'])?.metrics.mem.avg).toEqual([null, 7]);
-  });
-
-  it('lines the members up by their newest column when their lengths differ', () => {
-    expect(sumSeries([series([1, 2, 3], [1, 1, 1]), series([2, 3], [10, 10])], ['mem'])?.metrics.mem.avg).toEqual([1, 11, 11]);
-  });
-
-  it("is nothing until a member's history has come", () => {
-    expect(sumSeries([undefined, undefined], ['mem'])).toBeUndefined();
-    expect(sumSeries([], ['mem'])).toBeUndefined();
   });
 });
 

@@ -294,6 +294,31 @@ pub fn series(
         .map_err(err)
 }
 
+/// A compose project's containers in `vm` over [from, to], added up moment by moment
+/// (store::summed_series): every one seen in the range, removed and recreated ones included. With
+/// `service` and `name`, one line's: the containers it has been, one after another.
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub fn compose_series(
+    c: C<'_>,
+    vm: String,
+    project: String,
+    service: Option<String>,
+    name: Option<String>,
+    from: i64,
+    to: i64,
+    points: Option<usize>,
+) -> Result<Series, String> {
+    let mut store = c.store();
+    let line = service.as_deref().zip(name.as_deref());
+    let ids = store
+        .compose_entities(&vm, &project, line, from, to)
+        .map_err(err)?;
+    store
+        .summed_series(&ids, from, to, points.unwrap_or(600).clamp(10, 5000))
+        .map_err(err)
+}
+
 #[tauri::command]
 pub fn summary(
     c: C<'_>,

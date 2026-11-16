@@ -375,16 +375,26 @@
   // Each point's band: five sub-samples spread across the point's span, leaving out those taken
   // while the entity was silent; a point with none left is a gap (null), as the backend gives it.
   function series({ entity: id, from, to, points = 600 }) {
-    const metrics = metricsOf.get(id) ?? {};
+    return seriesOf([id], from, to, points);
+  }
+
+  // Several entities as one, as the backend's compose_series adds them up: each sub-sample the sum
+  // of those not silent at that moment.
+  function seriesOf(ids, from, to, points) {
+    const keys = [...new Set(ids.flatMap((id) => Object.keys(metricsOf.get(id) ?? {})))];
     const lo = Math.max(from, START);
     const step = Math.max(1250 * settings.intervalSecs, (to - lo) / points);
     const ts = [];
     for (let t = lo + step; t <= to; t += step) ts.push(Math.round(t));
     const out = {};
-    for (const [key, f] of Object.entries(metrics)) {
+    for (const key of keys) {
+      const at = (t) => {
+        const up = ids.filter((id) => metricsOf.get(id)?.[key] && !isSilent(id, t));
+        return up.length ? up.reduce((n, id) => n + metricsOf.get(id)[key](t), 0) : null;
+      };
       const band = { min: [], max: [], avg: [] };
       for (const t of ts) {
-        const samples = [0, 1, 2, 3, 4].map((i) => t - (step * i) / 5).filter((at) => !isSilent(id, at)).map(f);
+        const samples = [0, 1, 2, 3, 4].map((i) => at(t - (step * i) / 5)).filter((v) => v != null);
         const none = samples.length === 0;
         band.min.push(none ? null : Math.round(Math.min(...samples)));
         band.max.push(none ? null : Math.round(Math.max(...samples)));
@@ -393,6 +403,14 @@
       out[key] = band;
     }
     return { sampleSecs: to - from <= 6 * HOUR ? settings.intervalSecs : 60, ts, metrics: out };
+  }
+
+  // A compose project's containers in a VM, or one line's (its service and name), added up.
+  function composeSeries({ vm, project, service, name, from, to, points = 600 }) {
+    const ids = (fleet.find((v) => v.instance.name === vm)?.containers ?? [])
+      .filter((c) => c.composeProject === project && (service == null || (c.composeService === service && c.name === name)))
+      .map((c) => c.entity);
+    return seriesOf(ids, from, to, points);
   }
 
   function summary({ entity: id, from, to }) {
@@ -587,6 +605,7 @@
     // A test can set __fakeSeries to stand between the app and an answer: to change it, or have it
     // land late (a promise), so answers arrive out of order.
     series: (args) => (window.__fakeSeries ? window.__fakeSeries(args, series(args)) : series(args)),
+    compose_series: composeSeries,
     // Likewise __fakeSummary for a summary (throw from it to have one fail).
     summary: (args) => (window.__fakeSummary ? window.__fakeSummary(args, summary(args)) : summary(args)),
     oom_events: ({ vm, from, to, limit = 500 }) => {

@@ -6,7 +6,7 @@
   import { History } from '$lib/history.svelte';
   import { range, rangeWindow } from '$lib/range.svelte';
   import { theLast } from '$lib/ranges';
-  import { BY_MEMORY, CONTAINER_COLUMNS, CONTAINER_SORTS, containerRows, filterContainers, groupContainers, readContainerFilter, type ContainerSort } from '$lib/containers';
+  import { BY_MEMORY, CONTAINER_COLUMNS, CONTAINER_SORTS, containerRows, filterContainers, groupContainers, lineHistory, readContainerFilter, type ContainerSort } from '$lib/containers';
   import { podmanFailures, podmanScope } from '$lib/perVm';
   import { withParam } from '$lib/url';
   import ContainerLine from '$lib/ContainerLine.svelte';
@@ -33,11 +33,12 @@
   const rows = $derived(filterContainers(all, { ...urlFilter, query }));
 
   const history = new History();
-  // Each running container's range, and its VM's: a line draws its memory as its part of the VM's.
-  // A compose project's exited ones too: its heading adds up all of theirs (ProjectHead.svelte).
+  // Each running container's line's range (containers.lineHistory), each compose project's, and
+  // their VMs': a line draws its memory as its part of the VM's.
   history.follow(() => {
-    const drawn = rows.filter((r) => r.c.state === 'running' || r.c.composeProject);
-    return [...drawn.map((r) => r.c.entity), ...new Set(drawn.map((r) => live.vm(r.vm)?.entity))];
+    const up = rows.filter((r) => r.c.state === 'running');
+    const projects = rows.filter((r) => r.c.composeProject).map((r) => ({ vm: r.vm, project: r.c.composeProject! }));
+    return [...up.map((r) => lineHistory(r.vm, r.c)), ...projects, ...new Set(rows.map((r) => live.vm(r.vm)?.entity))];
   });
   // One group per VM, split by compose project (those in none first, under no heading). By default
   // the VM using the most memory first, then its projects, then the largest container in each; a
@@ -111,13 +112,13 @@
         {#each g.projects as p (p.project)}
           <div animate:glide>
             {#if p.project}
-              <ProjectHead project={p.project} containers={p.rows.map((r) => r.c)} histories={p.rows.map((r) => history.get(r.c.entity))}
+              <ProjectHead project={p.project} containers={p.rows.map((r) => r.c)} history={history.get({ vm: g.vm, project: p.project })}
                 vmHistory={history.get(g.live?.entity)} vmMemory={g.live?.instance.memory ?? 0} vmCpus={g.live?.instance.cpus ?? 1} />
             {/if}
             {#each p.rows as { vm, c } (c.id)}
               {@const key = keyOf(vm, c.id)}
               <div animate:glide>
-                <ContainerLine {vm} {c} history={history.get(c.entity)} vmHistory={history.get(g.live?.entity)} vmCpus={g.live?.instance.cpus ?? 1} vmMemory={g.live?.instance.memory ?? 0} second="image"
+                <ContainerLine {vm} {c} history={history.get(lineHistory(vm, c))} vmHistory={history.get(g.live?.entity)} vmCpus={g.live?.instance.cpus ?? 1} vmMemory={g.live?.instance.memory ?? 0} second="image"
                   now={live.snapshot?.updated} selected={key in open} onselect={() => toggle(key)} onerror={(e) => (actionError = e)} />
                 {#if open[key] != null}
                   <div transition:unfold>

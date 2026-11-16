@@ -1,29 +1,33 @@
-// The chosen range (range.svelte.ts) of whichever entities a page draws sketches for (almanac.ts),
-// 100 points each: fetched when an entity first appears or the range changes, then again as a new
-// column comes due, at most once a minute (ranges.historyRefreshMs). A failed fetch leaves the
-// last answer.
-import { api, type Series } from './api';
+// The chosen range (range.svelte.ts) of whichever histories a page draws sketches for (almanac.ts),
+// 100 points each: an entity's own, or compose containers added up (api.composeSeries). Fetched
+// when one first appears or the range changes, then again as a new column comes due, at most once
+// a minute (ranges.historyRefreshMs). A failed fetch leaves the last answer.
+import { api, type HistoryOf, type Series } from './api';
 import { fullWindow } from './almanac';
 import { inOrder } from './inOrder';
 import { range } from './range.svelte';
 import { historyRefreshMs, rangeMs, SKETCH_POINTS, type RangeKey } from './ranges';
 
-export class History {
-  #series = $state<Record<number, { over: RangeKey; series: Series }>>({});
-  #asked = new Map<number, { over: RangeKey; at: number }>();
-  // Each entity's requests, so an older answer (another range's, or this one's asked before) landing
-  // after a newer one is dropped.
-  #inOrder = new Map<number, ReturnType<typeof inOrder>>();
+const keyOf = (of: HistoryOf) => (typeof of === 'number' ? `e${of}` : JSON.stringify([of.vm, of.project, of.line?.service, of.line?.name]));
+const fetchOf = (of: HistoryOf, from: number, to: number) =>
+  typeof of === 'number' ? api.series(of, from, to, SKETCH_POINTS) : api.composeSeries(of, from, to, SKETCH_POINTS);
 
-  /** An entity's history over the range chosen now; nothing while only another range's is here. */
-  get(entity: number | undefined): Series | undefined {
-    const h = entity == null ? undefined : this.#series[entity];
+export class History {
+  #series = $state<Record<string, { over: RangeKey; series: Series }>>({});
+  #asked = new Map<string, { over: RangeKey; at: number }>();
+  // Each history's requests, so an older answer (another range's, or this one's asked before)
+  // landing after a newer one is dropped.
+  #inOrder = new Map<string, ReturnType<typeof inOrder>>();
+
+  /** A history over the range chosen now; nothing while only another range's is here. */
+  get(of: HistoryOf | undefined): Series | undefined {
+    const h = of == null ? undefined : this.#series[keyOf(of)];
     // Another range's would be said as this one's (its peak "in 6 h", say) until the fetch lands.
     return h?.over === range.key ? h.series : undefined;
   }
 
-  /** Keep `entities()`'s histories current for as long as the calling component lives. */
-  follow(entities: () => (number | undefined)[]) {
+  /** Keep `wanted()`'s histories current for as long as the calling component lives. */
+  follow(wanted: () => (HistoryOf | undefined)[]) {
     let tick = $state(0);
     const every = $derived(historyRefreshMs(range.key));
     $effect(() => {
@@ -35,15 +39,17 @@ export class History {
       const over = range.key;
       const now = Date.now();
       const from = now - rangeMs(over);
-      for (const e of entities()) {
-        const asked = e == null ? undefined : this.#asked.get(e);
-        if (e == null || (asked?.over === over && now - asked.at < every / 2)) continue;
-        this.#asked.set(e, { over, at: now });
-        let order = this.#inOrder.get(e);
-        if (!order) this.#inOrder.set(e, (order = inOrder()));
-        order(api.series(e, from, now, SKETCH_POINTS)).then(
+      for (const want of wanted()) {
+        if (want == null) continue;
+        const k = keyOf(want);
+        const asked = this.#asked.get(k);
+        if (asked?.over === over && now - asked.at < every / 2) continue;
+        this.#asked.set(k, { over, at: now });
+        let order = this.#inOrder.get(k);
+        if (!order) this.#inOrder.set(k, (order = inOrder()));
+        order(fetchOf(want, from, now)).then(
           // Another range's answer is kept, but not given out as this one's (`get`).
-          (s) => (this.#series[e] = { over, series: fullWindow(s, from, now, SKETCH_POINTS) }),
+          (s) => (this.#series[k] = { over, series: fullWindow(s, from, now, SKETCH_POINTS) }),
           () => {},
         );
       }

@@ -18,7 +18,7 @@
   import ProjectHead from '$lib/ProjectHead.svelte';
   import OrderPicker from '$lib/OrderPicker.svelte';
   import SortHead from '$lib/SortHead.svelte';
-  import { BY_MEMORY, byProject, CONTAINER_COLUMNS, CONTAINER_SORTS, type ContainerSort } from '$lib/containers';
+  import { BY_MEMORY, byProject, CONTAINER_COLUMNS, CONTAINER_SORTS, lineHistory, type ContainerSort } from '$lib/containers';
   import { Ordering } from '$lib/ordering.svelte';
   import { glide, unfold } from '$lib/motion';
 
@@ -41,8 +41,12 @@
 
   const history = new History();
   // Each running container's range, and the VM's: a line draws its memory as its part of the VM's.
-  // A compose project's exited containers too: its heading adds up all of theirs (ProjectHead.svelte).
-  history.follow(() => [vm?.entity, ...(vm?.containers ?? []).filter((c) => c.state === 'running' || c.composeProject).map((c) => c.entity)]);
+  // The VM's, each running container's line's (containers.lineHistory) and each compose project's.
+  history.follow(() => {
+    const cs = vm?.containers ?? [];
+    const projects = [...new Set(cs.map((c) => c.composeProject).filter((p) => p != null))];
+    return [vm?.entity, ...cs.filter((c) => c.state === 'running').map((c) => lineHistory(name, c)), ...projects.map((project) => ({ vm: name, project }))];
+  });
 
   // Derived on its own: `vm` is a new object at every snapshot, and the series would otherwise be
   // fetched again every second whatever the range.
@@ -303,11 +307,11 @@
         </div>
         {#each groups as g (g.project)}
           {#if g.project}
-            <ProjectHead project={g.project} containers={g.rows} histories={g.rows.map((c) => history.get(c.entity))} vmHistory={history.get(vm.entity)} vmMemory={i.memory} vmCpus={i.cpus} />
+            <ProjectHead project={g.project} containers={g.rows} history={history.get({ vm: name, project: g.project })} vmHistory={history.get(vm.entity)} vmMemory={i.memory} vmCpus={i.cpus} />
           {/if}
           {#each g.rows as c (c.id)}
             <div class="row" animate:glide>
-              <ContainerLine vm={name} {c} history={history.get(c.entity)} vmHistory={history.get(vm.entity)} vmCpus={i.cpus} vmMemory={i.memory} second="activity" now={live.snapshot?.updated}
+              <ContainerLine vm={name} {c} history={history.get(lineHistory(name, c))} vmHistory={history.get(vm.entity)} vmCpus={i.cpus} vmMemory={i.memory} second="activity" now={live.snapshot?.updated}
                 selected={open.includes(c.id)} onselect={() => toggle(c.id)} onerror={(e) => (actionError = e)} />
               {#if open.includes(c.id)}
                 <div id={`detail-${c.id}`} transition:unfold>

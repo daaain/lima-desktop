@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { byProject, containerRows, filterContainers, groupContainers, projectTotals, readContainerFilter } from './containers';
+import { byProject, containerRows, filterContainers, groupContainers, lineHistory, projectTotals, readContainerFilter } from './containers';
 import { container, snapshot, vm } from './testing';
 
 const s = snapshot([
@@ -134,5 +134,17 @@ describe('projectTotals', () => {
       container({ state: 'exited', latest: { mem: 999, cpu_mc: 999 } }),
     ];
     expect(projectTotals(cs)).toEqual({ mem: 150, cpu: 10, running: 2, exited: 1 });
+  });
+});
+
+describe('lineHistory', () => {
+  it("is a compose container's line across recreations: its project, service and name", () => {
+    const c = container({ name: 'shop-web-1', composeProject: 'shop', composeService: 'web', entity: 7 });
+    expect(lineHistory('acme', c)).toEqual({ vm: 'acme', project: 'shop', line: { service: 'web', name: 'shop-web-1' } });
+  });
+  it("is any other container's own", () => {
+    expect(lineHistory('acme', container({ entity: 7 }))).toBe(7);
+    expect(lineHistory('acme', container({ entity: 7, composeProject: 'shop' }))).toBe(7);
+    expect(lineHistory('acme', container())).toBeUndefined();
   });
 });

@@ -1,5 +1,5 @@
 // The Containers view: every running VM's containers in one list, from the live snapshot.
-import type { ContainerLive, Snapshot } from './api';
+import type { ContainerLive, HistoryOf, Snapshot } from './api';
 import { podmanScope } from './perVm';
 import { matches } from './search';
 import { AMOUNTS, byText, most, named, NAMES, sortBy, type Column, type Compare, type Order } from './order';
@@ -63,6 +63,13 @@ export const CONTAINER_ORDER: Record<ContainerSort, Compare<ContainerLive>> = {
   cpu: most(cpu, lineName),
   up: most(up, lineName),
 };
+
+/** A container's line's history: across recreations (one after another, by name) when compose
+ *  made it, else its own. */
+export const lineHistory = (vm: string, c: ContainerLive): HistoryOf | undefined =>
+  c.composeProject && c.composeService
+    ? { vm, project: c.composeProject, line: { service: c.composeService, name: c.name } }
+    : c.entity;
 
 /** CONTAINER_ORDER for what holds a container. */
 const orderVia = <T>(container: (t: T) => ContainerLive) =>
