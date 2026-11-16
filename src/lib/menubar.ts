@@ -1,7 +1,7 @@
 // The menu bar's popover (routes/menubar): the whole computer's memory, CPU or disk, the VMs' own
 // share of it and everything else, now and stacked over a range. What it says and the geometry it
 // draws are here, so a component only places them (docs/design/ui.md).
-import type { Snapshot, Stack, StackMetric, TopApp, TopApps, Warn } from './api';
+import type { Instance, Snapshot, Stack, StackMetric, TopApp, TopApps, Warn } from './api';
 import { lineName } from './containers';
 import { bytes, decimalBytes } from './format';
 import { inRange, rangeLabel, rangeMs, theLast, type AnyRangeKey } from './ranges';
@@ -32,7 +32,7 @@ export const parseTabRange = (tab: Tab, saved: string | null | undefined): AnyRa
   TAB_RANGES[tab].find((k) => k === saved) ?? DEFAULT_RANGE[tab];
 /** Under the chart's left end: "1 h ago". */
 export const agoLabel = (k: AnyRangeKey) => `${rangeLabel(k)} ago`;
-/** How many buckets the chart asks for: about one per 3 px of a 360 px popover. */
+/** How many buckets the chart asks for: about one per 3 px of the 396 px popover. */
 export const STACK_POINTS = 120;
 
 /**
@@ -83,6 +83,8 @@ export interface VmPart {
   running: boolean;
   /** It has stopped answering (`VmLive.stalledSince`). */
   stalled: boolean;
+  /** What it's allocated, in the tab's unit: its memory, its cores (in millicores), its disk. */
+  allocated: number | null;
 }
 
 /** The whole computer's use of one resource now, split into the VMs and everything else. */
@@ -131,6 +133,7 @@ export function shares(snap: Snapshot | null | undefined, tab: Tab, warn?: Warn 
       reported: k.reported && v.latest[k.vm] != null && v.latest[k.reported] != null ? Math.max(0, v.latest[k.reported]) : null,
       running: v.instance.status === 'Running',
       stalled: v.stalledSince != null,
+      allocated: allocation(tab, v.instance),
     }))
     .sort(largestFirst);
   const sum = parts.reduce((s, p) => s + (p.now ?? 0), 0);
@@ -154,6 +157,9 @@ export function warns(tab: Tab, pct: number, free: number, warn: Warn | null | u
   if (at == null) return false;
   return tab === 'disk' ? free < at * 1e9 : pct > at;
 }
+
+/** A VM's allocation in the tab's unit. */
+const allocation = (tab: Tab, i: Instance) => (tab === 'mem' ? i.memory : tab === 'cpu' ? i.cpus * 1000 : i.disk);
 
 const largestFirst = (a: { now: number | null; name: string }, b: { now: number | null; name: string }) =>
   (b.now ?? -1) - (a.now ?? -1) || a.name.localeCompare(b.name);
@@ -200,6 +206,8 @@ export interface Layer {
   reported: number | null;
   running: boolean;
   stalled: boolean;
+  /** What it's allocated, in the tab's unit; null for one only the range still holds. */
+  allocated: number | null;
   /** On the stack's buckets; null without a stack. */
   values: (number | null)[] | null;
   /** The most it reached in the range, as the backend says. */
@@ -223,7 +231,7 @@ export function layers(s: Shares | null, stack: Stack | null | undefined, tab: T
     return { ...p, values: h?.avg ?? null, peak: h?.peak ?? null, constant: false };
   });
   for (const h of history.values()) {
-    out.push({ name: h.name, now: null, reported: null, running: false, stalled: false, values: h.avg, peak: h.peak, constant: false });
+    out.push({ name: h.name, now: null, reported: null, running: false, stalled: false, allocated: null, values: h.avg, peak: h.peak, constant: false });
   }
   for (const l of out) {
     if (!stack) continue;
@@ -288,6 +296,20 @@ export function layerAside(tab: Tab, l: Layer, over: AnyRangeKey): string {
   const p = l.peak ?? (l.values ?? []).reduce<number | null>((m, v) => (v != null && (m == null || v > m) ? v : m), null);
   return p == null ? '' : `peak ${amount(tab, p)} ${inRange(over)}`;
 }
+
+/**
+ * Under a memory or CPU row's peak, what the VM is allocated ("8.0 GiB allocated to VM", "4 cores
+ * allocated to VM"), but only where `listed` containers under it leave that line spare: a VM with none is
+ * usually idle, and stays one line.
+ */
+export function allocatedAside(tab: Tab, l: Layer, listed: number): string {
+  if (!listsTop(tab) || listed === 0 || l.allocated == null) return '';
+  return `${whole(tab, l.allocated)} allocated to VM`;
+}
+
+/** The allocation, pointed at: whose it is, as the line it's on is a container's. */
+export const allocatedTip = (tab: 'mem' | 'cpu', l: Layer) =>
+  `${l.name} is allocated ${whole(tab, l.allocated ?? 0)}${tab === 'mem' ? ' of memory' : ''}`;
 
 /** The stacked chart's shapes: path data in a `width` × `height` box. */
 export interface StackChart {

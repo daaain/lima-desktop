@@ -225,7 +225,11 @@ under the sentence, figures and bar it explains, with the allocation as a dashed
   outermost bundle, so Chrome's helpers are one "Google Chrome"; anything else by its name; the
   tooltip says how many processes); a container's tooltip names it in full, and one whose figure
   would round to nothing ("0.0 cores") isn't listed. These rows are a name and a figure in the tab's format, smaller,
-  in `--muted` and not bold, with no rule between them and their row. Every row's name runs on
+  in `--muted` and not bold, with no rule between them and their row. A VM with containers listed
+  under it is busy and has that line to spare, so under its peak, in the first container's last
+  column, it says what the VM is allocated ("8.0 GiB allocated to VM", "4 cores allocated to VM"; its tooltip
+  names the VM, `menubar.allocatedAside`); a VM with none listed is usually idle, and stays one line.
+  It says "allocated", not "max": a VM's cost on the computer can pass it by the VMM's own share. Every row's name runs on
   into the figures' column as far as its own figure. They have no band of their own, and pointing at one
   lights its VM, or everything else. CPU needs two samples, so for the moment after the popover is
   shown the apps are "measuring the busiest apps…", never figures that look real. Pointing at a
