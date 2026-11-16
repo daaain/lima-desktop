@@ -34,9 +34,10 @@
 
   const history = new History();
   // Each running container's range, and its VM's: a line draws its memory as its part of the VM's.
+  // A compose project's exited ones too: its heading adds up all of theirs (ProjectHead.svelte).
   history.follow(() => {
-    const up = rows.filter((r) => r.c.state === 'running');
-    return [...up.map((r) => r.c.entity), ...new Set(up.map((r) => live.vm(r.vm)?.entity))];
+    const drawn = rows.filter((r) => r.c.state === 'running' || r.c.composeProject);
+    return [...drawn.map((r) => r.c.entity), ...new Set(drawn.map((r) => live.vm(r.vm)?.entity))];
   });
   // One group per VM, split by compose project (those in none first, under no heading). By default
   // the VM using the most memory first, then its projects, then the largest container in each; a
@@ -109,7 +110,10 @@
         <h2 class="head"><a href={`/vm/${encodeURIComponent(g.vm)}`}>{g.vm}</a> {runsSentence(g.rows.map((r) => r.c))}</h2>
         {#each g.projects as p (p.project)}
           <div animate:glide>
-            {#if p.project}<ProjectHead project={p.project} containers={p.rows.map((r) => r.c)} vmMemory={g.live?.instance.memory ?? 0} vmCpus={g.live?.instance.cpus ?? 1} />{/if}
+            {#if p.project}
+              <ProjectHead project={p.project} containers={p.rows.map((r) => r.c)} histories={p.rows.map((r) => history.get(r.c.entity))}
+                vmHistory={history.get(g.live?.entity)} vmMemory={g.live?.instance.memory ?? 0} vmCpus={g.live?.instance.cpus ?? 1} />
+            {/if}
             {#each p.rows as { vm, c } (c.id)}
               {@const key = keyOf(vm, c.id)}
               <div animate:glide>

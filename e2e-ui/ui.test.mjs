@@ -713,8 +713,11 @@ test("Each VM's containers are split by compose project, each project's heading 
   const project = atlas.getByRole('group', { name: 'Compose project atlas' });
   assert.match(await project.innerText(), /^atlas\s+twelve running\b/);
   // What it uses between them is drawn against the VM's memory and cores, as the lines are.
-  assert.match(await project.getByRole('img', { name: /^Memory .+ of the VM's 48\.0 GiB$/ }).getAttribute('aria-label'), /GiB/);
+  await project.getByRole('img', { name: /^Memory .+ now; peak .+ in the last 24 h; full width is the VM's 48\.0 GiB$/ }).waitFor();
   assert.ok(await project.getByRole('img', { name: /^CPU .+ of the VM's 8 cores$/ }).isVisible());
+  // Above them, the project over the range: its containers' histories added up, with its peak.
+  await project.getByRole('img', { name: /this project's part of its VM's memory in use$/ }).waitFor();
+  assert.match(await project.innerText(), /peak .+ in (the last )?\d/);
   // What is in no project comes first, under no heading: the VM's own.
   const first = await atlas.locator('.line, .project').first().innerText();
   assert.match(first, /^atlas-devbox/);

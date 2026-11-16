@@ -198,6 +198,32 @@ export function fullWindow(series: Series, from: number, to: number, points: num
 
 export const band = (series: Series | undefined | null, key: string): Band | undefined => series?.metrics[key];
 
+/**
+ * Several entities' histories as one: each of `keys` added up column by column, a member counted
+ * only where it has a sample, so one that ran for part of the range adds to that part alone. The
+ * members are lined up by their newest column (each is fetched over the same range and buckets).
+ * Peaks are added up too: what the members could have reached together, never less.
+ */
+export function sumSeries(members: (Series | undefined)[], keys: string[]): Series | undefined {
+  const here = members.filter((m): m is Series => m != null);
+  if (here.length === 0) return undefined;
+  const longest = here.reduce((a, b) => (b.ts.length > a.ts.length ? b : a));
+  const n = longest.ts.length;
+  const add = (pick: (b: Band) => (number | null)[], key: string) =>
+    Array.from({ length: n }, (_, i) => {
+      let sum: number | null = null;
+      for (const m of here) {
+        const xs = m.metrics[key] ? pick(m.metrics[key]) : [];
+        const v = xs[xs.length - n + i];
+        if (v != null) sum = (sum ?? 0) + v;
+      }
+      return sum;
+    });
+  const metrics: Series['metrics'] = {};
+  for (const k of keys) metrics[k] = { min: add((b) => b.min, k), max: add((b) => b.max, k), avg: add((b) => b.avg, k) };
+  return { sampleSecs: Math.max(...here.map((m) => m.sampleSecs)), ts: longest.ts, metrics };
+}
+
 /** The most a band reached anywhere in it; undefined without a sample. */
 export function bandPeak(band: Band | undefined): number | undefined {
   let peak: number | undefined;
@@ -320,9 +346,9 @@ export function shareChart(me: Band | undefined, vm: Band | undefined, vmMemory:
 const percent = (p: number) => `${p < 1 ? p.toFixed(1) : p.toFixed(0)} %`;
 
 /** One moment of the share chart, for its tooltip; `at` is the time, already said. */
-export function shareTip(at: string, me: number | null | undefined, vm: number | null | undefined, vmMemory: number): string {
+export function shareTip(at: string, me: number | null | undefined, vm: number | null | undefined, vmMemory: number, who = 'this container'): string {
   if (me == null && vm == null) return `${at} · no readings`;
-  const mine = me == null ? 'nothing from this container' : `this container ${bytes(me)} (${percent(share(me, vmMemory))} of the VM)`;
+  const mine = me == null ? `nothing from ${who}` : `${who} ${bytes(me)} (${percent(share(me, vmMemory))} of the VM)`;
   return vm == null ? `${at} · ${mine}` : `${at} · ${mine} · VM ${bytes(vm)} of ${bytes(vmMemory)} in use`;
 }
 

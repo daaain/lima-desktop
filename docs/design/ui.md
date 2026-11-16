@@ -256,7 +256,10 @@ under the sentence, figures and bar it explains, with the allocation as a dashed
   Within a VM, what is in no compose project comes first, under no heading (it is the VM's own);
   then each project under a heading row (`ProjectHead.svelte`): its name, "twelve running, one
   exited", and what its running containers use between them, drawn in the lines' own columns
-  against the VM's memory and cores. The column chosen orders the projects too, by what they add
+  against the VM's memory and cores. Above its bars, the project over the range: every container's
+  history added up, those that have exited included, so each counts for the part it ran (its peak
+  adds up each container's peak in a column, so it may be more than they reached at once; a
+  container recreated under a new id brings no history of the old one). The column chosen orders the projects too, by what they add
   up to (by memory for time up), and the lines within each.
 - **A container's line** (`ContainerLine.svelte`, on Containers and a VM's page) answers "who is
   eating this VM?". Its memory is "242.2 MiB of VM" (or "of 1.0 GiB limit", which goes under the

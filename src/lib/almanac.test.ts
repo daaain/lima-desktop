@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   bandPeak, bandRise, containersHeadline, containersSentence, countWord, projectSaid, exitedSentence, fullWindow, holdsSentence, intervalPhrase, ownLimit, pressureSentence, rowMemory,
-  runsSentence, fleetHeadline, hostBar, hostRamSentence, quarters, selfMemory, share, shareChart, shareTip, sketch, unusedHeadline, unusedLede, vmHeadline, vmSentence,
+  runsSentence, fleetHeadline, hostBar, hostRamSentence, quarters, selfMemory, share, shareChart, shareTip, sketch, sumSeries, unusedHeadline, unusedLede, vmHeadline, vmSentence,
 } from './almanac';
 import type { Hint } from './rightsize';
 import { container, vm } from './testing';
@@ -206,6 +206,32 @@ describe('containersSentence', () => {
   });
 });
 
+describe('sumSeries', () => {
+  const band = (avg: (number | null)[], max = avg) => ({ min: avg, max, avg });
+  const series = (ts: number[], mem: (number | null)[], cpu?: (number | null)[]) =>
+    ({ sampleSecs: 1, ts, metrics: { mem: band(mem), ...(cpu ? { cpu_mc: band(cpu) } : {}) } });
+
+  it('adds up each column, a member counted only where it has a sample', () => {
+    const sum = sumSeries([series([1, 2, 3], [null, 10, 20], [1, 1, 1]), series([1, 2, 3], [5, null, 7])], ['mem', 'cpu_mc']);
+    expect(sum?.ts).toEqual([1, 2, 3]);
+    expect(sum?.metrics.mem).toEqual(band([5, 10, 27]));
+    expect(sum?.metrics.cpu_mc).toEqual(band([1, 1, 1]));
+  });
+
+  it('leaves a column no member has a sample in empty', () => {
+    expect(sumSeries([series([1, 2], [null, 3]), series([1, 2], [null, 4])], ['mem'])?.metrics.mem.avg).toEqual([null, 7]);
+  });
+
+  it('lines the members up by their newest column when their lengths differ', () => {
+    expect(sumSeries([series([1, 2, 3], [1, 1, 1]), series([2, 3], [10, 10])], ['mem'])?.metrics.mem.avg).toEqual([1, 11, 11]);
+  });
+
+  it("is nothing until a member's history has come", () => {
+    expect(sumSeries([undefined, undefined], ['mem'])).toBeUndefined();
+    expect(sumSeries([], ['mem'])).toBeUndefined();
+  });
+});
+
 describe('projectSaid', () => {
   it("says how many of a compose project's containers run, and how many have exited", () => {
     expect(projectSaid({ running: 1, exited: 0 })).toBe('one running');
@@ -374,6 +400,7 @@ describe("a container's memory", () => {
     it("says the moment: this container, its share of the VM, the VM's use", () => {
       expect(shareTip('14:10', 242.2 * MiB, 5.3 * GiB, VM)).toBe('14:10 · this container 242.2 MiB (0.5 % of the VM) · VM 5.3 GiB of 46.9 GiB in use');
       expect(shareTip('14:10', 30.3 * GiB, 40 * GiB, VM)).toBe('14:10 · this container 30.3 GiB (65 % of the VM) · VM 40.0 GiB of 46.9 GiB in use');
+      expect(shareTip('14:10', 1 * GiB, 40 * GiB, VM, 'this project')).toBe('14:10 · this project 1.0 GiB (2 % of the VM) · VM 40.0 GiB of 46.9 GiB in use');
     });
     it('says what was not measured', () => {
       expect(shareTip('14:10', null, 5.3 * GiB, VM)).toBe('14:10 · nothing from this container · VM 5.3 GiB of 46.9 GiB in use');

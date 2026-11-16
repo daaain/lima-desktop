@@ -41,7 +41,8 @@
 
   const history = new History();
   // Each running container's range, and the VM's: a line draws its memory as its part of the VM's.
-  history.follow(() => [vm?.entity, ...(vm?.containers ?? []).filter((c) => c.state === 'running').map((c) => c.entity)]);
+  // A compose project's exited containers too: its heading adds up all of theirs (ProjectHead.svelte).
+  history.follow(() => [vm?.entity, ...(vm?.containers ?? []).filter((c) => c.state === 'running' || c.composeProject).map((c) => c.entity)]);
 
   // Derived on its own: `vm` is a new object at every snapshot, and the series would otherwise be
   // fetched again every second whatever the range.
@@ -301,7 +302,9 @@
           <span></span>
         </div>
         {#each groups as g (g.project)}
-          {#if g.project}<ProjectHead project={g.project} containers={g.rows} vmMemory={i.memory} vmCpus={i.cpus} />{/if}
+          {#if g.project}
+            <ProjectHead project={g.project} containers={g.rows} histories={g.rows.map((c) => history.get(c.entity))} vmHistory={history.get(vm.entity)} vmMemory={i.memory} vmCpus={i.cpus} />
+          {/if}
           {#each g.rows as c (c.id)}
             <div class="row" animate:glide>
               <ContainerLine vm={name} {c} history={history.get(c.entity)} vmHistory={history.get(vm.entity)} vmCpus={i.cpus} vmMemory={i.memory} second="activity" now={live.snapshot?.updated}
