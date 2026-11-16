@@ -249,10 +249,15 @@ under the sentence, figures and bar it explains, with the allocation as a dashed
   what ran out, the whole VM once for both. Below 640px its five columns would be wider than the
   page, so each kill or stall wraps onto a few lines instead, its cause on lines of its own. A stall still going on is the headline ("ember isn't
   answering."), is said under it, and is a "stalled" badge on the overview. Then its containers as
-  lines.
+  lines, by compose project as on Containers.
 - **Containers**: the headline and a dot per container; filters; then the column heads (the
   overview's serif ones, `.column-heads`, as on a VM's page, Images and Volumes) and a group per VM ("atlas runs
   twelve, all in atlas, and one has exited."), each container a line with memory and CPU drawn.
+  Within a VM, what is in no compose project comes first, under no heading (it is the VM's own);
+  then each project under a heading row (`ProjectHead.svelte`): its name, "twelve running, one
+  exited", and what its running containers use between them, drawn in the lines' own columns
+  against the VM's memory and cores. The column chosen orders the projects too, by what they add
+  up to (by memory for time up), and the lines within each.
 - **A container's line** (`ContainerLine.svelte`, on Containers and a VM's page) answers "who is
   eating this VM?". Its memory is "242.2 MiB of VM" (or "of 1.0 GiB limit", which goes under the
   figure for want of room), then "peak 30.3 GiB in 24 h", in the range chosen; the bar is now, pale

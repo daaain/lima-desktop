@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { containerRows, filterContainers, groupContainers, readContainerFilter } from './containers';
+import { byProject, containerRows, filterContainers, groupContainers, projectTotals, readContainerFilter } from './containers';
 import { container, snapshot, vm } from './testing';
 
 const s = snapshot([
@@ -55,7 +55,7 @@ describe('groupContainers', () => {
       vm({ name: 'blog' }, [container({ id: 'h', name: 'hugo', startedAt: 200, latest: { mem: 100 * MiB, cpu_mc: 50 } })]),
     ]),
   );
-  const shape = (o: Parameters<typeof groupContainers>[1]) => groupContainers(rows, o).map((g) => [g.vm, g.rows.map((r) => r.c.id).join('')]);
+  const shape = (o: Parameters<typeof groupContainers>[1]) => groupContainers(rows, o).map((g) => [g.vm, g.projects.flatMap((p) => p.rows).map((r) => r.c.id).join('')]);
 
   it('by memory: the VM using the most first, its largest container first, what has none last either way', () => {
     expect(shape({ by: 'memory', reversed: false })).toEqual([['shop', 'dwx'], ['blog', 'h']]);
@@ -74,5 +74,65 @@ describe('groupContainers', () => {
   it('by time up: the longest up first, what is not up last either way; groups as by memory', () => {
     expect(shape({ by: 'up', reversed: false })).toEqual([['shop', 'dwx'], ['blog', 'h']]);
     expect(shape({ by: 'up', reversed: true })).toEqual([['shop', 'wdx'], ['blog', 'h']]);
+  });
+
+  it("splits each VM's lines by compose project, in the same order", () => {
+    const grouped = containerRows(
+      snapshot([
+        vm({ name: 'shop' }, [
+          container({ id: 'w', composeProject: 'shop', composeService: 'web', latest: { mem: 50 } }),
+          container({ id: 'd', composeProject: 'shop', composeService: 'db', latest: { mem: 400 } }),
+          container({ id: 'x', name: 'devbox', latest: { mem: 10 } }),
+        ]),
+      ]),
+    );
+    const [g] = groupContainers(grouped, { by: 'memory', reversed: false });
+    expect(g.projects.map((p) => [p.project, p.rows.map((r) => r.c.id).join('')])).toEqual([[null, 'x'], ['shop', 'dw']]);
+  });
+});
+
+describe('byProject', () => {
+  const MiB = 1024 ** 2;
+  const cs = [
+    container({ id: 'a', name: 'shop-web-1', composeProject: 'shop', composeService: 'web', startedAt: 100, latest: { mem: 50 * MiB, cpu_mc: 900 } }),
+    container({ id: 'b', name: 'shop-db-1', composeProject: 'shop', composeService: 'db', startedAt: 200, latest: { mem: 400 * MiB, cpu_mc: 10 } }),
+    container({ id: 'c', name: 'blog-hugo-1', composeProject: 'blog', composeService: 'hugo', startedAt: 300, latest: { mem: 300 * MiB, cpu_mc: 20 } }),
+    container({ id: 'd', name: 'devbox', startedAt: 50, latest: { mem: 10 * MiB, cpu_mc: 5 } }),
+    container({ id: 'e', name: 'scratch', state: 'exited' }),
+  ];
+  const shape = (o: Parameters<typeof byProject>[2]) => byProject(cs, (c) => c, o).map((g) => [g.project, g.rows.map((c) => c.id).join('')]);
+
+  it('puts those in no project first, then each project, the containers in each in order', () => {
+    expect(shape({ by: 'memory', reversed: false })).toEqual([[null, 'de'], ['shop', 'ba'], ['blog', 'c']]);
+    expect(shape({ by: 'memory', reversed: true })).toEqual([[null, 'de'], ['blog', 'c'], ['shop', 'ab']]);
+  });
+
+  it('orders the projects by what their containers add up to, or by name', () => {
+    expect(shape({ by: 'cpu', reversed: false })).toEqual([[null, 'de'], ['shop', 'ab'], ['blog', 'c']]);
+    expect(shape({ by: 'name', reversed: false })).toEqual([[null, 'de'], ['blog', 'c'], ['shop', 'ba']]);
+    expect(shape({ by: 'name', reversed: true })).toEqual([[null, 'ed'], ['shop', 'ab'], ['blog', 'c']]);
+  });
+
+  it('by time up: the projects as by memory, the longest up first within each', () => {
+    expect(shape({ by: 'up', reversed: false })).toEqual([[null, 'de'], ['shop', 'ab'], ['blog', 'c']]);
+  });
+
+  it('gives one group, of no project, when nothing is in one', () => {
+    expect(byProject(cs.slice(3), (c) => c, { by: 'name', reversed: false }).map((g) => g.project)).toEqual([null]);
+  });
+
+  it('gives nothing for no containers', () => {
+    expect(byProject([], (c) => c, { by: 'name', reversed: false })).toEqual([]);
+  });
+});
+
+describe('projectTotals', () => {
+  it('adds up the memory and CPU of the running ones', () => {
+    const cs = [
+      container({ latest: { mem: 100, cpu_mc: 10 } }),
+      container({ latest: { mem: 50 } }),
+      container({ state: 'exited', latest: { mem: 999, cpu_mc: 999 } }),
+    ];
+    expect(projectTotals(cs)).toEqual({ mem: 150, cpu: 10, running: 2, exited: 1 });
   });
 });

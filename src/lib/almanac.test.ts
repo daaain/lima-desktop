@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  bandPeak, bandRise, containersHeadline, containersSentence, countWord, exitedSentence, fullWindow, holdsSentence, intervalPhrase, ownLimit, pressureSentence, rowMemory,
+  bandPeak, bandRise, containersHeadline, containersSentence, countWord, projectSaid, exitedSentence, fullWindow, holdsSentence, intervalPhrase, ownLimit, pressureSentence, rowMemory,
   runsSentence, fleetHeadline, hostBar, hostRamSentence, quarters, selfMemory, share, shareChart, shareTip, sketch, unusedHeadline, unusedLede, vmHeadline, vmSentence,
 } from './almanac';
 import type { Hint } from './rightsize';
@@ -203,6 +203,15 @@ describe('containersSentence', () => {
     expect(containersSentence([c('shop'), c('shop')])).toBe('Two containers, all in shop.');
     expect(containersSentence([c('shop'), c('shop'), c()])).toBe('Three containers, 2 of them in shop.');
     expect(containersSentence([c('shop'), c('blog')])).toBe('Two containers, in 2 compose projects.');
+  });
+});
+
+describe('projectSaid', () => {
+  it("says how many of a compose project's containers run, and how many have exited", () => {
+    expect(projectSaid({ running: 1, exited: 0 })).toBe('one running');
+    expect(projectSaid({ running: 12, exited: 0 })).toBe('twelve running');
+    expect(projectSaid({ running: 3, exited: 1 })).toBe('three running, one exited');
+    expect(projectSaid({ running: 0, exited: 2 })).toBe('none running, two exited');
   });
 });
 

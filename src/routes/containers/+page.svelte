@@ -11,6 +11,7 @@
   import { withParam } from '$lib/url';
   import ContainerLine from '$lib/ContainerLine.svelte';
   import ContainerDetail from '$lib/ContainerDetail.svelte';
+  import ProjectHead from '$lib/ProjectHead.svelte';
   import UnlistedVms from '$lib/UnlistedVms.svelte';
   import VmSelect from '$lib/VmSelect.svelte';
   import OrderPicker from '$lib/OrderPicker.svelte';
@@ -37,8 +38,9 @@
     const up = rows.filter((r) => r.c.state === 'running');
     return [...up.map((r) => r.c.entity), ...new Set(up.map((r) => live.vm(r.vm)?.entity))];
   });
-  // One group per VM. By default the VM using the most memory first, and within it the largest
-  // container first; a column head orders both by its column (containers.ts).
+  // One group per VM, split by compose project (those in none first, under no heading). By default
+  // the VM using the most memory first, then its projects, then the largest container in each; a
+  // column head orders all three by its column (containers.ts).
   const ordering = new Ordering('containers', CONTAINER_SORTS, BY_MEMORY);
   const groups = $derived(groupContainers(rows, ordering.current).map((g) => ({ ...g, live: live.vm(g.vm) })));
   const heads = $derived<{ key: ContainerSort; text: string; span?: number }[]>([
@@ -105,16 +107,21 @@
     {#each groups as g (g.vm)}
       <section animate:glide>
         <h2 class="head"><a href={`/vm/${encodeURIComponent(g.vm)}`}>{g.vm}</a> {runsSentence(g.rows.map((r) => r.c))}</h2>
-        {#each g.rows as { vm, c } (c.id)}
-          {@const key = keyOf(vm, c.id)}
+        {#each g.projects as p (p.project)}
           <div animate:glide>
-            <ContainerLine {vm} {c} history={history.get(c.entity)} vmHistory={history.get(g.live?.entity)} vmCpus={g.live?.instance.cpus ?? 1} vmMemory={g.live?.instance.memory ?? 0} second="image"
-              now={live.snapshot?.updated} selected={key in open} onselect={() => toggle(key)} onerror={(e) => (actionError = e)} />
-            {#if open[key] != null}
-              <div transition:unfold>
-                <ContainerDetail {vm} {c} from={span.from} to={span.to} over={range.key} vmMemory={g.live?.instance.memory ?? 0} onclose={() => close(key)} />
+            {#if p.project}<ProjectHead project={p.project} containers={p.rows.map((r) => r.c)} vmMemory={g.live?.instance.memory ?? 0} vmCpus={g.live?.instance.cpus ?? 1} />{/if}
+            {#each p.rows as { vm, c } (c.id)}
+              {@const key = keyOf(vm, c.id)}
+              <div animate:glide>
+                <ContainerLine {vm} {c} history={history.get(c.entity)} vmHistory={history.get(g.live?.entity)} vmCpus={g.live?.instance.cpus ?? 1} vmMemory={g.live?.instance.memory ?? 0} second="image"
+                  now={live.snapshot?.updated} selected={key in open} onselect={() => toggle(key)} onerror={(e) => (actionError = e)} />
+                {#if open[key] != null}
+                  <div transition:unfold>
+                    <ContainerDetail {vm} {c} from={span.from} to={span.to} over={range.key} vmMemory={g.live?.instance.memory ?? 0} onclose={() => close(key)} />
+                  </div>
+                {/if}
               </div>
-            {/if}
+            {/each}
           </div>
         {/each}
       </section>

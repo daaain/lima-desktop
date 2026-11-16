@@ -422,6 +422,12 @@ export function containersSentence(containers: { composeProject?: string }[]): s
   return `${count}, in ${projects.length} compose projects.`;
 }
 
+/** Under a compose project's name: "three running, one exited". */
+export function projectSaid({ running, exited }: { running: number; exited: number }): string {
+  const up = running === 0 ? 'none running' : `${countWord(running).toLowerCase()} running`;
+  return exited === 0 ? up : `${up}, ${countWord(exited).toLowerCase()} exited`;
+}
+
 type Listed = { name: string; state: string; composeProject?: string; composeService?: string };
 
 /** What one VM runs, to follow its name: "runs 12, all in atlas, and one has exited." */
