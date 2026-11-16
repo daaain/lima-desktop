@@ -6,7 +6,7 @@ use tauri::State;
 
 use crate::collector::{Collector, Snapshot, now_ms};
 use crate::lima::{self, Action, Resize};
-use crate::podman::{ContainerAction, Image, Layer, Libpod, Pruned, Volume};
+use crate::podman::{ContainerAction, Image, Layer, Libpod, LogLine, Pruned, Volume};
 use crate::guest_files::{self, Folder, Listing, Peek};
 use serde::Deserialize;
 use crate::settings::{Saved, Settings};
@@ -147,15 +147,20 @@ pub async fn container_action(
     libpod(&c, &vm).await?.act(&id, action).await.map_err(err)
 }
 
+/// The most lines of a log the UI can ask for at once.
+const MAX_LOG_LINES: u32 = 20_000;
+
 #[tauri::command]
 pub async fn container_logs(
     c: C<'_>,
     vm: String,
     id: String,
     tail: Option<u32>,
-) -> Result<String, String> {
+    since: Option<i64>,
+) -> Result<Vec<LogLine>, String> {
+    // `since` is Unix ms, as every time the UI sends; podman takes seconds.
     libpod(&c, &vm).await?
-        .logs(&id, tail.unwrap_or(500))
+        .logs(&id, tail.unwrap_or(500).min(MAX_LOG_LINES), since.map(|ms| ms.div_euclid(1000)))
         .await
         .map_err(err)
 }

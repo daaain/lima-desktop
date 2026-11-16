@@ -866,7 +866,7 @@ struct PopoverShown {
     theme: crate::settings::Theme,
 }
 
-/// A rectangle on the screens, in physical pixels.
+/// A rectangle on the screens.
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct Area {
     x: f64,
@@ -879,63 +879,99 @@ impl Area {
     fn holds(&self, x: f64, y: f64) -> bool {
         (self.x..self.x + self.w).contains(&x) && (self.y..self.y + self.h).contains(&y)
     }
+    fn scaled(self, by: f64) -> Area {
+        Area { x: self.x / by, y: self.y / by, w: self.w / by, h: self.h / by }
+    }
 }
 
-/// Between the popover and its item, and the popover and a screen's edge (logical pixels).
+/// Between the popover and its item, and the popover and a screen's edge (points).
 const GAP: f64 = 4.0;
 
 /// Where the popover goes: centred under `item`, kept whole on `screen` (a screen left of the main
-/// one has negative coordinates). Physical pixels, at the screen's `scale`.
-fn place(item: Area, screen: Area, scale: f64) -> (f64, f64) {
-    let (width, gap) = (POPOVER_WIDTH * scale, GAP * scale);
-    let x = item.x + item.w / 2.0 - width / 2.0;
-    let x = x.clamp(screen.x + gap, (screen.x + screen.w - width - gap).max(screen.x + gap));
-    (x, item.y + item.h + gap)
+/// one has negative coordinates). All in points: the one measure every screen shares.
+fn place(item: Area, screen: Area) -> (f64, f64) {
+    let x = item.x + item.w / 2.0 - POPOVER_WIDTH / 2.0;
+    let x = x.clamp(screen.x + GAP, (screen.x + screen.w - POPOVER_WIDTH - GAP).max(screen.x + GAP));
+    (x, item.y + item.h + GAP)
 }
 
 /// Where the popover goes with no item to go under (on Linux, opened from a menu): the top right of
-/// the screen's work area.
-fn place_alone(work_area: Area, scale: f64) -> (f64, f64) {
+/// the screen's work area (points).
+fn place_alone(work_area: Area) -> (f64, f64) {
     let corner = Area { x: work_area.x + work_area.w, y: work_area.y, w: 0.0, h: 0.0 };
-    place(corner, work_area, scale)
+    place(corner, work_area)
 }
 
-/// A monitor's whole screen, or its work area (less the menu bar, panels and Dock).
-fn area_of(m: &tauri::Monitor, work: bool) -> Area {
+/// A screen: its area in points, and how many pixels make a point on it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Screen {
+    area: Area,
+    scale: f64,
+}
+
+/// The screen a menu bar item is on, by the pointer that clicked it (`pointer`, in points), else
+/// the first whose area holds the item's middle.
+///
+/// On macOS "physical" pixels mean something different on each screen: a screen's position, and the
+/// item's rect, are their points times that screen's own scale. So an item at 1000 pt on a 2x
+/// laptop is said to be at 2000 px, which a 1x screen to its right starting at 1512 pt also holds.
+/// The pointer is said at the main screen's scale wherever it is, so in points it's unambiguous.
+fn item_screen(screens: &[Screen], item: Area, pointer: Option<(f64, f64)>) -> Option<usize> {
+    if let Some(i) = pointer.and_then(|(x, y)| screens.iter().position(|s| s.area.holds(x, y))) {
+        return Some(i);
+    }
+    screens.iter().position(|s| {
+        let i = item.scaled(s.scale);
+        s.area.holds(i.x + i.w / 2.0, i.y + i.h / 2.0)
+    })
+}
+
+/// A monitor's whole screen, or its work area (less the menu bar, panels and Dock), in points.
+fn screen_of(m: &tauri::Monitor, work: bool) -> Screen {
     let (x, y, w, h) = if work {
         let a = m.work_area();
         (a.position.x, a.position.y, a.size.width, a.size.height)
     } else {
         (m.position().x, m.position().y, m.size().width, m.size().height)
     };
-    Area { x: x.into(), y: y.into(), w: w.into(), h: h.into() }
+    let scale = m.scale_factor();
+    Screen { area: Area { x: x.into(), y: y.into(), w: w.into(), h: h.into() }.scaled(scale), scale }
 }
 
-/// Puts the popover where it goes ([`place`]), on its item's screen, or with no item ([`place_alone`]),
-/// on the main one.
+/// Puts the popover where it goes ([`place`]), on its item's screen, or with no item
+/// ([`place_alone`]), on the main one.
+///
+/// In points, as a `LogicalPosition`: tao turns a physical position into points at the scale of
+/// the screen the window is on *now*. The popover, hidden, is still on the screen it was last shown
+/// on, so the first time it opened on a screen of another scale it went to the wrong place.
 fn position_popover(app: &AppHandle, w: &tauri::WebviewWindow, item: Option<tauri::Rect>) {
     let monitors = app.available_monitors().unwrap_or_default();
     let primary = app.primary_monitor().ok().flatten();
     let (x, y) = match item {
         Some(rect) => {
-            // The tray reports physical pixels; the scale only matters were it to say logical ones.
-            let scale = primary.as_ref().map_or(1.0, |m| m.scale_factor());
-            let pos = rect.position.to_physical::<f64>(scale);
-            let size = rect.size.to_physical::<f64>(scale);
+            let screens: Vec<Screen> = monitors.iter().map(|m| screen_of(m, false)).collect();
+            // The tray says physical pixels (at its own screen's scale); the main screen's scale only
+            // matters were it to say points.
+            let main_scale = primary.as_ref().map_or(1.0, |m| m.scale_factor());
+            let pos = rect.position.to_physical::<f64>(main_scale);
+            let size = rect.size.to_physical::<f64>(main_scale);
             let item = Area { x: pos.x, y: pos.y, w: size.width, h: size.height };
-            let middle = (item.x + item.w / 2.0, item.y + item.h / 2.0);
-            let Some(m) = monitors.iter().find(|m| area_of(m, false).holds(middle.0, middle.1)).or(primary.as_ref())
-            else {
-                return;
+            let pointer = app.cursor_position().ok().map(|p| (p.x / main_scale, p.y / main_scale));
+            let screen = match item_screen(&screens, item, pointer) {
+                Some(i) => screens[i],
+                None => match primary.as_ref() {
+                    Some(m) => screen_of(m, false),
+                    None => return,
+                },
             };
-            place(item, area_of(m, false), m.scale_factor())
+            place(item.scaled(screen.scale), screen.area)
         }
         None => {
             let Some(m) = primary.as_ref().or(monitors.first()) else { return };
-            place_alone(area_of(m, true), m.scale_factor())
+            place_alone(screen_of(m, true).area)
         }
     };
-    let _ = w.set_position(tauri::PhysicalPosition::new(x.round() as i32, y.round() as i32));
+    let _ = w.set_position(tauri::LogicalPosition::new(x.round(), y.round()));
 }
 
 /// Puts the popover under the item at `item` (none: see [`place_alone`]), on `res`'s tab, and gives
@@ -962,6 +998,10 @@ fn show_popover(app: &AppHandle, w: &tauri::WebviewWindow, res: Res, item: Optio
         .expect("popover lock")
         .open_on = Some(res);
     let _ = w.show();
+    // Once more, now it's on its screen: should the move have left it at another screen's scale
+    // (the cause of the popover opening out of place, fixed above), it's put right before it's seen
+    // for long. Where it already is, this moves nothing.
+    position_popover(app, w, item);
     let _ = w.set_focus();
 }
 
@@ -1026,7 +1066,7 @@ mod tests {
         i.rgba[k..k + 4].try_into().unwrap()
     }
 
-    /// A screen at `x`, 1000 by 800 physical pixels.
+    /// A screen at `x`, 1000 by 800 points.
     fn screen_at(x: f64) -> Area {
         Area { x, y: 0.0, w: 1000.0, h: 800.0 }
     }
@@ -1034,34 +1074,46 @@ mod tests {
     #[test]
     fn the_popover_goes_centred_under_its_item() {
         let item = Area { x: 480.0, y: 0.0, w: 40.0, h: 24.0 };
-        assert_eq!(place(item, screen_at(0.0), 1.0), (500.0 - POPOVER_WIDTH / 2.0, 24.0 + GAP));
-        let (x, y) = place(Area { x: 960.0, y: 0.0, w: 80.0, h: 48.0 }, screen_at(0.0), 2.0);
-        assert_eq!(x, 0.0 + 1000.0 - 2.0 * (POPOVER_WIDTH + GAP), "kept whole on its screen");
-        assert_eq!(y, 48.0 + 2.0 * GAP, "the gap in the screen's own pixels");
+        assert_eq!(place(item, screen_at(0.0)), (500.0 - POPOVER_WIDTH / 2.0, 24.0 + GAP));
+        let (x, _) = place(Area { x: 960.0, y: 0.0, w: 80.0, h: 24.0 }, screen_at(0.0));
+        assert_eq!(x, 1000.0 - POPOVER_WIDTH - GAP, "kept whole on its screen");
     }
 
     // A screen left of the main one has negative coordinates: the popover stays on it.
     #[test]
     fn the_popover_stays_on_its_items_screen() {
         let item = Area { x: -1000.0, y: 0.0, w: 40.0, h: 24.0 };
-        assert_eq!(place(item, screen_at(-1000.0), 1.0).0, -1000.0 + GAP);
+        assert_eq!(place(item, screen_at(-1000.0)).0, -1000.0 + GAP);
         let item = Area { x: -30.0, y: 0.0, w: 20.0, h: 24.0 };
-        assert_eq!(place(item, screen_at(-1000.0), 1.0).0, -POPOVER_WIDTH - GAP);
+        assert_eq!(place(item, screen_at(-1000.0)).0, -POPOVER_WIDTH - GAP);
     }
 
     #[test]
     fn with_no_item_the_popover_goes_top_right() {
         let screen = Area { x: 1000.0, y: 30.0, w: 1000.0, h: 770.0 };
-        assert_eq!(place_alone(screen, 1.0), (2000.0 - POPOVER_WIDTH - GAP, 30.0 + GAP));
+        assert_eq!(place_alone(screen), (2000.0 - POPOVER_WIDTH - GAP, 30.0 + GAP));
     }
 
+    // A 2x laptop (1512 pt wide) with a 1x screen to its right. macOS says each one's pixels at its
+    // own scale: an item at 1000 pt on the laptop is at 2000 px, inside the other's 1512–3432 too.
     #[test]
-    fn an_item_is_on_the_screen_that_holds_its_middle() {
-        let screens = [screen_at(-1000.0), screen_at(0.0)];
-        let on = |x: f64| screens.iter().position(|s| s.holds(x, 10.0));
-        assert_eq!(on(-500.0), Some(0));
-        assert_eq!(on(0.0), Some(1));
-        assert_eq!(on(1000.0), None);
+    fn an_item_is_on_the_screen_under_the_pointer_in_points() {
+        let laptop = Screen { area: Area { x: 0.0, y: 0.0, w: 1512.0, h: 982.0 }, scale: 2.0 };
+        let external = Screen { area: Area { x: 1512.0, y: 0.0, w: 1920.0, h: 1080.0 }, scale: 1.0 };
+        let screens = [external, laptop];
+        let on_laptop = Area { x: 2000.0, y: 0.0, w: 60.0, h: 48.0 };
+        assert_eq!(item_screen(&screens, on_laptop, Some((1015.0, 12.0))), Some(1));
+        let on_external = Area { x: 2000.0, y: 0.0, w: 30.0, h: 24.0 };
+        assert_eq!(item_screen(&screens, on_external, Some((2015.0, 12.0))), Some(0));
+        // Without the pointer, the first screen holding the item's middle at its own scale.
+        assert_eq!(item_screen(&[laptop, external], on_laptop, None), Some(0));
+        assert_eq!(item_screen(&[laptop], Area { x: 4000.0, y: 0.0, w: 10.0, h: 10.0 }, None), None);
+        // And it goes under the item in points, on that screen: centred under 1015 pt.
+        let (x, y) = place(on_laptop.scaled(laptop.scale), laptop.area);
+        assert_eq!((x, y), (1015.0 - POPOVER_WIDTH / 2.0, 24.0 + GAP));
+        // Near the external screen's right edge, kept whole on it.
+        let (x, _) = place(Area { x: 3400.0, y: 0.0, w: 30.0, h: 24.0 }, external.area);
+        assert_eq!(x, 3432.0 - POPOVER_WIDTH - GAP);
     }
 
     /// A share with nothing said about what's left of the computer.

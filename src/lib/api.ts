@@ -351,6 +351,13 @@ export interface TopApps {
 }
 
 export type VmAction = 'start' | 'stop' | 'restart' | 'delete';
+/** A line of a container's log as podman sent it: its RFC 3339 time, a space, the text; and its
+ * stream, null for a TTY container's (one stream). */
+export interface RawLogLine {
+  stream: 'stdout' | 'stderr' | null;
+  line: string;
+}
+
 export type ContainerAction = 'start' | 'stop' | 'restart' | 'remove';
 
 export const api = {
@@ -373,8 +380,9 @@ export const api = {
     invoke<void>('vm_resize', { name, resize }),
   containerAction: (vm: string, id: string, action: ContainerAction) =>
     invoke<void>('container_action', { vm, id, action }),
-  containerLogs: (vm: string, id: string, tail = 500) =>
-    invoke<string>('container_logs', { vm, id, tail }),
+  /** A container's newest `tail` lines (at most 20,000), only those since `since` (Unix ms) if given. */
+  containerLogs: (vm: string, id: string, tail = 500, since: number | null = null) =>
+    invoke<RawLogLine[]>('container_logs', { vm, id, tail, since }),
   containerInspect: (vm: string, id: string) => invoke<unknown>('container_inspect', { vm, id }),
   systemDf: (vm: string) => invoke<Record<string, unknown>>('system_df', { vm }),
   images: (vm: string) => invoke<Image[]>('images', { vm }),

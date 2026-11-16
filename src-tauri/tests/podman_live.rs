@@ -33,14 +33,16 @@ async fn lists_stats_logs_and_df_from_a_real_engine() {
     assert!(s.mem_usage > 0, "memory usage reported: {s:?}");
     assert!(s.pids >= 1, "pids reported: {s:?}");
 
-    let logs = pod.logs(&web.id, 5).await.expect("logs");
-    assert!(logs.contains("tick"), "logs: {logs:?}");
-    // Each line starts with when podman recorded it.
+    let logs = pod.logs(&web.id, 5, None).await.expect("logs");
+    assert!(logs.iter().any(|l| l.line.contains("tick")), "logs: {logs:?}");
+    // Each line starts with when podman recorded it, and says its stream (the container has no TTY).
     assert!(
-        logs.lines()
-            .all(|l| l.split(' ').next().is_some_and(|t| chrono::DateTime::parse_from_rfc3339(t).is_ok())),
+        logs.iter().all(|l| l.stream.is_some()
+            && l.line.split(' ').next().is_some_and(|t| chrono::DateTime::parse_from_rfc3339(t).is_ok())),
         "timestamps: {logs:?}"
     );
+    // Only what was written since a time: none since a minute from now.
+    assert!(pod.logs(&web.id, 5, Some(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64 + 60)).await.expect("logs since").is_empty());
 
     let inspect = pod.inspect(&web.id).await.expect("inspect");
     assert_eq!(inspect["Id"].as_str(), Some(web.id.as_str()));
