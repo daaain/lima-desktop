@@ -255,8 +255,8 @@ describe("the legend's figures", () => {
     expect(layerAside('disk', layer({ running: false, constant: true }), '7d')).toBe('not running');
   });
   it("says what a VM is allocated, under its peak, only where containers listed under it leave a line spare", () => {
-    expect(allocatedAside('mem', layer({}), 1)).toBe('16.0 GiB allocated');
-    expect(allocatedAside('cpu', layer({ allocated: 8000 }), 2)).toBe('8 cores allocated');
+    expect(allocatedAside('mem', layer({}), 1)).toBe('16.0 GiB allocated to VM');
+    expect(allocatedAside('cpu', layer({ allocated: 8000 }), 2)).toBe('8 cores allocated to VM');
     // A VM with nothing listed under it stays one line.
     expect(allocatedAside('mem', layer({}), 0)).toBe('');
     expect(allocatedAside('cpu', layer({ allocated: 8000 }), 0)).toBe('');

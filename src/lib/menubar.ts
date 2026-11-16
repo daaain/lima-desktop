@@ -298,13 +298,13 @@ export function layerAside(tab: Tab, l: Layer, over: AnyRangeKey): string {
 }
 
 /**
- * Under a memory or CPU row's peak, what the VM is allocated ("8.0 GiB allocated", "4 cores
- * allocated"), but only where `listed` containers under it leave that line spare: a VM with none is
+ * Under a memory or CPU row's peak, what the VM is allocated ("8.0 GiB allocated to VM", "4 cores
+ * allocated to VM"), but only where `listed` containers under it leave that line spare: a VM with none is
  * usually idle, and stays one line.
  */
 export function allocatedAside(tab: Tab, l: Layer, listed: number): string {
   if (!listsTop(tab) || listed === 0 || l.allocated == null) return '';
-  return `${whole(tab, l.allocated)} allocated`;
+  return `${whole(tab, l.allocated)} allocated to VM`;
 }
 
 /** The allocation, pointed at: whose it is, as the line it's on is a container's. */
