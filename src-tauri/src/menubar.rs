@@ -25,7 +25,7 @@ use crate::settings::{Drawing, Item, MenuBar, Saved, Warn};
 
 /// The popover window's label, and its width in points.
 pub const POPOVER: &str = "popover";
-const POPOVER_WIDTH: f64 = 360.0;
+const POPOVER_WIDTH: f64 = 396.0;
 const APP_ITEM: &str = "app";
 
 /// One of the computer's resources, as an item in the menu bar.

@@ -44,7 +44,7 @@ async function item(theme, res) {
 
 async function popover(browser, dark) {
   const context = await browser.newContext({
-    viewport: { width: 360, height: 560 }, deviceScaleFactor: SCALE, colorScheme: dark ? 'dark' : 'light', locale: 'en-GB', timezoneId: 'UTC',
+    viewport: { width: 396, height: 560 }, deviceScaleFactor: SCALE, colorScheme: dark ? 'dark' : 'light', locale: 'en-GB', timezoneId: 'UTC',
   });
   const page = await context.newPage();
   await page.clock.setFixedTime(NOW);
@@ -76,9 +76,9 @@ function scene(theme, items, popoverPng) {
   .item { display: flex; align-items: center; height: 22px; padding: 0 5px; border-radius: 5px; }
   .item.open { background: ${dark ? 'rgba(255, 255, 255, 0.2)' : 'rgba(0, 0, 0, 0.1)'}; }
   .clock { margin-left: 8px; }
-  .popover { position: absolute; top: 28px; width: 360px; border-radius: 10px; overflow: hidden;
+  .popover { position: absolute; top: 28px; width: 396px; border-radius: 10px; overflow: hidden;
     box-shadow: 0 0 0 0.5px ${dark ? 'rgba(255, 255, 255, 0.18)' : 'rgba(0, 0, 0, 0.22)'}, 0 12px 36px rgba(0, 0, 0, ${dark ? 0.5 : 0.22}); }
-  .popover img { display: block; width: 360px; }
+  .popover img { display: block; width: 396px; }
   .room { height: 4px; }
   </style></head><body><div class="shot">
   <div class="bar">${canvases}<span class="clock">Tue 10 Nov 14:30</span></div>

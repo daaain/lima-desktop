@@ -32,7 +32,7 @@ export const parseTabRange = (tab: Tab, saved: string | null | undefined): AnyRa
   TAB_RANGES[tab].find((k) => k === saved) ?? DEFAULT_RANGE[tab];
 /** Under the chart's left end: "1 h ago". */
 export const agoLabel = (k: AnyRangeKey) => `${rangeLabel(k)} ago`;
-/** How many buckets the chart asks for: about one per 3 px of a 360 px popover. */
+/** How many buckets the chart asks for: about one per 3 px of the 396 px popover. */
 export const STACK_POINTS = 120;
 
 /**

@@ -193,8 +193,8 @@ for (const dark of [false, true]) {
   });
 
   test(`Menu bar popover${suffix}`, async () => {
-    // As the backend opens it: a window 360 px wide, under the memory item.
-    const { page, errors, close } = await open('/menubar?tab=mem', { dark, width: 360, height: 560 });
+    // As the backend opens it: a window 396 px wide, under the memory item.
+    const { page, errors, close } = await open('/menubar?tab=mem', { dark, width: 396, height: 560 });
     await page.locator('.legend .row[data-vm]').first().waitFor();
     // Only the page: none of the main window's chrome.
     assert.equal(await page.getByRole('link', { name: 'Settings' }).count(), 0);
@@ -266,7 +266,7 @@ for (const dark of [false, true]) {
 }
 
 test('The popover opens on the tab asked for, switches tabs and keeps each one\'s range', async () => {
-  const { page, errors, close } = await open('/menubar?tab=disk', { width: 360, height: 560 });
+  const { page, errors, close } = await open('/menubar?tab=disk', { width: 396, height: 560 });
   const tab = (name) => page.getByRole('tab', { name });
   const range = (name) => page.getByRole('group', { name: 'Over the last' }).getByRole('button', { name });
   await page.locator('.legend .row[data-vm]').first().waitFor();
@@ -326,7 +326,7 @@ test('The popover is told its tab when shown again, watches 2 min move, and fetc
       return invoke(cmd, args);
     };
   };
-  const { page, errors, close } = await open('/menubar?tab=mem', { width: 360, height: 560, init: count });
+  const { page, errors, close } = await open('/menubar?tab=mem', { width: 396, height: 560, init: count });
   const tab = (name) => page.getByRole('tab', { name });
   const range = (name) => page.getByRole('group', { name: 'Over the last' }).getByRole('button', { name });
   await page.locator('.legend .row[data-vm]').first().waitFor();
@@ -370,7 +370,7 @@ test('The popover is told its tab when shown again, watches 2 min move, and fetc
 
 for (const dark of [false, true]) {
   test(`The popover's hover${dark ? ', dark' : ''}: a VM, wired memory and everything else come forward`, async () => {
-    const { page, errors, close } = await open('/menubar?tab=mem', { dark, width: 360, height: 560 });
+    const { page, errors, close } = await open('/menubar?tab=mem', { dark, width: 396, height: 560 });
     await page.locator('svg path.band.wired').waitFor();
     // Pointing at a band lights its row too.
     await page.locator('svg path.band.wired').dispatchEvent('pointermove');
@@ -387,7 +387,7 @@ for (const dark of [false, true]) {
 }
 
 test("The popover's CPU apps wait for a second sample, and one that can't be read says so", async () => {
-  const { page, errors, close } = await open('/menubar?tab=cpu', { width: 360, height: 560 });
+  const { page, errors, close } = await open('/menubar?tab=cpu', { width: 396, height: 560 });
   // Opened on CPU: nothing to measure from yet, so no figures that look real.
   await page.locator('.row[data-apps="pending"]').waitFor();
   assert.equal(await page.locator('.row[data-apps="pending"] .name').innerText(), 'measuring the busiest apps…');
@@ -415,7 +415,7 @@ test("The popover's CPU apps wait for a second sample, and one that can't be rea
 
 test('The popover warns as Settings has it, read again each time it is shown', async () => {
   // Memory about half in use: not past the 75 % it warns past by default.
-  const { page, errors, close } = await open('/menubar?tab=mem', { width: 360, height: 560 });
+  const { page, errors, close } = await open('/menubar?tab=mem', { width: 396, height: 560 });
   const tab = (name) => page.getByRole('tab', { name });
   const hot = () => page.locator('.big').evaluate((el) => el.classList.contains('hot'));
   await page.locator('.legend .row[data-vm]').first().waitFor();
@@ -562,7 +562,7 @@ test('The new version opens its release page, stays dismissed, and a later one s
 });
 
 test('The popover says a newer version too, above its footer', async () => {
-  const { page, errors, close } = await open('/menubar?tab=mem', { width: 360, height: 560, init: `window.__fakeUpdate = ${JSON.stringify(V030)};` });
+  const { page, errors, close } = await open('/menubar?tab=mem', { width: 396, height: 560, init: `window.__fakeUpdate = ${JSON.stringify(V030)};` });
   const notice = page.locator('.newer .update');
   await notice.waitFor();
   assert.equal((await notice.textContent()).replace(/\s+/g, ' ').trim(), 'Lima Desktop 0.3.0 is out · Download ×');
@@ -574,7 +574,7 @@ test('The popover says a newer version too, above its footer', async () => {
 });
 
 test('The popover, shown again after the check was switched off in Settings, no longer says a newer version', async () => {
-  const { page, errors, close } = await open('/menubar?tab=mem', { width: 360, height: 560, init: `window.__fakeUpdate = ${JSON.stringify(V030)};` });
+  const { page, errors, close } = await open('/menubar?tab=mem', { width: 396, height: 560, init: `window.__fakeUpdate = ${JSON.stringify(V030)};` });
   const notice = page.locator('.newer .update');
   await notice.waitFor();
   // Switched off in the main window's Settings while the popover was hidden.
