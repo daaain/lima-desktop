@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Snapshot, Stack, VmLive, Warn } from './api';
 import {
-  agoLabel, amount, appTip, APPS_PENDING, chartLabel, containersByVm, containerTip, layerAside, layerFigure, layers, listsTop, ofSentence,
+  agoLabel, allocatedAside, allocatedTip, amount, appTip, APPS_PENDING, chartLabel, containersByVm, containerTip, layerAside, layerFigure, layers, listsTop, ofSentence,
   parseTab, parseTabRange, percentFigure, pickTop, recordingPhrase, reportedFigure, reportedTip, shares, stackChart, stackRefreshMs, TAB_RANGES, topApps,
   topContainers, WIRED, type Layer,
 } from './menubar';
@@ -202,7 +202,16 @@ describe('layers', () => {
     });
     const ls = layers(shares(fleet, 'mem'), stack, 'mem');
     expect(ls.map((l) => l.name)).toEqual(['atlas', 'harbor', 'gone']);
-    expect(ls[2]).toMatchObject({ now: null, running: false, peak: 3 * GiB });
+    expect(ls[2]).toMatchObject({ now: null, running: false, peak: 3 * GiB, allocated: null });
+  });
+  it("carries each VM's allocation in the tab's unit: memory in bytes, CPU in millicores, a disk in bytes", () => {
+    const sized = snap(
+      [{ ...vm({ name: 'harbor', cpus: 4, memory: 8 * GiB, disk: 60 * GiB }), latest: { host_rss: 6 * GiB, host_cpu_mc: 900, host_disk_alloc: 20 * GB } }],
+      host,
+    );
+    expect(layers(shares(sized, 'mem'), null, 'mem')[0].allocated).toBe(8 * GiB);
+    expect(layers(shares(sized, 'cpu'), null, 'cpu')[0].allocated).toBe(4000);
+    expect(layers(shares(sized, 'disk'), null, 'disk')[0].allocated).toBe(60 * GiB);
   });
   it('draws a stopped VM with no history at its size now, and holds a disk through its gaps', () => {
     const stack = stackOf({
@@ -230,7 +239,8 @@ describe('layers', () => {
 
 describe("the legend's figures", () => {
   const layer = (o: Partial<Layer>): Layer => ({
-    name: 'a', now: 10 * GiB, reported: null, running: true, stalled: false, values: [8 * GiB, 9 * GiB], peak: 16.6 * GiB, constant: false, ...o,
+    name: 'a', now: 10 * GiB, reported: null, running: true, stalled: false, allocated: 16 * GiB, values: [8 * GiB, 9 * GiB], peak: 16.6 * GiB,
+    constant: false, ...o,
   });
   it('gives the peak in the range for memory and CPU', () => {
     expect(layerAside('mem', layer({}), '1h')).toBe('peak 16.6 GiB in 1 h');
@@ -244,6 +254,20 @@ describe("the legend's figures", () => {
     expect(layerAside('disk', layer({ values: [10 * GB, 10 * GB] }), '1h')).toBe('unchanged in 1 h');
     expect(layerAside('disk', layer({ running: false, constant: true }), '7d')).toBe('not running');
   });
+  it("says what a VM is allocated, under its peak, only where containers listed under it leave a line spare", () => {
+    expect(allocatedAside('mem', layer({}), 1)).toBe('16.0 GiB allocated');
+    expect(allocatedAside('cpu', layer({ allocated: 8000 }), 2)).toBe('8 cores allocated');
+    // A VM with nothing listed under it stays one line.
+    expect(allocatedAside('mem', layer({}), 0)).toBe('');
+    expect(allocatedAside('cpu', layer({ allocated: 8000 }), 0)).toBe('');
+    // A disk lists no containers; nor does a VM the range only still holds, which has no size now.
+    expect(allocatedAside('disk', layer({ allocated: 100 * GB }), 1)).toBe('');
+    expect(allocatedAside('mem', layer({ allocated: null }), 1)).toBe('');
+  });
+  it('says whose allocation it is, pointed at', () => {
+    expect(allocatedTip('mem', layer({ name: 'harbor', allocated: 8 * GiB }))).toBe('harbor is allocated 8.0 GiB of memory');
+    expect(allocatedTip('cpu', layer({ name: 'harbor', allocated: 4000 }))).toBe('harbor is allocated 4 cores');
+  });
   it("says a VM without a reading now isn't running", () => {
     expect(layerFigure('mem', layer({ now: null }))).toBe('not running');
     expect(layerFigure('cpu', layer({ now: 2400 }))).toBe('2.4 cores');
@@ -254,7 +278,7 @@ describe("the legend's figures", () => {
 describe('stackChart', () => {
   const at = { from: 0, to: 200, width: 100, height: 100 };
   const layer = (name: string, values: (number | null)[]): Layer => ({
-    name, now: 1, reported: null, running: true, stalled: false, values, peak: null, constant: false,
+    name, now: 1, reported: null, running: true, stalled: false, allocated: null, values, peak: null, constant: false,
   });
 
   it('stacks the VMs from the bottom, everything else above, each bucket held across itself', () => {

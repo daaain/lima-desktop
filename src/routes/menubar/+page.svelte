@@ -12,7 +12,7 @@
   import { api, type Snapshot, type Stack, type Theme, type TopApps, type Warn } from '$lib/api';
   import { inOrder } from '$lib/inOrder';
   import {
-    agoLabel, amount, appTip, APPS_PENDING, chartLabel, containersByVm, containerTip, layerAside, layerFigure, layers, listsTop, ofSentence,
+    agoLabel, allocatedAside, allocatedTip, amount, appTip, APPS_PENDING, chartLabel, containersByVm, containerTip, layerAside, layerFigure, layers, listsTop, ofSentence,
     parseTab, parseTabRange, percentFigure, rangeLabel, recordingPhrase, reportedFigure, reportedTip, shares, stackChart, stackRefreshMs, stalledTip, topApps,
     topContainers, SHADES, STACK_POINTS, TAB_RANGES, TABS, TOP_N, WIRED, type Tab,
   } from '$lib/menubar';
@@ -253,13 +253,16 @@
           <span class="aside num">{current ? layerAside(tab, l, range) : ''}</span>
         </li>
         {#if listsTop(tab)}
-          {#each containersUnder.get(l.name) ?? [] as c (c.id)}
+          {@const under = containersUnder.get(l.name) ?? []}
+          {#each under as c, j (c.id)}
+            <!-- The VM's allocation, under its peak, on the line its first container leaves spare. -->
+            {@const allocated = j === 0 ? allocatedAside(tab, l, under.length) : ''}
             <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
             <li class="row sub" class:hl={lit === vmLit(l.name)} data-container={c.name} data-in={l.name} title={containerTip(tab, c)}
               onmouseenter={() => (lit = vmLit(l.name))} onmouseleave={() => (lit = null)}>
               <span></span>
               <span class="part"><span class="name serif">{c.name}</span><span class="fig num">{amount(tab, c.now)}</span></span>
-              <span class="aside"></span>
+              <span class="aside num" data-allocated={allocated ? l.name : undefined} title={allocated ? allocatedTip(tab, l) : undefined}>{allocated}</span>
             </li>
           {/each}
         {/if}

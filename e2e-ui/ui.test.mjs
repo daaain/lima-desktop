@@ -221,7 +221,18 @@ for (const dark of [false, true]) {
       'atlas', 'frontend', 'harbor', 'harbor-devbox', 'app', 'quill', 'quill-devbox', 'lantern', 'lantern-devbox', 'ember',
       'wired', 'everything else', 'Google Chrome', 'Visual Studio Code', 'Slack', 'WindowServer', 'Mail', 'free',
     ]);
-    assert.match(await page.locator('.row[data-container="harbor-devbox"]').innerText(), /^harbor-devbox\s+2\.\d GiB$/);
+    assert.match(await page.locator('.row[data-container="harbor-devbox"] .part').innerText(), /^harbor-devbox\s+2\.\d GiB$/);
+    // Under a VM's peak, on the line its first container leaves spare, what it's allocated; a VM with
+    // nothing listed under it (ember) stays one line, and says nothing of it.
+    assert.deepEqual(await page.locator('[data-allocated]').evaluateAll((els) => els.map((e) => [e.dataset.allocated, e.closest('.row').dataset.container, e.textContent])), [
+      ['atlas', 'frontend', '48.0 GiB allocated'], ['harbor', 'harbor-devbox', '8.0 GiB allocated'],
+      ['quill', 'quill-devbox', '8.0 GiB allocated'], ['lantern', 'lantern-devbox', '16.0 GiB allocated'],
+    ]);
+    assert.equal(await page.locator('[data-allocated="harbor"]').getAttribute('title'), 'harbor is allocated 8.0 GiB of memory');
+    assert.equal(await page.locator('.row[data-container="app"] .aside').innerText(), '');
+    // It takes no room of its own: a container's line is as tall with it as without.
+    const tall = (sel) => page.locator(sel).evaluate((el) => el.getBoundingClientRect().height);
+    assert.equal(await tall('.row[data-container="harbor-devbox"]'), await tall('.row[data-container="app"]'));
     // Memory as its share of the use, Activity Monitor's figure in brackets beside it where it has one.
     assert.match(await page.locator('.row[data-app="Google Chrome"]').innerText(), /^Google Chrome\s+5\.\d GiB\s*\(6\.\d\)$/);
     assert.match(await page.locator('.row[data-app="WindowServer"]').innerText(), /^WindowServer\s+1\.\d GiB$/);
@@ -237,14 +248,17 @@ for (const dark of [false, true]) {
     await page.getByRole('tab', { name: 'CPU' }).click();
     await page.waitForFunction(() => /Google Chrome\s+[\d.]+ cores/.test(document.querySelector('.legend').innerText));
     assert.equal(await page.locator('.row[data-apps]').count(), 0);
-    assert.match(await page.locator('.row[data-container="harbor-devbox"]').innerText(), /^harbor-devbox\s+\d\.\d cores$/);
+    assert.match(await page.locator('.row[data-container="harbor-devbox"] .part').innerText(), /^harbor-devbox\s+\d\.\d cores$/);
+    assert.equal(await page.locator('[data-allocated="harbor"]').innerText(), '4 cores allocated');
+    assert.equal(await page.locator('[data-allocated="ember"]').count(), 0);
     assert.equal(await page.locator('.row[data-container="harbor-devbox"]').getAttribute('title'), 'harbor-devbox\nMeasured inside harbor: part of its CPU above, not more on top of it');
     assert.equal(await page.locator('.row.sub[data-app]').count(), 5);
     await shoot(page, `menubar-cpu${suffix}`);
     await page.getByRole('tab', { name: 'Disk' }).click();
     await page.waitForFunction(() => /grew [\d.]+ GB in 7 days/.test(document.querySelector('.legend').innerText));
-    // No apps or containers for a disk.
+    // No apps or containers for a disk, so no line spare for an allocation.
     assert.equal(await page.locator('.legend .row.sub').count(), 0);
+    assert.equal(await page.locator('[data-allocated]').count(), 0);
     await shoot(page, `menubar-disk${suffix}`);
     assert.deepEqual(errors, []);
     await close();
