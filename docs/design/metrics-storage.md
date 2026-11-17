@@ -12,8 +12,11 @@ rather than a row each. A row per sample would be ~8 GB.
 | --- | --- | --- |
 | VM (×10) | 16 — guest CPU, memory used/available/total, swap, PSI memory some/full, PSI CPU, OOM kills, root and container-store disk used/size, and host-side memory footprint, CPU and allocated disk | 160 |
 | container (×100) | 10 — CPU, memory, limit, peak, OOM kills, pids, net rx/tx, block read/write | 1,000 |
+| compose project (×20) | 10 — the container metrics, its running containers added up at each stats round | 200 |
 
-1,160 series × 604,800 s ≈ **700 M samples a week**.
+1,360 series × 604,800 s ≈ **820 M samples a week**. The layouts below were measured before compose
+projects had series of their own, on the first 1,160 (700 M samples): add about a sixth, ~0.8 GB a
+week for the real store.
 
 ## Layouts measured
 

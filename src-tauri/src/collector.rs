@@ -596,8 +596,6 @@ impl Collector {
 
     async fn podman_loop(self: Arc<Self>, name: String) {
         let mut prev: HashMap<String, (Instant, RawStat)> = HashMap::new();
-        // Each compose project's own entity, once found or made.
-        let mut projects: HashMap<String, i64> = HashMap::new();
         let mut tick: u32 = 0;
         // An unsupported podman: its error stands, and its stats aren't read, until it's upgraded.
         let mut refused = false;
@@ -688,7 +686,7 @@ impl Collector {
                 prev.insert(s.id.clone(), (now, s.clone()));
             }
             prev.retain(|id, _| running.contains(id.as_str()));
-            self.ingest_projects(&name, ts, sums, &mut projects);
+            self.ingest_projects(&name, ts, sums);
         }
     }
 
@@ -725,27 +723,16 @@ impl Collector {
         }
     }
 
-    /// Each compose project's sum on one tick into its own series, its entity found or made once.
-    fn ingest_projects(
-        &self,
-        vm: &str,
-        ts: i64,
-        sums: HashMap<String, Vec<i64>>,
-        ids: &mut HashMap<String, i64>,
-    ) {
+    /// Each compose project's sum on one tick into its own series. Its entity is looked up each
+    /// time, not kept: retention may have dropped it while the project was stopped, and this makes
+    /// it again.
+    fn ingest_projects(&self, vm: &str, ts: i64, sums: HashMap<String, Vec<i64>>) {
         let mut store = self.store();
         for (project, sum) in sums {
-            let id = match ids.get(&project) {
-                Some(&id) => id,
-                None => match store.entity(Kind::Project, vm, &project, &project, ts) {
-                    Ok(id) => *ids.entry(project).or_insert(id),
-                    Err(e) => {
-                        log::warn!("compose project {project}'s series: {e}");
-                        continue;
-                    }
-                },
-            };
-            store.ingest(id, ts, sum);
+            match store.entity(Kind::Project, vm, &project, &project, ts) {
+                Ok(id) => store.ingest(id, ts, sum),
+                Err(e) => log::warn!("compose project {project}'s series: {e}"),
+            }
         }
     }
 

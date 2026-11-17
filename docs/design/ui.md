@@ -257,7 +257,9 @@ under the sentence, figures and bar it explains, with the allocation as a dashed
   then each project under a heading row (`ProjectHead.svelte`): its name, "twelve running, one
   exited", and what its running containers use between them, drawn in the lines' own columns
   against the VM's memory and cores. It describes the whole project whatever the filter: the
-  filter only decides which of its lines are listed under it. Above its bars, the project over the range
+  filter only decides which of its lines are listed under it. Otherwise a filtered list is what it
+  lists: a VM's heading counts its listed containers, and VMs and projects are ranked by them, so
+  under a search a project can rank below one whose heading shows less. Above its bars, the project over the range
   (`compose_series`): its containers added up moment by moment, removed and recreated ones
   included, so its least, average and peak are what they used together at one moment, at any range.
   The collector writes that sum as the project's own series at each stats round, before minute
