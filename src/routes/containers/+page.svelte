@@ -7,7 +7,6 @@
   import { range, rangeWindow } from '$lib/range.svelte';
   import { theLast } from '$lib/ranges';
   import { BY_MEMORY, CONTAINER_COLUMNS, CONTAINER_SORTS, containerRows, filterContainers, groupContainers, lineHistory, readContainerFilter, type ContainerSort } from '$lib/containers';
-  import type { ContainerLive } from '$lib/api';
   import { podmanFailures, podmanScope } from '$lib/perVm';
   import { withParam } from '$lib/url';
   import ContainerLine from '$lib/ContainerLine.svelte';
@@ -32,20 +31,6 @@
   const scope = $derived(podmanScope(live.snapshot));
   const all = $derived(containerRows(live.snapshot));
   const rows = $derived(filterContainers(all, { ...urlFilter, query }));
-  // Every container of each compose project, keyed `vm/project`, whatever the filter: a project's
-  // heading describes the whole project, as its range (compose_series) does, and the filter only
-  // decides which of its lines are listed under it.
-  const projectContainers = $derived.by(() => {
-    const byProject = new Map<string, ContainerLive[]>();
-    for (const { vm, c } of all) {
-      if (!c.composeProject) continue;
-      const key = keyOf(vm, c.composeProject);
-      const project = byProject.get(key);
-      if (project) project.push(c);
-      else byProject.set(key, [c]);
-    }
-    return byProject;
-  });
 
   const history = new History();
   // Each running container's line's range (containers.lineHistory), each compose project's, and
@@ -57,9 +42,11 @@
   });
   // One group per VM, split by compose project (those in none first, under no heading). By default
   // the VM using the most memory first, then its projects, then the largest container in each; a
-  // column head orders all three by its column (containers.ts).
+  // column head orders all three by its column (containers.ts). A VM's and a project's heading
+  // describe it whole, as a project's range (compose_series) does, and a project is ordered by its
+  // whole: the filter only decides which lines are listed.
   const ordering = new Ordering('containers', CONTAINER_SORTS, BY_MEMORY);
-  const groups = $derived(groupContainers(rows, ordering.current).map((g) => ({ ...g, live: live.vm(g.vm) })));
+  const groups = $derived(groupContainers(rows, ordering.current, all).map((g) => ({ ...g, live: live.vm(g.vm) })));
   const heads = $derived<{ key: ContainerSort; text: string; span?: number }[]>([
     { key: 'name', text: `${countWord(groups.length)} ${groups.length === 1 ? 'VM' : 'VMs'}` },
     { key: 'memory', text: 'Memory', span: 2 },
@@ -123,11 +110,11 @@
   <div class="lines">
     {#each groups as g (g.vm)}
       <section animate:glide>
-        <h2 class="head"><a href={`/vm/${encodeURIComponent(g.vm)}`}>{g.vm}</a> {runsSentence(g.rows.map((r) => r.c))}</h2>
+        <h2 class="head"><a href={`/vm/${encodeURIComponent(g.vm)}`}>{g.vm}</a> {runsSentence(g.all.map((r) => r.c))}</h2>
         {#each g.projects as p (p.project)}
           <div animate:glide>
             {#if p.project}
-              <ProjectHead project={p.project} containers={projectContainers.get(keyOf(g.vm, p.project)) ?? []} history={history.get({ vm: g.vm, project: p.project })}
+              <ProjectHead project={p.project} containers={p.all.map((r) => r.c)} history={history.get({ vm: g.vm, project: p.project })}
                 vmHistory={history.get(g.live?.entity)} vmMemory={g.live?.instance.memory ?? 0} vmCpus={g.live?.instance.cpus ?? 1} />
             {/if}
             {#each p.rows as { vm, c } (c.id)}

@@ -256,8 +256,9 @@ under the sentence, figures and bar it explains, with the allocation as a dashed
   Within a VM, what is in no compose project comes first, under no heading (it is the VM's own);
   then each project under a heading row (`ProjectHead.svelte`): its name, "twelve running, one
   exited", and what its running containers use between them, drawn in the lines' own columns
-  against the VM's memory and cores. It describes the whole project whatever the filter: the
-  filter only decides which of its lines are listed under it. Above its bars, the project over the range
+  against the VM's memory and cores. It describes the whole project whatever the filter, as
+  the VM's heading does the whole VM, and projects are ordered by their whole: the filter only
+  decides which lines are listed. Above its bars, the project over the range
   (`compose_series`): its containers added up moment by moment, removed and recreated ones
   included, so its least, average and peak are what they used together at one moment, at any range.
   The collector writes that sum as the project's own series at each stats round, before minute

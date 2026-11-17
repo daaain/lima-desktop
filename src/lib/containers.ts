@@ -77,10 +77,14 @@ const orderVia = <T>(container: (t: T) => ContainerLive) =>
     CONTAINER_SORTS.map((k) => [k, (a: T, b: T, dir: number) => CONTAINER_ORDER[k](container(a), container(b), dir)]),
   ) as Record<ContainerSort, Compare<T>>;
 
-/** A VM's containers of one compose project; `project` null for those in none. */
+/**
+ * A VM's containers of one compose project, `project` null for those in none: `rows` those listed,
+ * `all` every one, whatever a filter left out, as its heading describes the whole project.
+ */
 export interface ProjectGroup<T> {
   project: string | null;
   rows: T[];
+  all: T[];
 }
 
 /** What a compose project's running containers use between them, and how many run. */
@@ -103,50 +107,75 @@ const PROJECT_ORDER: Record<ContainerSort, Compare<Totalled>> = {
 /**
  * `items` (containers, or what holds one: `container` finds it) by compose project, in order `o`:
  * those in none first, as they come under no heading of their own, then each project, and the
- * containers in each by the same column.
+ * containers in each by the same column. `all`, when `items` are what a filter left of them, are
+ * the projects whole: each is ordered by what all its containers add up to.
  */
-export function byProject<T>(items: readonly T[], container: (t: T) => ContainerLive, o: Order<ContainerSort>): ProjectGroup<T>[] {
-  const none: T[] = [];
-  const byName = new Map<string, T[]>();
-  for (const t of items) {
-    const k = container(t).composeProject;
-    if (!k) none.push(t);
-    else if (byName.has(k)) byName.get(k)!.push(t);
-    else byName.set(k, [t]);
-  }
+export function byProject<T>(items: readonly T[], container: (t: T) => ContainerLive, o: Order<ContainerSort>, all: readonly T[] = items): ProjectGroup<T>[] {
+  const split = (ts: readonly T[]) => {
+    const byName = new Map<string | null, T[]>();
+    for (const t of ts) {
+      const k = container(t).composeProject ?? null;
+      const group = byName.get(k);
+      if (group) group.push(t);
+      else byName.set(k, [t]);
+    }
+    return byName;
+  };
+  const listed = split(items);
+  const whole = split(all);
   const order = orderVia(container);
   const rows = (ts: T[]) => sortBy(ts, order, o);
-  const projects: (Totalled & { ts: T[] })[] = [...byName.entries()].map(([project, ts]) => ({ project, ts, ...projectTotals(ts.map(container)) }));
+  const none = listed.get(null);
+  const projects: (Totalled & { ts: T[]; all: T[] })[] = [...listed.entries()]
+    .filter((e): e is [string, T[]] => e[0] !== null)
+    .map(([project, ts]) => {
+      const every = whole.get(project) ?? ts;
+      return { project, ts, all: every, ...projectTotals(every.map(container)) };
+    });
   return [
-    ...(none.length ? [{ project: null, rows: rows(none) }] : []),
-    ...sortBy(projects, PROJECT_ORDER, o).map((p) => ({ project: p.project, rows: rows(p.ts) })),
+    ...(none ? [{ project: null, rows: rows(none), all: whole.get(null) ?? none }] : []),
+    ...sortBy(projects, PROJECT_ORDER, o).map((p) => ({ project: p.project, rows: rows(p.ts), all: p.all })),
   ];
 }
 
-/** One VM's containers on the Containers view (`rows`, as they come), and in order split by compose project. */
+/**
+ * One VM's containers on the Containers view (`rows`, as they come), and in order split by compose
+ * project; `all` every one of the VM's, whatever a filter left out, as its heading describes it whole.
+ */
 export interface ContainerGroup {
   vm: string;
   rows: ContainerRow[];
+  all: ContainerRow[];
   projects: ProjectGroup<ContainerRow>[];
 }
 const total = (g: { rows: ContainerRow[] }, key: (c: ContainerLive) => number | undefined) => g.rows.reduce((n, r) => n + (key(r.c) ?? 0), 0);
 // Groups follow the column where it adds up (memory, CPU), and go by name for name; for time up,
 // as by default, the VM using the most memory first.
-const GROUP_ORDER: Record<ContainerSort, Compare<Omit<ContainerGroup, 'projects'>>> = {
+const GROUP_ORDER: Record<ContainerSort, Compare<Omit<ContainerGroup, 'projects' | 'all'>>> = {
   name: named((g) => g.vm),
   memory: most((g) => total(g, mem), (g) => g.vm),
   cpu: most((g) => total(g, cpu), (g) => g.vm),
   up: (a, b) => total(b, mem) - total(a, mem) || byText(a.vm, b.vm),
 };
 
-/** `rows` as one group per VM, each split by compose project; the groups and the lines in each in order `o`. */
-export function groupContainers(rows: ContainerRow[], o: Order<ContainerSort>): ContainerGroup[] {
-  const byVm = new Map<string, ContainerRow[]>();
-  for (const r of rows) {
-    const group = byVm.get(r.vm);
-    if (group) group.push(r);
-    else byVm.set(r.vm, [r]);
-  }
-  const groups = [...byVm.entries()].map(([vm, rs]) => ({ vm, rows: rs, projects: byProject(rs, (r) => r.c, o) }));
+/**
+ * `rows` as one group per VM, each split by compose project; the groups and the lines in each in
+ * order `o`. `all`, when `rows` are what a filter left of them, are the VMs and projects whole.
+ */
+export function groupContainers(rows: ContainerRow[], o: Order<ContainerSort>, all: ContainerRow[] = rows): ContainerGroup[] {
+  const byVm = (rs: ContainerRow[]) => {
+    const out = new Map<string, ContainerRow[]>();
+    for (const r of rs) {
+      const group = out.get(r.vm);
+      if (group) group.push(r);
+      else out.set(r.vm, [r]);
+    }
+    return out;
+  };
+  const whole = byVm(all);
+  const groups = [...byVm(rows).entries()].map(([vm, rs]) => {
+    const every = whole.get(vm) ?? rs;
+    return { vm, rows: rs, all: every, projects: byProject(rs, (r) => r.c, o, every) };
+  });
   return sortBy(groups, GROUP_ORDER, o);
 }

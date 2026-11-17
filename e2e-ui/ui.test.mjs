@@ -737,18 +737,21 @@ test("Each VM's containers are split by compose project, each project's heading 
   await vmPage.close();
 });
 
-test("A project's heading describes the whole project whatever the filter leaves under it", async () => {
+test("A VM's and a project's headings describe them whole whatever the filter leaves under them", async () => {
   const { page, errors, close } = await open('/containers');
   await page.locator('.line').first().waitFor();
+  const vmHead = page.locator('h2.head', { has: page.locator('a', { hasText: 'atlas' }) });
+  const vmBefore = await vmHead.innerText();
   const project = page.getByRole('group', { name: 'Compose project atlas' });
   const memory = project.locator('.said strong').first();
   const before = await memory.innerText();
-  // By image, the search leaves one of atlas's twelve: only it is listed under the heading...
+  // By image, the search leaves one of atlas's twelve: only it is listed under the headings...
   await page.getByPlaceholder(/^Search/).fill('postgres');
   await page.waitForFunction(() => document.querySelectorAll('.line').length === 1);
-  // ...but the heading still counts and adds up all twelve, as its chart and peak do.
+  // ...but they still count and add up all of them, as the project's chart and peak do.
   assert.match(await project.innerText(), /^atlas\s+twelve running\b/);
   assert.equal(await memory.innerText(), before);
+  assert.equal(await vmHead.innerText(), vmBefore);
   assert.deepEqual(errors, []);
   await close();
 });
