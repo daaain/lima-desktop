@@ -21,7 +21,7 @@ use crate::oom::{self, OomEvent};
 use crate::podman::{Container, Libpod, PodmanError, RawStat};
 use crate::probe::{self, Block};
 use crate::stall::{self, Change, Watch};
-use crate::store::{ABSENT, CT_METRICS, HOST_METRICS, Kind, Store, VM_METRICS};
+use crate::store::{ABSENT, CT_METRICS, HOST_METRICS, Kind, Store, VM_METRICS, add_sample};
 
 const LIST_EVERY: Duration = Duration::from_secs(3);
 /// How often each VM's container list is read again, at most (and at least once a stats tick).
@@ -596,6 +596,8 @@ impl Collector {
 
     async fn podman_loop(self: Arc<Self>, name: String) {
         let mut prev: HashMap<String, (Instant, RawStat)> = HashMap::new();
+        // Each compose project's own entity, once found or made.
+        let mut projects: HashMap<String, i64> = HashMap::new();
         let mut tick: u32 = 0;
         // An unsupported podman: its error stands, and its stats aren't read, until it's upgraded.
         let mut refused = false;
@@ -660,6 +662,9 @@ impl Collector {
                     c.latest.clear();
                 }
             }
+            // Each compose project's running containers added up on this tick: its own series keeps
+            // what they used at one moment, which their minute rollups can't (Store::compose_series).
+            let mut sums: HashMap<String, Vec<i64>> = HashMap::new();
             for s in &stats {
                 let Some(c) = vm
                     .live
@@ -673,10 +678,17 @@ impl Collector {
                 if let Some(id) = c.entity {
                     self.store().ingest(id, ts, row.clone());
                 }
+                if let Some(project) = &c.container.compose_project {
+                    let sum = sums
+                        .entry(project.clone())
+                        .or_insert_with(|| vec![ABSENT; CT_METRICS.len()]);
+                    add_sample(sum, &row);
+                }
                 c.latest = named(CT_METRICS, &row);
                 prev.insert(s.id.clone(), (now, s.clone()));
             }
             prev.retain(|id, _| running.contains(id.as_str()));
+            self.ingest_projects(&name, ts, sums, &mut projects);
         }
     }
 
@@ -710,6 +722,30 @@ impl Collector {
             }
             wake.notified().await;
             tokio::time::sleep(OOM_SETTLE).await;
+        }
+    }
+
+    /// Each compose project's sum on one tick into its own series, its entity found or made once.
+    fn ingest_projects(
+        &self,
+        vm: &str,
+        ts: i64,
+        sums: HashMap<String, Vec<i64>>,
+        ids: &mut HashMap<String, i64>,
+    ) {
+        let mut store = self.store();
+        for (project, sum) in sums {
+            let id = match ids.get(&project) {
+                Some(&id) => id,
+                None => match store.entity(Kind::Project, vm, &project, &project, ts) {
+                    Ok(id) => *ids.entry(project).or_insert(id),
+                    Err(e) => {
+                        log::warn!("compose project {project}'s series: {e}");
+                        continue;
+                    }
+                },
+            };
+            store.ingest(id, ts, sum);
         }
     }
 

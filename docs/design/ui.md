@@ -258,10 +258,12 @@ under the sentence, figures and bar it explains, with the allocation as a dashed
   exited", and what its running containers use between them, drawn in the lines' own columns
   against the VM's memory and cores. It describes the whole project whatever the filter: the
   filter only decides which of its lines are listed under it. Above its bars, the project over the range
-  (`compose_series`): every container the store has seen in it, removed and recreated ones
-  included (it keeps their compose labels), added up moment by moment, so its peak is the most they
-  used at once (beyond 6 h, from minute rollups, it can be overstated only by peaks in the same
-  minute). A compose container's line is drawn the same way across recreations: the containers
+  (`compose_series`): its containers added up moment by moment, removed and recreated ones
+  included, so its least, average and peak are what they used together at one moment, at any range.
+  The collector writes that sum as the project's own series at each stats round, before minute
+  rollups would lose which container ran when; history from before the project had one is its
+  containers' added up instead (from the store's compose labels), where beyond 6 h containers taking
+  turns within a minute can look as if they ran at once. A compose container's line is drawn the same way across recreations: the containers
   that have had its service and name, one after another, so `db`'s chart doesn't start again when
   compose recreates it (its "since it started" is still the container's own). The column chosen orders the projects too, by what they add
   up to (by memory for time up), and the lines within each.
