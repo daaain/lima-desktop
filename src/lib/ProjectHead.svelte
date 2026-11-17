@@ -50,10 +50,17 @@
 </div>
 
 <style>
+  /* On the menu bar's "everything else" diagonals, faint (`--hatch`), so a busy VM's projects stand
+     out from their lines as the list is scrolled; `--wash` stays a line's hover. The band reaches
+     0.9rem past the columns on each side (the page's gutter is wider), so its content keeps their
+     alignment and the texture never meets a letter's edge. */
   .project {
     display: grid; grid-template-columns: var(--container-columns); column-gap: 1.4rem; align-items: end;
-    padding: 1.6rem 0 0.6rem; border-top: 1px solid var(--muted);
+    margin: 1.1rem -0.9rem 0; padding: 0.9rem 0.9rem 0.6rem; border-top: 1px solid var(--muted);
+    background: repeating-linear-gradient(135deg, var(--hatch) 0 2px, transparent 2px 4px);
   }
+  /* Its charts on the page's own ground: their shapes read as they do on a line, not through stripes. */
+  .drawn :global(.share), .drawn :global(.sketch) { background: var(--bg); }
   /* Its first line hangs from it: no rule between them. */
   .project + :global(div) > :global(.line) { border-top: 0; }
   .who { display: grid; gap: 0.1rem; min-width: 0; }
