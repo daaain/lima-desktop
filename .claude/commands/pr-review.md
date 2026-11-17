@@ -84,7 +84,10 @@ command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1 && echo "gh: rea
     differ, tell the user and suggest `gh pr checkout <number>` before reviewing. If they'd rather
     not, review from the diff alone and say in the review that the surrounding code wasn't the PR's.
     (In CI the PR's merge commit is checked out, so skip this.)
-  - Get the diff to review with `gh pr diff <number>` when a PR exists.
+  - Get the diff to review with `gh pr diff <number>` when a PR exists. It takes no commit, so it
+    shows the live head: after reading it, read `headRefOid` again. If that's no longer the pinned
+    SHA, a push landed in between. In CI, stop without posting (that push started a run of its
+    own); locally, pin the new head and read the diff again.
   - **Read existing comments before reviewing** — see Step 1b.
 - If `gh` is **unavailable** (not installed, or not logged in):
   - Fall back to a local diff against the base ref: `git fetch` is not required — diff against the
@@ -208,8 +211,10 @@ SHAs and tree ids between them by hand:
 
 1. Make sure both commits are here: `git cat-file -t <sha>` says `commit` for each. For one that
    isn't, `git fetch --no-tags origin <sha>`.
-2. Replay each onto the PR's base branch (`origin/<baseRefName>`; it needn't be fresh, as both use
-   the same one). Each prints a tree id, and exits non-zero if the commit conflicts with that base:
+2. Refresh the base: `git fetch --no-tags origin <baseRefName>`. Both replays need a base at least as
+   new as the one either commit was built on; on an older one, what the base gained since cancels
+   out of neither tree and shows as the PR's change. Then replay each onto `origin/<baseRefName>`.
+   Each prints a tree id, and exits non-zero if the commit conflicts with that base:
 
    ```bash
    git merge-tree --write-tree --no-messages origin/<base> <reviewed-sha>
@@ -221,9 +226,9 @@ SHAs and tree ids between them by hand:
    lists the commits since (after a rebase, all of them, as each was rewritten).
 
 Read the surrounding code as usual, but limit findings to the new changes. If that diff touches
-lines from an earlier finding, check whether the finding is fixed. If a commit can't be fetched (a
-force-push GitHub no longer serves, or a dev box that can't fetch) or a replay conflicts, review the
-full `gh pr diff`, but still only report what is new since the last review.
+lines from an earlier finding, check whether the finding is fixed. If a commit or the base can't be
+fetched (a force-push GitHub no longer serves, or a dev box that can't fetch) or a replay
+conflicts, review the full `gh pr diff`, but still only report what is new since the last review.
 
 Use this to:
 
