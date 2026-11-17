@@ -723,10 +723,11 @@ async fn check_probe(ctx: &mut Ctx, vm: &'static str) -> Outcome {
     if vm == P5 {
         let ids: Vec<&String> = [WEB, CLIENT].iter().filter_map(|c| ctx.containers.get(c)).collect();
         let seen = ids.iter().filter(|id| last.cgroups.contains_key(id.as_str())).count();
-        let peak = ids.iter().filter_map(|id| last.cgroups.get(id.as_str())).filter_map(|c| c.0).max();
+        let read = |f: fn(&probe::Cgroup) -> Option<u64>| ids.iter().filter_map(|id| last.cgroups.get(id.as_str())).filter_map(f).max();
+        let (peak, own) = (read(|c| c.peak), read(|c| c.own));
         if ids.is_empty() {
             cgroups = ", no test containers to look for".into();
-        } else if seen < ids.len() || peak.is_none() {
+        } else if seen < ids.len() || peak.is_none() || own.is_none() {
             problems.push(format!("G lines for {seen} of {} test containers ({} in all)", ids.len(), last.cgroups.len()));
         } else {
             cgroups = format!(", {seen} container cgroups (G)");

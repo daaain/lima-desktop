@@ -108,6 +108,9 @@
         ? {
             cpu_mc: scaled(o.cpu ?? shapes.bursty(0.004, 0.08, 0.1), 1000),
             mem: scaled(o.mem ?? shapes.flat(1, 0.06), mem),
+            // Its processes' own memory (anon + shmem), a share of podman's figure that also counts
+            // file cache: a devbox's builds and editors leave much more cache than a service does.
+            mem_own: scaled(o.mem ?? shapes.flat(1, 0.06), mem * (o.own ?? 0.7)),
             mem_limit: o.limitMiB ? o.limitMiB * MiB : 0,
             mem_peak: mem * (o.peak ?? 1.25),
             oom_kills: o.oomKills ?? 0,
@@ -194,7 +197,7 @@
       },
       [
         container('harbor-devbox', local('harbor-devbox'), {
-          memMiB: 2500, mem: shapes.climb(shapes.flat(1, 0.06), HARBOR_CLIMB, HARBOR_STALL, 2.4), peak: 2.4,
+          memMiB: 2500, own: 0.3, mem: shapes.climb(shapes.flat(1, 0.06), HARBOR_CLIMB, HARBOR_STALL, 2.4), peak: 2.4,
           cpu: shapes.bursty(0.4, 2.6, 0.45), upHours: 38, silent: HARBOR_SILENT,
         }),
         service('harbor', 'app', 'docker.io/library/node:24-trixie-slim', {
@@ -210,11 +213,11 @@
       }),
       // On this computer, a little more than its guest uses: its devbox, measured inside, is part of it.
       { cpu: shapes.bursty(0.01, 0.2, 0.08), mem: shapes.flat(0.3, 0.02), hostRss: shapes.flat(0.36, 0.02), disk: shapes.filling(0.48, 0.83, NOW) },
-      [container('quill-devbox', local('quill-devbox-packages'), { memMiB: 2300, upHours: 15, cpu: shapes.flat(0.002, 0.001) }), container('wasm-build', local('wasm-builder'), { state: 'exited' })],
+      [container('quill-devbox', local('quill-devbox-packages'), { memMiB: 2300, own: 0.3, upHours: 15, cpu: shapes.flat(0.002, 0.001) }), container('wasm-build', local('wasm-builder'), { state: 'exited' })],
     ),
     vm(instance('lantern', 'Running', 8, 16, 60), { cpu: shapes.flat(0.006, 0.004), mem: shapes.flat(0.06, 0.004), hostRss: shapes.flat(0.085, 0.004), disk: shapes.flat(0.14, 0) }, [
       // Idle as its VM is: a container never uses more than the VM it's in.
-      container('lantern-devbox', local('lantern-devbox-packages'), { memMiB: 895, upHours: 15, cpu: shapes.flat(0.002, 0.001) }),
+      container('lantern-devbox', local('lantern-devbox-packages'), { memMiB: 895, own: 0.3, upHours: 15, cpu: shapes.flat(0.002, 0.001) }),
     ]),
     vm(instance('ember', 'Running', 2, 4, 20), { cpu: shapes.flat(0.02, 0.01), mem: shapes.flat(0.21, 0.01), disk: shapes.flat(0.36, 0) }, [], {
       podmanError: 'podman 4.3.1 in this VM is too old: Lima Desktop needs podman 5 or newer',

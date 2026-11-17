@@ -19,7 +19,7 @@ use crate::journal::{self, JournalError};
 use crate::lima::{self, Instance};
 use crate::oom::{self, OomEvent};
 use crate::podman::{Container, Libpod, PodmanError, RawStat};
-use crate::probe::{self, Block};
+use crate::probe::{self, Block, Cgroup};
 use crate::stall::{self, Change, Watch};
 use crate::store::{ABSENT, CT_METRICS, HOST_METRICS, Kind, MINUTE, Store, VM_METRICS, add_sample};
 
@@ -176,8 +176,8 @@ struct PendingKill {
 
 struct VmState {
     live: VmLive,
-    /// container id → (memory.peak, oom_kill) from the probe's cgroup lines.
-    cgroups: HashMap<String, (Option<u64>, Option<u64>)>,
+    /// container id → its cgroup's readings, from the probe's `G` lines.
+    cgroups: HashMap<String, Cgroup>,
     oom_pending: Vec<PendingKill>,
     oom_wake: Arc<Notify>,
     stall: Watch,
@@ -1010,7 +1010,7 @@ pub fn container_row(
     prev: Option<&(Instant, RawStat)>,
     now: Instant,
     s: &RawStat,
-    cgroup: Option<&(Option<u64>, Option<u64>)>,
+    cgroup: Option<&Cgroup>,
 ) -> Vec<i64> {
     let rate = |cur: u64, old: Option<u64>| -> i64 {
         match (prev, old) {
@@ -1030,7 +1030,8 @@ pub fn container_row(
         ABSENT => ABSENT,
         ns_per_s => ns_per_s / 1_000_000, // ns of CPU per s → millicores
     };
-    let (peak, oom) = cgroup.copied().unwrap_or((None, None));
+    let cg = cgroup.copied().unwrap_or_default();
+    let reading = |v: Option<u64>| v.map_or(ABSENT, |v| v as i64);
     // MemLimit reads as the VM's whole memory when unlimited; keep it — "limit = VM" is a fact.
     vec![
         cpu_mc,
@@ -1040,13 +1041,14 @@ pub fn container_row(
         } else {
             ABSENT
         },
-        peak.map_or(ABSENT, |p| p as i64),
-        oom.map_or(ABSENT, |o| o as i64),
+        reading(cg.peak),
+        reading(cg.oom_kills),
         s.pids as i64,
         s.net_in.map_or(ABSENT, |cur| rate(cur, old.and_then(|o| o.net_in))),
         s.net_out.map_or(ABSENT, |cur| rate(cur, old.and_then(|o| o.net_out))),
         rate(s.block_in, old.map(|o| o.block_in)),
         rate(s.block_out, old.map(|o| o.block_out)),
+        reading(cg.own),
     ]
 }
 
@@ -1178,13 +1180,29 @@ mod tests {
             Some(&(t0, stat(0, 0))),
             t1,
             &stat(1_000_000_000, 2000),
-            Some(&(Some(4096), Some(1))),
+            Some(&Cgroup {
+                peak: Some(4096),
+                oom_kills: Some(1),
+                own: Some(2048),
+            }),
         );
-        assert_eq!(row[0], 500);
-        assert_eq!(row[6], 1000);
-        assert_eq!(row[3], 4096);
-        assert_eq!(row[4], 1);
+        let col = |name: &str| row[CT_METRICS.iter().position(|m| *m == name).unwrap()];
+        assert_eq!(col("cpu_mc"), 500);
+        assert_eq!(col("net_rx_bps"), 1000);
+        assert_eq!(col("mem_peak"), 4096);
+        assert_eq!(col("oom_kills"), 1);
+        assert_eq!(col("mem_own"), 2048);
         assert_eq!(row.len(), CT_METRICS.len());
+    }
+
+    #[test]
+    fn without_a_cgroup_reading_its_counters_are_absent() {
+        let row = container_row(None, Instant::now(), &stat(0, 0), None);
+        let col = |name: &str| row[CT_METRICS.iter().position(|m| *m == name).unwrap()];
+        assert_eq!(
+            (col("mem_peak"), col("oom_kills"), col("mem_own")),
+            (ABSENT, ABSENT, ABSENT)
+        );
     }
 
     #[test]

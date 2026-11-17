@@ -87,7 +87,10 @@ export interface ProjectGroup<T> {
 export function projectTotals(cs: readonly ContainerLive[]) {
   const up = cs.filter((c) => c.state === 'running');
   const sum = (key: (c: ContainerLive) => number | undefined) => up.reduce((n, c) => n + (key(c) ?? 0), 0);
-  return { mem: sum(mem), cpu: sum(cpu), running: up.length, exited: cs.length - up.length };
+  // The processes' own memory only where every running line has it: a sum missing some would
+  // understate it, and with none running there is nothing to say it of.
+  const own = up.length > 0 && up.every((c) => c.latest.mem_own != null) ? sum((c) => c.latest.mem_own) : undefined;
+  return { mem: sum(mem), cpu: sum(cpu), own, running: up.length, exited: cs.length - up.length };
 }
 
 // Projects follow the column where it adds up (memory, CPU) and go by name for name; for time up,

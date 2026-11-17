@@ -133,7 +133,13 @@ describe('projectTotals', () => {
       container({ latest: { mem: 50 } }),
       container({ state: 'exited', latest: { mem: 999, cpu_mc: 999 } }),
     ];
-    expect(projectTotals(cs)).toEqual({ mem: 150, cpu: 10, running: 2, exited: 1 });
+    expect(projectTotals(cs)).toEqual({ mem: 150, cpu: 10, own: undefined, running: 2, exited: 1 });
+  });
+  it("adds up the processes' own memory only when every running one has a reading of it", () => {
+    const own = (mem_own?: number) => container({ latest: { mem: 100, ...(mem_own == null ? {} : { mem_own }) } });
+    expect(projectTotals([own(40), own(20), container({ state: 'exited' })]).own).toBe(60);
+    expect(projectTotals([own(40), own()]).own).toBeUndefined();
+    expect(projectTotals([container({ state: 'exited' })]).own).toBeUndefined();
   });
 });
 
