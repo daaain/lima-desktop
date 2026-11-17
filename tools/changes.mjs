@@ -53,8 +53,14 @@ export function parse(name, text) {
   if (!BUMPS.includes(bump)) throw new ChangesError(`${name}: bump '${bump}' is not one of ${BUMPS.join(', ')}`);
   if (!body) throw new ChangesError(`${name}: the entry is empty`);
   if (section !== SUMMARY && !body.startsWith('- ')) throw new ChangesError(`${name}: the entry must be a \`- \` bullet (or several)`);
-  // A release's notes end at the next `## `: a heading here would cut them short, or nest wrongly.
-  if (/^#{1,6} /m.test(body)) throw new ChangesError(`${name}: no heading in an entry: the release gives it its section's`);
+  // A release's notes end at the next `## `, wherever it is, a code block included; any other
+  // heading, outside one, would nest under the release's own wrongly.
+  if (/^\s*## /m.test(body)) throw new ChangesError(`${name}: a \`## \` heading line, even in a code block, would end the release's notes there`);
+  let fenced = false;
+  for (const line of body.split('\n')) {
+    if (/^\s*(```|~~~)/.test(line)) fenced = !fenced;
+    else if (!fenced && /^\s*#{1,6} /.test(line)) throw new ChangesError(`${name}: no heading in an entry: the release gives it its section's`);
+  }
   return { name, section, bump, body };
 }
 
@@ -155,20 +161,23 @@ function git(cwd, ...args) {
   try {
     return { ok: true, out: execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }) };
   } catch (e) {
-    return { ok: false, out: e.stdout ?? '' };
+    return { ok: false, out: e.stdout ?? '', err: `${e.stderr ?? ''}`.trim() };
   }
 }
 
 /**
  * Oldest-landed first, so a section reads in merge order: the order of main's commits that added
- * each file, squashed or merged (not their timestamps, which tie). Files one commit added keep their name order;
- * one not yet committed comes last. NUL-separated, so no name is quoted or split. A name added
- * again after a delete keeps its latest landing, the one the file now came from.
+ * each file, squashed or merged (not their timestamps, which tie). Files one commit added keep
+ * their name order; one not yet committed comes last. NUL-separated, so no name is quoted or
+ * split. A name added again after a delete keeps its latest landing, the one the file now came
+ * from. `extra` is for the tests: arguments a git too old for this would refuse.
  */
-function inMergeOrder(cwd, fragments) {
+function inMergeOrder(cwd, fragments, extra = []) {
   // Main's own line only, each merge's files as it brought them: a branch's commits come with
-  // their own (older) dates, which aren't when they landed.
-  const log = git(cwd, 'log', '--first-parent', '--diff-merges=first-parent', '--reverse', '--diff-filter=A', '--name-only', '-z', '--format=', '--', CHANGES).out;
+  // their own (older) dates, which aren't when they landed. (--diff-merges: git 2.31 or newer.)
+  const args = ['log', ...extra, '--first-parent', '--diff-merges=first-parent', '--reverse', '--diff-filter=A', '--name-only', '-z', '--format=', '--', CHANGES];
+  const { ok, out: log, err } = git(cwd, ...args);
+  if (!ok) throw new ChangesError(`can't tell the order the fragments landed in: git ${args.slice(0, 3).join(' ')} … failed (git 2.31 or newer needed): ${err}`);
   const landed = new Map();
   log.split('\0').filter((p) => p.trim()).forEach((p, i) => landed.set(p.slice(p.lastIndexOf('/') + 1), i));
   const at = (f) => landed.get(f.name) ?? landed.size;
@@ -181,7 +190,7 @@ function inMergeOrder(cwd, fragments) {
  * a half-bumped tree is worse than a refusal. Given the version the files already say, with its
  * section written and no fragments, it changes nothing and returns it, for `just release` to tag.
  */
-export function prepare(target, date, { cwd = '.', warn = (m) => console.error(m) } = {}) {
+export function prepare(target, date, { cwd = '.', warn = (m) => console.error(m), gitLog = [] } = {}) {
   const read = (p) => readFileSync(join(cwd, p), 'utf8');
   const tagged = (v) => git(cwd, 'rev-parse', '-q', '--verify', `refs/tags/v${v}`).ok;
   const dirty = git(cwd, 'status', '--porcelain', '-z', '--untracked-files=all').out.split('\0').filter(Boolean).map((r) => r.slice(3));
@@ -210,6 +219,7 @@ export function prepare(target, date, { cwd = '.', warn = (m) => console.error(m
   if (!level) throw new ChangesError(`${version} is not above ${current}`);
   if (!fragments.length) throw new ChangesError('nothing to release: .changes/ holds no fragments');
   if (heading(version).test(changelog)) throw new ChangesError(`CHANGELOG.md already has a '## ${version}' section: fix it by hand`);
+  const ordered = inMergeOrder(cwd, fragments, gitLog);
   const newToml = setCargoToml(toml, current, version);
   const newLock = setCargoLock(lock, current, version);
   for (const fr of fragments) {
@@ -223,7 +233,7 @@ export function prepare(target, date, { cwd = '.', warn = (m) => console.error(m
   }
   writeFileSync(join(cwd, CARGO_TOML), newToml);
   writeFileSync(join(cwd, CARGO_LOCK), newLock);
-  writeFileSync(join(cwd, 'CHANGELOG.md'), roll(changelog, render(version, date, inMergeOrder(cwd, fragments))));
+  writeFileSync(join(cwd, 'CHANGELOG.md'), roll(changelog, render(version, date, ordered)));
   for (const fr of fragments) unlinkSync(join(cwd, CHANGES, fr.name));
   const n = fragments.length;
   warn(`✓ ${current} → ${version}: the four version files, and CHANGELOG.md (${n} fragment${n === 1 ? '' : 's'} folded in)`);

@@ -48,6 +48,9 @@ for (const [why, text, complaint] of [
 test("a heading in an entry is refused: it would end the release's section early", () => {
   assert.throws(() => parse('h.md', fragment('Fixed', 'patch', '- a\n\n## Not here')), /h\.md: .*heading/);
   assert.throws(() => parse('h.md', fragment('Fixed', 'patch', '- a\n# Nor here')), /heading/);
+  // A shell comment in a code block is no heading, but a `## ` line there still ends the notes.
+  assert.equal(parse('c.md', fragment('Fixed', 'patch', '- a:\n\n  ```sh\n  # a comment\n  ```')).section, 'Fixed');
+  assert.throws(() => parse('c.md', fragment('Fixed', 'patch', '- a:\n\n  ```md\n## in a block\n  ```')), /## /);
 });
 
 test('a fragment saved with CRLF, or a blank line in its frontmatter, reads as any other', () => {
@@ -232,6 +235,14 @@ test('a fragment merged later lists later, though its commit is older', () => {
   gitAt(dir, '2026-11-04T10:00:00Z', 'merge', '-q', '--no-ff', '-m', 'merge apple', 'apple');
   prepare('patch', '2026-11-17', { cwd: dir, warn: quiet });
   assert.equal(notes(read(dir, 'CHANGELOG.md'), '0.4.1'), '### Fixed\n\n- merged first\n- merged second\n');
+});
+
+test("a release says so when git can't tell the order the fragments landed in", () => {
+  const dir = repo();
+  land(dir, 'a.md', 'Fixed', 'patch', '- a');
+  // A git without --diff-merges (older than 2.31), as far as the log is concerned.
+  assert.throws(() => prepare('patch', '2026-11-17', { cwd: dir, warn: quiet, gitLog: ['--no-such-option'] }), /order the fragments landed in/);
+  assert.equal(git(dir, 'status', '--porcelain'), '');
 });
 
 test('a release that asks for a smaller step than a fragment says is warned about', () => {
