@@ -36,10 +36,10 @@ export class ChangesError extends Error {}
 
 /** A fragment from its file's `name` and `text`: its section, bump and entry. */
 export function parse(name, text) {
-  const m = /^---\n([\s\S]*?)\n---\n([\s\S]*)$/.exec(text);
+  const m = /^---\n([\s\S]*?)\n---\n([\s\S]*)$/.exec(text.replaceAll('\r\n', '\n'));
   if (!m) throw new ChangesError(`${name}: no \`---\` frontmatter block (see .changes/README.md)`);
   const meta = {};
-  for (const line of m[1].split('\n')) {
+  for (const line of m[1].split('\n').filter((l) => l.trim())) {
     const at = line.indexOf(':');
     const key = line.slice(0, at).trim();
     if (at < 0 || !['section', 'bump'].includes(key)) {
@@ -53,6 +53,8 @@ export function parse(name, text) {
   if (!BUMPS.includes(bump)) throw new ChangesError(`${name}: bump '${bump}' is not one of ${BUMPS.join(', ')}`);
   if (!body) throw new ChangesError(`${name}: the entry is empty`);
   if (section !== SUMMARY && !body.startsWith('- ')) throw new ChangesError(`${name}: the entry must be a \`- \` bullet (or several)`);
+  // A release's notes end at the next `## `: a heading here would cut them short, or nest wrongly.
+  if (/^#{1,6} /m.test(body)) throw new ChangesError(`${name}: no heading in an entry: the release gives it its section's`);
   return { name, section, bump, body };
 }
 
@@ -125,12 +127,21 @@ export function notes(changelog, version) {
   return `${rest.slice(0, next ? next.index : rest.length).trim()}\n`;
 }
 
-/** Cargo.toml's own version: the first `version =` line, the [package]'s. */
+/** Cargo.toml's own version: the [package] table's `version =` line, where it is and what it says. */
+function cargoVersion(text) {
+  const table = /^\[package\][ \t]*$/m.exec(text);
+  if (!table) return null;
+  const rest = text.slice(table.index);
+  const next = /^\[/m.exec(rest.slice(1));
+  const own = rest.slice(0, next ? next.index + 1 : rest.length);
+  const m = /^version = "([^"]*)"/m.exec(own);
+  return m ? { at: table.index + m.index, line: m[0], version: m[1] } : null;
+}
+
 export function setCargoToml(text, from, to) {
-  const line = `version = "${from}"`;
-  const at = text.search(/^version = /m);
-  if (at < 0 || !text.startsWith(line, at)) throw new ChangesError(`${CARGO_TOML} doesn't say version ${from}`);
-  return text.slice(0, at) + `version = "${to}"` + text.slice(at + line.length);
+  const v = cargoVersion(text);
+  if (v?.version !== from) throw new ChangesError(`${CARGO_TOML}'s [package] doesn't say version ${from}`);
+  return text.slice(0, v.at) + `version = "${to}"` + text.slice(v.at + v.line.length);
 }
 
 /** Cargo.lock's entry for the app itself: every dependency has a version line too. */
@@ -149,13 +160,15 @@ function git(cwd, ...args) {
 }
 
 /**
- * Oldest-landed first, so a section reads in merge order: git's own order of the commits that
- * added each file (not their timestamps, which tie). Files one commit added keep their name order;
+ * Oldest-landed first, so a section reads in merge order: the order of main's commits that added
+ * each file, squashed or merged (not their timestamps, which tie). Files one commit added keep their name order;
  * one not yet committed comes last. NUL-separated, so no name is quoted or split. A name added
  * again after a delete keeps its latest landing, the one the file now came from.
  */
 function inMergeOrder(cwd, fragments) {
-  const log = git(cwd, 'log', '--reverse', '--diff-filter=A', '--name-only', '-z', '--format=', '--', CHANGES).out;
+  // Main's own line only, each merge's files as it brought them: a branch's commits come with
+  // their own (older) dates, which aren't when they landed.
+  const log = git(cwd, 'log', '--first-parent', '--diff-merges=first-parent', '--reverse', '--diff-filter=A', '--name-only', '-z', '--format=', '--', CHANGES).out;
   const landed = new Map();
   log.split('\0').filter((p) => p.trim()).forEach((p, i) => landed.set(p.slice(p.lastIndexOf('/') + 1), i));
   const at = (f) => landed.get(f.name) ?? landed.size;
@@ -180,7 +193,7 @@ export function prepare(target, date, { cwd = '.', warn = (m) => console.error(m
     if (v !== current) throw new ChangesError(`${p} says ${v}, ${CONF} ${current}: make them agree first`);
   }
   const toml = read(CARGO_TOML);
-  const crate = /^version = "(.*)"$/m.exec(toml)?.[1];
+  const crate = cargoVersion(toml)?.version;
   if (crate !== current) throw new ChangesError(`${CARGO_TOML} says ${crate}, ${CONF} ${current}: make them agree first`);
   const lock = read(CARGO_LOCK);
   const changelog = read('CHANGELOG.md');
@@ -197,6 +210,7 @@ export function prepare(target, date, { cwd = '.', warn = (m) => console.error(m
   if (!level) throw new ChangesError(`${version} is not above ${current}`);
   if (!fragments.length) throw new ChangesError('nothing to release: .changes/ holds no fragments');
   if (heading(version).test(changelog)) throw new ChangesError(`CHANGELOG.md already has a '## ${version}' section: fix it by hand`);
+  const newToml = setCargoToml(toml, current, version);
   const newLock = setCargoLock(lock, current, version);
   for (const fr of fragments) {
     if (BUMPS.indexOf(fr.bump) > BUMPS.indexOf(level)) warn(`⚠ ${fr.name} asks for a ${fr.bump} release; this one is a ${level}`);
@@ -207,7 +221,7 @@ export function prepare(target, date, { cwd = '.', warn = (m) => console.error(m
     j.version = version;
     writeFileSync(join(cwd, p), JSON.stringify(j, null, 2) + '\n');
   }
-  writeFileSync(join(cwd, CARGO_TOML), setCargoToml(toml, current, version));
+  writeFileSync(join(cwd, CARGO_TOML), newToml);
   writeFileSync(join(cwd, CARGO_LOCK), newLock);
   writeFileSync(join(cwd, 'CHANGELOG.md'), roll(changelog, render(version, date, inMergeOrder(cwd, fragments))));
   for (const fr of fragments) unlinkSync(join(cwd, CHANGES, fr.name));

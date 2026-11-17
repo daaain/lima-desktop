@@ -73,7 +73,7 @@ jobs:
           if [ "$GITHUB_EVENT_NAME" != push ] && [ "$BUILDS" = false ]; then
             {
               echo "# Dry run, notes only: Lima Desktop, from $GITHUB_REF_NAME"
-              echo "The next release's notes: what \`.changes/\` holds (\`just release\` folds it into CHANGELOG.md under its version), above the install instructions. No apps built."
+              echo "The next release's notes, as it would show them above its install instructions: what \`.changes/\` holds (\`just release\` folds it into CHANGELOG.md under its version). No apps built."
               echo
               echo "---"
               if [ -s notes/changes.md ]; then cat notes/changes.md; else echo "_Nothing in \`.changes/\`._"; fi

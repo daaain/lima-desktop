@@ -45,6 +45,17 @@ for (const [why, text, complaint] of [
   });
 }
 
+test("a heading in an entry is refused: it would end the release's section early", () => {
+  assert.throws(() => parse('h.md', fragment('Fixed', 'patch', '- a\n\n## Not here')), /h\.md: .*heading/);
+  assert.throws(() => parse('h.md', fragment('Fixed', 'patch', '- a\n# Nor here')), /heading/);
+});
+
+test('a fragment saved with CRLF, or a blank line in its frontmatter, reads as any other', () => {
+  const crlf = fragment('Fixed', 'patch', '- a').replaceAll('\n', '\r\n');
+  assert.deepEqual(parse('c.md', crlf).body, '- a');
+  assert.equal(parse('b.md', '---\nsection: Fixed\n\nbump: patch\n---\n- a\n').bump, 'patch');
+});
+
 test('a Summary is prose, not a bullet', () => {
   assert.equal(parse('s.md', fragment('Summary', 'patch', 'A release about the menu bar.')).body, 'A release about the menu bar.');
 });
@@ -139,15 +150,27 @@ test("Cargo's files change only the app's own version", () => {
   assert.throws(() => setCargoLock(lock, '0.3.0', '0.5.0'), /Cargo\.lock/);
 });
 
+test("Cargo.toml's version is the [package]'s, wherever another version line comes first", () => {
+  const toml = '[workspace.metadata.tool]\nversion = "2" # its own\n\n[package]\nname = "lima-desktop"\nversion = "0.4.0"\n';
+  assert.equal(setCargoToml(toml, '0.4.0', '0.5.0'), toml.replace('version = "0.4.0"', 'version = "0.5.0"'));
+  assert.throws(() => setCargoToml(toml, '0.3.0', '0.5.0'), /Cargo\.toml/);
+});
+
 // ---- a release, in a throwaway repo ----------------------------------------------------------
 
 const git = (cwd, ...args) => execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+// A commit at a given moment, so landing order and commit dates can disagree on purpose.
+const gitAt = (cwd, when, ...args) =>
+  execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, GIT_AUTHOR_DATE: when, GIT_COMMITTER_DATE: when } });
 
 function repo(version = '0.4.0') {
   const dir = mkdtempSync(join(tmpdir(), 'release-'));
   git(dir, 'init', '-q', '-b', 'main');
   git(dir, 'config', 'user.email', 'test@example.invalid');
   git(dir, 'config', 'user.name', 'Test');
+  // Whatever the developer's own git signs, these throwaway commits and tags aren't.
+  git(dir, 'config', 'commit.gpgsign', 'false');
+  git(dir, 'config', 'tag.gpgSign', 'false');
   mkdirSync(join(dir, 'src-tauri'));
   mkdirSync(join(dir, '.changes'));
   const json = (o) => JSON.stringify(o, null, 2) + '\n';
@@ -192,6 +215,25 @@ test("a section lists its fragments in the order they landed, not by name", () =
   assert.equal(notes(read(dir, 'CHANGELOG.md'), '0.4.1'), '### Fixed\n\n- first\n- second\n');
 });
 
+test('a fragment merged later lists later, though its commit is older', () => {
+  const dir = repo();
+  // apple.md committed first on its branch, but merged after zebra.md's branch.
+  git(dir, 'switch', '-q', '-c', 'apple');
+  writeFileSync(join(dir, '.changes/apple.md'), fragment('Fixed', 'patch', '- merged second'));
+  git(dir, 'add', '-A');
+  gitAt(dir, '2026-11-01T10:00:00Z', 'commit', '-qm', 'apple');
+  git(dir, 'switch', '-q', 'main');
+  git(dir, 'switch', '-q', '-c', 'zebra');
+  writeFileSync(join(dir, '.changes/zebra.md'), fragment('Fixed', 'patch', '- merged first'));
+  git(dir, 'add', '-A');
+  gitAt(dir, '2026-11-02T10:00:00Z', 'commit', '-qm', 'zebra');
+  git(dir, 'switch', '-q', 'main');
+  gitAt(dir, '2026-11-03T10:00:00Z', 'merge', '-q', '--no-ff', '-m', 'merge zebra', 'zebra');
+  gitAt(dir, '2026-11-04T10:00:00Z', 'merge', '-q', '--no-ff', '-m', 'merge apple', 'apple');
+  prepare('patch', '2026-11-17', { cwd: dir, warn: quiet });
+  assert.equal(notes(read(dir, 'CHANGELOG.md'), '0.4.1'), '### Fixed\n\n- merged first\n- merged second\n');
+});
+
 test('a release that asks for a smaller step than a fragment says is warned about', () => {
   const dir = repo();
   land(dir, 'a.md', 'Added', 'minor', '- a');
@@ -220,6 +262,15 @@ for (const [why, setUp, target, complaint] of [
     assert.equal(git(dir, 'status', '--porcelain'), before);
   });
 }
+
+test("a release bumps Cargo.toml's [package] version, not a version line above it", () => {
+  const dir = repo();
+  writeFileSync(join(dir, 'src-tauri/Cargo.toml'), '[workspace.metadata.tool]\nversion = "2" # its own\n\n[package]\nname = "lima-desktop"\nversion = "0.4.0"\n');
+  git(dir, 'commit', '-qam', 'a tool table first');
+  land(dir, 'a.md', 'Fixed', 'patch', '- a');
+  prepare('patch', '2026-11-17', { cwd: dir, warn: quiet });
+  assert.equal(read(dir, 'src-tauri/Cargo.toml'), '[workspace.metadata.tool]\nversion = "2" # its own\n\n[package]\nname = "lima-desktop"\nversion = "0.4.1"\n');
+});
 
 test('a version already in the files and the changelog, but not tagged, is only tagged', () => {
   const dir = repo();
