@@ -106,7 +106,7 @@
       {#each running as vm (vm.instance.name)}
         {@const i = vm.instance}
         {@const l = vm.latest}
-        {@const restart = restartNote(l.host_rss, l.mem_used)}
+        {@const restart = restartNote(vm.instance.vmType, l.host_rss, l.mem_used)}
         {@const g = gauges(vm)}
         {@const h = history.get(vm.entity)}
         {@const ctRunning = vm.containers.filter((c) => c.state === 'running').length}

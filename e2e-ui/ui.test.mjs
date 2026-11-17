@@ -116,10 +116,10 @@ for (const dark of [false, true]) {
     // Two hours ago it also stalled, with memory nearly full and nothing killed: that, not the
     // container's own limit, is why it needs more memory.
     await page.getByRole('heading', { level: 1, name: 'harbor needs more memory and CPU, judging by the last 6 h.' }).waitFor();
-    // On vz, what it costs the computer, what its guest needs, and that a restart gives back the rest.
+    // On vz, what it costs the computer, what its guest needs, and that a restart gives back most of the rest.
     assert.match(
       await page.locator('figcaption.note', { hasText: 'On vz' }).innerText(),
-      /^On vz, guest memory is only backed as it's touched, and isn't given back when the guest frees it: right now this VM costs your computer [\d.]+ GiB of RAM, and its guest needs [\d.]+ GiB\. Restarting the VM gives back the rest\.$/,
+      /^On vz, guest memory is only backed as it's touched, and isn't given back when the guest frees it: right now this VM costs your computer [\d.]+ GiB of RAM, and its guest needs [\d.]+ GiB\. Restarting the VM gives back most of the rest\.$/,
     );
     assert.match(
       await page.locator('figure', { hasText: 'Memory' }).first().innerText(),
@@ -1098,6 +1098,9 @@ test("A container's memory is drawn against its VM or its own limit, its peak fr
   // two are close in lightness.
   const [ownBox, cut] = await Promise.all(['.own', '.notch.cut'].map((s) => line('warehouse').locator(`.bar ${s}`).first().boundingBox()));
   assert.ok(Math.abs(cut.x + cut.width / 2 - (ownBox.x + ownBox.width)) < 1, `the notch at ${cut.x}px, the processes' own ending at ${ownBox.x + ownBox.width}px`);
+  // It moves with the part it ends, as the bar's widths do, rather than jumping ahead of it.
+  const moves = await line('warehouse').locator('.bar .notch.cut').first().evaluate((el) => [getComputedStyle(el).transitionProperty, getComputedStyle(el).transitionDuration]);
+  assert.deepEqual(moves, ['left', '0.4s']);
   // harbor's app has a limit of its own: its bar is that wide, and it's past three quarters of it.
   assert.match(await memory('app').innerText(), /^\d+\.\d MiB of 1\.0 GiB limit\npeak \d+\.\d MiB in 24 h$/);
   assert.match(await line('app').locator('.bar').first().getAttribute('aria-label'), /full width is its 1\.0 GiB limit$/);

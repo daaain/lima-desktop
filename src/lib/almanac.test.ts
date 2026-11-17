@@ -479,27 +479,27 @@ describe('hostRamSentence', () => {
 });
 
 describe("what a VM holds beyond its guest's need, and that restarting gives it back", () => {
-  it('says what the guest needs and that a restart gives back the rest, under the VM page\'s memory chart', () => {
-    expect(vzMemoryNote(47.5 * GiB, 7.5 * GiB)).toBe(
-      "On vz, guest memory is only backed as it's touched, and isn't given back when the guest frees it: right now this VM costs your " +
-        'computer 47.5 GiB of RAM, and its guest needs 7.5 GiB. Restarting the VM gives back the rest.',
-    );
+  const costs = "On vz, guest memory is only backed as it's touched, and isn't given back when the guest frees it: right now this VM costs your computer";
+  it("says what the guest needs and that a restart gives back most of the rest, under the VM page's memory chart", () => {
+    expect(vzMemoryNote(47.5 * GiB, 7.5 * GiB)).toBe(`${costs} 47.5 GiB of RAM, and its guest needs 7.5 GiB. Restarting the VM gives back most of the rest.`);
+    // Under 1 GiB more, the gap is mostly the hypervisor's own and Lima's processes, which a restart doesn't give back.
+    expect(vzMemoryNote(4 * GiB, 3.4 * GiB)).toBe(`${costs} 4.0 GiB of RAM, and its guest needs 3.4 GiB.`);
     // Nothing to give back: the guest needs all it holds (or more, read a moment apart).
-    expect(vzMemoryNote(4 * GiB, 4.2 * GiB)).toBe(
-      "On vz, guest memory is only backed as it's touched, and isn't given back when the guest frees it: right now this VM costs your computer 4.0 GiB of RAM.",
-    );
+    expect(vzMemoryNote(4 * GiB, 4.2 * GiB)).toBe(`${costs} 4.0 GiB of RAM.`);
     // Without the guest's reading.
-    expect(vzMemoryNote(4 * GiB, undefined)).toBe(
-      "On vz, guest memory is only backed as it's touched, and isn't given back when the guest frees it: right now this VM costs your computer 4.0 GiB of RAM.",
-    );
+    expect(vzMemoryNote(4 * GiB, undefined)).toBe(`${costs} 4.0 GiB of RAM.`);
   });
-  it('nudges a restart on the overview only where the VM holds far more than its guest needs', () => {
-    expect(restartNote(47.5 * GiB, 7.5 * GiB)).toBe('40.0 GiB more than it needs: restart to free it');
+  it('nudges a restart on the overview only where a vz VM holds far more than its guest needs', () => {
+    expect(restartNote('vz', 47.5 * GiB, 7.5 * GiB)).toBe('40.0 GiB more than it needs: restart to free it');
     // A guest's own cache and a moment's growth aren't worth a restart: at least twice, and 4 GiB over.
-    expect(restartNote(9 * GiB, 5 * GiB)).toBe('');
-    expect(restartNote(7 * GiB, 3.5 * GiB)).toBe('');
-    expect(restartNote(8.1 * GiB, 4 * GiB)).toBe('4.1 GiB more than it needs: restart to free it');
-    expect(restartNote(undefined, 7.5 * GiB)).toBe('');
-    expect(restartNote(47.5 * GiB, undefined)).toBe('');
+    expect(restartNote('vz', 9 * GiB, 5 * GiB)).toBe('');
+    expect(restartNote('vz', 7 * GiB, 3.5 * GiB)).toBe('');
+    expect(restartNote('vz', 8.1 * GiB, 4 * GiB)).toBe('4.1 GiB more than it needs: restart to free it');
+    expect(restartNote('vz', undefined, 7.5 * GiB)).toBe('');
+    expect(restartNote('vz', 47.5 * GiB, undefined)).toBe('');
+    // Why only a restart gives it back is vz's (Lima never inflates its balloon; Apple's has no free page
+    // reporting), and the tooltip says so: on another VM type it isn't known to hold.
+    expect(restartNote('qemu', 47.5 * GiB, 7.5 * GiB)).toBe('');
+    expect(restartNote(undefined, 47.5 * GiB, 7.5 * GiB)).toBe('');
   });
 });

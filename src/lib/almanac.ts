@@ -541,14 +541,22 @@ export function unusedLede(o: { hot: string[]; dangling?: number; freeable?: num
 const VZ_BACKED = "On vz, guest memory is only backed as it's touched, and isn't given back when the guest frees it";
 
 /**
- * Under a vz VM's memory chart: what it costs the computer (`hostRss`, its footprint) and, where its
- * guest needs less (`needed`, its total less what it says is available), that a restart gives the rest
- * back. Nothing else does: Lima never inflates the balloon, and Apple's offers no free page reporting.
+ * Below this much more than its guest needs, what a VM costs the computer is mostly the hypervisor's
+ * own and Lima's processes (both in `host_rss`), which a restart doesn't give back.
+ */
+const RESTART_FLOOR = 1024 ** 3;
+
+/**
+ * Under a vz VM's memory chart: what it costs the computer (`hostRss`, its footprint and Lima's
+ * processes') and, where its guest needs less (`needed`, its total less what it says is available),
+ * what that is; and where it's 1 GiB or more less, that a restart gives most of the rest back. Nothing
+ * else does: Lima never inflates the balloon, and Apple's offers no free page reporting.
  */
 export function vzMemoryNote(hostRss: number, needed: number | undefined): string {
   const costs = `${VZ_BACKED}: right now this VM costs your computer ${bytes(hostRss)} of RAM`;
   if (needed == null || needed >= hostRss) return `${costs}.`;
-  return `${costs}, and its guest needs ${bytes(needed)}. Restarting the VM gives back the rest.`;
+  const restart = hostRss - needed >= RESTART_FLOOR ? ' Restarting the VM gives back most of the rest.' : '';
+  return `${costs}, and its guest needs ${bytes(needed)}.${restart}`;
 }
 
 /** Below these, what a VM holds beyond its guest's need is its cache and a moment's growth: not worth a restart. */
@@ -556,12 +564,13 @@ const RESTART_FACTOR = 2;
 const RESTART_SPARE = 4 * 1024 ** 3;
 
 /**
- * On the overview, under what a VM costs the computer: how much more it holds than its guest needs, and
- * that a restart frees it ("40.0 GiB more than it needs: restart to free it"), only where it holds at
- * least twice its need and 4 GiB more; '' otherwise, or without either reading.
+ * On the overview, under what a vz VM costs the computer: how much more it holds than its guest needs,
+ * and that a restart frees it ("40.0 GiB more than it needs: restart to free it"), only where it holds
+ * at least twice its need and 4 GiB more; '' otherwise, without either reading, or on another VM type,
+ * where why only a restart frees it (vz's balloon, never inflated) isn't known to hold.
  */
-export function restartNote(hostRss: number | undefined, needed: number | undefined): string {
-  if (hostRss == null || needed == null) return '';
+export function restartNote(vmType: string | undefined, hostRss: number | undefined, needed: number | undefined): string {
+  if (vmType !== 'vz' || hostRss == null || needed == null) return '';
   const spare = hostRss - needed;
   if (hostRss < RESTART_FACTOR * needed || spare < RESTART_SPARE) return '';
   return `${bytes(spare)} more than it needs: restart to free it`;

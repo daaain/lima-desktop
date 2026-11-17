@@ -34,6 +34,8 @@
      transition between two computes one every frame, about 1 MB a second on the Containers view
      (styles.test.ts). */
   .fill, .own { transition: width 0.4s; }
+  /* The notch where the strongest part ends moves with it, not ahead of it. */
+  .notch.cut { transition: left 0.4s; }
   .fill { background: var(--bar); }
   .fill.some { min-width: 2px; }
   .behind { background: var(--soft); }
