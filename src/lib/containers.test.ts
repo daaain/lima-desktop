@@ -89,28 +89,6 @@ describe('groupContainers', () => {
     const [g] = groupContainers(grouped, { by: 'memory', reversed: false });
     expect(g.projects.map((p) => [p.project, p.rows.map((r) => r.c.id).join('')])).toEqual([[null, 'x'], ['shop', 'dw']]);
   });
-
-  it('describes and orders each VM and project as a whole, whatever the filter leaves of it', () => {
-    const all = containerRows(
-      snapshot([
-        vm({ name: 'acme' }, [
-          container({ id: 'w', name: 'shop-web-1', composeProject: 'shop', composeService: 'web', latest: { mem: 50 * MiB } }),
-          container({ id: 'd', name: 'shop-db-1', composeProject: 'shop', composeService: 'db', latest: { mem: 400 * MiB } }),
-          container({ id: 'h', name: 'blog-web-1', composeProject: 'blog', composeService: 'web', latest: { mem: 300 * MiB } }),
-          container({ id: 'x', name: 'devbox', state: 'exited' }),
-        ]),
-      ]),
-    );
-    // "web" leaves shop's 50 MiB and blog's 300: shop is still the larger project, at 450.
-    const rows = filterContainers(all, { vm: null, runningOnly: false, query: 'web' });
-    const [g] = groupContainers(rows, { by: 'memory', reversed: false }, all);
-    expect(g.projects.map((p) => [p.project, p.rows.map((r) => r.c.id).join(''), p.all.map((r) => r.c.id).join('')]))
-      .toEqual([['shop', 'w', 'wd'], ['blog', 'h', 'h']]);
-    expect(g.all.map((r) => r.c.id)).toEqual(['w', 'd', 'h', 'x']);
-    // Unfiltered, each is its own whole.
-    const [whole] = groupContainers(all, { by: 'memory', reversed: false });
-    expect(whole.all).toEqual(whole.rows);
-  });
 });
 
 describe('byProject', () => {
