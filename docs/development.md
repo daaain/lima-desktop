@@ -149,30 +149,42 @@ longer shows this leak, only ones the app makes itself.
 The **Release** workflow (`.github/workflows/release.yml`) runs on a `v*` tag. It builds the macOS
 app as a universal `.dmg` on `macos-15-intel` (the Apple silicon queue can wait for want of runners), and the Linux `.deb` and AppImage on `ubuntu-24.04`. Linux
 builds on 24.04, not CI's 26.04, because a binary needs the glibc it was built against or newer.
-The workflow then publishes a GitHub Release with the files attached and install notes above the
-generated changelog. It goes out as soon as the builds pass, with no draft to look over, so do a
-dry run (below) first when anything in the build has changed.
+The workflow then publishes a GitHub Release with the files attached, its notes the version's
+section of [`CHANGELOG.md`](../CHANGELOG.md) followed by how to install. It goes out as soon as the
+builds pass, with no draft to look over, so do a dry run (below) first when anything in the build
+has changed.
+
+Between releases the changelog waits in [`.changes/`](../.changes/README.md): every PR someone using
+the app would notice adds one file there, with its entry and the section it goes in (`Added`,
+`Fixed`, …). Separate files, so open PRs never conflict over a shared "Unreleased" section.
+`just check` validates them (`tools/changes.test.mjs`). To see what the next release would say:
+`node tools/changes.mjs pending`.
 
 1. On an up-to-date, clean main: **`just release patch`** (or `minor`, `major`, or `0.2.0`). It
-   bumps the version in `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml` (and `Cargo.lock`) and
-   `package.json` — the workflow refuses a tag that doesn't match all three — commits that as
-   `Release v0.2.0` and tags it, all locally (`git tag -d v0.2.0 && git reset --hard HEAD~1` undoes
-   it). Given the version already in the files, it only tags. It fetches first and refuses unless
-   main is exactly `origin/main`.
+   folds `.changes/` into `CHANGELOG.md` as `## 0.2.0 — <date>` (any `Summary` prose first, then
+   the sections in a fixed order, each section's entries in the order they were merged) and deletes
+   the fragments; bumps the version in `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml` (and
+   `Cargo.lock`) and `package.json`; commits that as `Release v0.2.0` and tags it, all locally
+   (`git tag -d v0.2.0 && git reset --hard HEAD~1` undoes it). `tools/changes.mjs prepare` checks
+   everything before writing anything: it refuses with nothing in `.changes/`, a version that's no
+   step up or is tagged already, or files that disagree, and warns when you ask for a smaller step
+   than a fragment's `bump:` says. Given the version already in the files and the changelog, it only
+   tags. It fetches first and refuses unless main is exactly `origin/main`. A paragraph for the
+   release as a whole is a `section: Summary` fragment, added before running it.
 2. **`just release-push`**: pushes main and the tag together (`--atomic`), which starts the build
    and the release.
    main has to take a direct push for this; where it only takes pull requests, merge the bump
    commit through one and push just the tag.
 
-Don't tag by hand: a tag on a commit that still says the old version fails the workflow's first
-job, after the tag is public. The pre-push hook (`.githooks/pre-push`, switched on by `pnpm install`
+Don't tag by hand: a tag on a commit that still says the old version, or whose `CHANGELOG.md` has
+no section for it, fails the workflow's first job, after the tag is public. The pre-push hook (`.githooks/pre-push`, switched on by `pnpm install`
 setting `core.hooksPath`) runs the same check, `tools/check-release-version.sh`, on any `v*` tag
 before it leaves. To take back a bad tag: `git push origin :refs/tags/vX.Y.Z && git tag -d vX.Y.Z`.
 
 Run by hand on a branch, it's a dry run: Actions → Release → Run workflow, or
 `gh workflow run release.yml --ref <branch>`. It checks the version, builds everything and keeps the
 files as the run's artifacts, and instead of publishing a release it puts the one it would publish
-(files, notes and changelog) in the run's summary. Use it to try a workflow change, or to time a
+in the run's summary: the files, and as notes what `.changes/` holds (the next release's). Use it to try a workflow change, or to time a
 build, before tagging.
 
 The macOS app is only ad-hoc signed (`bundle.macOS.signingIdentity: "-"` in `tauri.conf.json`), so a
