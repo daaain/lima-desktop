@@ -21,7 +21,7 @@ use crate::oom::{self, OomEvent};
 use crate::podman::{Container, Libpod, PodmanError, RawStat};
 use crate::probe::{self, Block};
 use crate::stall::{self, Change, Watch};
-use crate::store::{ABSENT, CT_METRICS, HOST_METRICS, Kind, Store, VM_METRICS, add_sample};
+use crate::store::{ABSENT, CT_METRICS, HOST_METRICS, Kind, MINUTE, Store, VM_METRICS, add_sample};
 
 const LIST_EVERY: Duration = Duration::from_secs(3);
 /// How often each VM's container list is read again, at most (and at least once a stats tick).
@@ -331,7 +331,16 @@ impl Collector {
         for inst in instances {
             let name = inst.name.clone();
             let running = inst.running();
-            let entity = self.store().entity(Kind::Vm, &name, &name, &name, now).ok();
+            // Seen now, measured or not: a stopped VM's disk image is saved only once a minute, and
+            // a chart holds it only while the VM was there.
+            let entity = {
+                let mut store = self.store();
+                let entity = store.entity(Kind::Vm, &name, &name, &name, now).ok();
+                if let Some(id) = entity {
+                    store.saw(id, now);
+                }
+                entity
+            };
             let state = vms.entry(name.clone()).or_insert_with(|| VmState {
                 live: VmLive {
                     instance: inst.clone(),
@@ -562,6 +571,7 @@ impl Collector {
         // Asked for again each time until the store gives it: storage that failed once may recover.
         let mut entity = None;
         let mut said = false;
+        let mut minutes: HashMap<String, StoppedMinute> = HashMap::new();
         let mut every = self.interval.subscribe();
         let mut interval = stats_interval(*every.borrow_and_update());
         loop {
@@ -584,8 +594,27 @@ impl Collector {
                     Err(_) => {}
                 }
             }
+            let now = now_ms();
+            // Each VM stopped all of the minute just over: its disk image, which only `reconcile`
+            // measures, once for that minute.
+            let stopped: Vec<(i64, i64, Vec<i64>)> = {
+                let vms = self.vms.lock().expect("vms lock");
+                minutes.retain(|name, _| vms.contains_key(name));
+                vms.iter()
+                    .filter_map(|(name, v)| {
+                        let alloc = v.live.latest.get("host_disk_alloc").copied();
+                        let watch = minutes.entry(name.clone()).or_default();
+                        let (ts, alloc) = watch.tick(now, v.live.instance.running(), alloc)?;
+                        Some((v.live.entity?, ts, disk_row(alloc)))
+                    })
+                    .collect()
+            };
             if let Some(id) = entity {
-                self.store().ingest(id, now_ms(), row.clone());
+                let mut store = self.store();
+                store.ingest(id, now, row.clone());
+                for (vm, ts, vm_row) in stopped {
+                    store.ingest(vm, ts, vm_row);
+                }
             }
             *self.host_use.lock().expect("lock") = Some(HostLive {
                 entity,
@@ -857,6 +886,55 @@ fn counter_events(vm: &str, pending: Vec<PendingKill>, reason: &str) -> Vec<OomE
         .collect()
 }
 
+/// Whether a VM was stopped all of a minute, so that its disk image (measured on the host, needing
+/// no probe) is saved once for that minute. Never for a minute it ran in: a minute's rollup has
+/// one count of rows, which its memory and CPU averages are weighed by, so rows with only the disk
+/// in them would make that minute's few readings weigh as a whole minute's. Ticks are seconds
+/// apart, so a minute counts as stopped only when the ticks either side of it saw it stopped too: a
+/// VM seen running just before or after may have saved a probe row inside it.
+#[derive(Debug, Default)]
+struct StoppedMinute {
+    /// The start of the minute being watched.
+    minute: Option<i64>,
+    throughout: bool,
+    alloc: Option<i64>,
+    /// Whether the last tick saw it running.
+    was_running: bool,
+}
+
+impl StoppedMinute {
+    /// At a host tick, `now`: the reading to save for the minute just over, if the VM was stopped
+    /// all of it, as (that minute's last moment, its image's newest size).
+    fn tick(&mut self, now: i64, running: bool, alloc: Option<i64>) -> Option<(i64, i64)> {
+        let minute = now - now.rem_euclid(MINUTE);
+        let mut over = None;
+        if self.minute != Some(minute) {
+            if let (Some(m), true, false, Some(a)) = (self.minute, self.throughout, running, self.alloc) {
+                over = Some((m + MINUTE - 1, a));
+            }
+            // The first minute is seen only from now: the VM may have run earlier in it.
+            self.throughout = self.minute.is_some() && !self.was_running;
+            (self.minute, self.alloc) = (Some(minute), None);
+        }
+        if running {
+            self.throughout = false;
+        } else if alloc.is_some() {
+            self.alloc = alloc;
+        }
+        self.was_running = running;
+        over
+    }
+}
+
+/// A stopped VM's row: only its disk image's real size.
+fn disk_row(alloc: i64) -> Vec<i64> {
+    let mut row = vec![ABSENT; VM_METRICS.len()];
+    if let Some(c) = VM_METRICS.iter().position(|m| *m == "host_disk_alloc") {
+        row[c] = alloc;
+    }
+    row
+}
+
 /// Host-side columns for a VM row: what it costs this computer in memory and CPU — the process the
 /// guest runs in (`host_proc`), plus Lima's host agent and driver — and the disk image's real,
 /// allocated size (a sparse file's blocks, not its virtual length). Memory twice: `host_rss`, each
@@ -974,6 +1052,54 @@ pub fn container_row(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_stopped_vm_s_disk_image_is_saved_once_for_each_minute_it_was_stopped_throughout() {
+        let (m, t) = (60_000, 600_000);
+        let mut s = super::StoppedMinute::default();
+        // The first minute is seen only in part: it may have run earlier in it.
+        assert_eq!(s.tick(t + 30_000, false, Some(40)), None);
+        assert_eq!(s.tick(t + m, false, Some(40)), None);
+        assert_eq!(s.tick(t + m + 30_000, false, Some(41)), None);
+        // Stopped all of the last: its newest reading, at that minute's last moment.
+        assert_eq!(s.tick(t + 2 * m, false, Some(41)), Some((t + 2 * m - 1, 41)));
+        // Ran in this one: its probe's rows have it.
+        assert_eq!(s.tick(t + 2 * m + 30_000, true, None), None);
+        assert_eq!(s.tick(t + 3 * m, false, Some(41)), None);
+        // Nor the next: the tick before it saw it running.
+        assert_eq!(s.tick(t + 4 * m, false, None), None);
+        // Stopped throughout, but no image measured.
+        assert_eq!(s.tick(t + 5 * m, false, Some(42)), None);
+        assert_eq!(s.tick(t + 6 * m, false, Some(42)), Some((t + 6 * m - 1, 42)));
+    }
+
+    #[test]
+    fn a_minute_a_vm_stopped_or_started_in_near_its_edge_isn_t_taken_for_a_stopped_one() {
+        // Ticks every 10 s, at :05, :15, …
+        let (m, t) = (60_000, 600_000);
+        let tick = |s: &mut super::StoppedMinute, at: i64, running| s.tick(t + at, running, Some(40));
+        let mut s = super::StoppedMinute::default();
+        tick(&mut s, 5_000, true);
+        tick(&mut s, 55_000, true);
+        // It stops at m+1:02, its last probe row at m+1:00; the first tick of m+1 sees it stopped.
+        assert_eq!(tick(&mut s, m + 5_000, false), None);
+        assert_eq!(tick(&mut s, 2 * m + 5_000, false), None); // m+1 had a probe row in it
+        tick(&mut s, 2 * m + 55_000, false);
+        // Stopped all of m+2.
+        assert_eq!(tick(&mut s, 3 * m + 5_000, false), Some((t + 3 * m - 1, 40)));
+        tick(&mut s, 3 * m + 55_000, false);
+        // It starts at m+3:57, its probe saving a row at m+3:58: the tick closing m+3 sees it running.
+        assert_eq!(tick(&mut s, 4 * m + 5_000, true), None);
+    }
+
+    #[test]
+    fn a_stopped_vm_s_row_holds_only_its_disk_image() {
+        let col = |m: &str| super::VM_METRICS.iter().position(|c| *c == m).unwrap();
+        let row = super::disk_row(40);
+        assert_eq!(row.len(), super::VM_METRICS.len());
+        assert_eq!(row[col("host_disk_alloc")], 40);
+        assert!(row.iter().enumerate().all(|(i, &v)| i == col("host_disk_alloc") || v == super::ABSENT));
+    }
+
     #[test]
     fn a_disk_image_is_measured_by_what_it_takes_by_either_lima_s_name() {
         use std::io::Write;

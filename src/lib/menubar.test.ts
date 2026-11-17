@@ -213,7 +213,7 @@ describe('layers', () => {
     expect(layers(shares(sized, 'cpu'), null, 'cpu')[0].allocated).toBe(4000);
     expect(layers(shares(sized, 'disk'), null, 'disk')[0].allocated).toBe(60 * GiB);
   });
-  it('draws a stopped VM with no history at its size now, and holds a disk through its gaps', () => {
+  it("draws a stopped VM with no history at its size now, and leaves a disk's gaps as the backend left them", () => {
     const stack = stackOf({
       ts: [0, 100, 200],
       used: [1, 1, 1],
@@ -226,7 +226,8 @@ describe('layers', () => {
     const ls = layers(shares(fleet, 'disk'), stack, 'disk');
     const by = Object.fromEntries(ls.map((l) => [l.name, l]));
     expect(by.foundry).toMatchObject({ constant: true, values: [61 * GB, 61 * GB, 61 * GB] });
-    expect(by.atlas).toMatchObject({ constant: false, values: [38 * GiB, 38 * GiB, 38 * GiB] });
+    // The backend holds a disk through its gaps while the VM was there: those left, it wasn't.
+    expect(by.atlas).toMatchObject({ constant: false, values: [null, 38 * GiB, null] });
     expect(by.harbor).toMatchObject({ constant: true, values: [30 * GB, 30 * GB, 30 * GB] });
   });
   it("leaves a VM's memory missing where it wasn't measured", () => {

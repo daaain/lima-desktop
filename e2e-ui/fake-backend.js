@@ -257,7 +257,8 @@
 
   // The menu bar's stack (commands::host_stack): the computer's use and size (and for memory, its
   // wired part) and each running VM's own cost, averaged over the same buckets; a stopped VM has no
-  // history. A bucket is never narrower than the samples are apart, with a quarter to spare.
+  // history here (as one saved before its image was), so it's drawn at its size now. A bucket is
+  // never narrower than the samples are apart, with a quarter to spare.
   const STACK_KEYS = { mem: ['mem_used', 'mem_total', 'host_mem'], cpu: ['cpu_mc', 'cpu_total_mc', 'host_cpu_mc'], disk: ['disk_used', 'disk_total', 'host_disk_alloc'] };
   hostEntity = entity(hostMetrics());
 

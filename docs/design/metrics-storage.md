@@ -46,6 +46,10 @@ VM decodes in ~4 ms.
   last month is still visible; p95 needs raw samples, so it's offered only within raw retention.
 - **Writes**: samples sit in memory until a flush every 10 s upserts the touched chunks in one
   transaction (WAL). A crash loses at most ~10 s; a restart mid-minute extends the chunk on disk.
+- **Stopped VMs**: a stopped VM's disk image (measured on the host, no probe needed) is saved as
+  one row for each minute it was stopped throughout, holding only that column: ~1,440 rows a day
+  each, a rounding error here. Never in a minute it ran: a rollup has one `n` for all its columns,
+  so disk-only rows would weigh that minute's few memory and CPU readings as a whole minute's.
 - **Schema evolution**: metric lists are append-only; a chunk records its column count, and
   missing columns read as absent (`-1`).
 - **Queries**: spans ≤ 6 h come from raw samples, longer from rollups; either way bucketed into

@@ -129,11 +129,11 @@
       Name each one (“mem”, “cpu”, “disk”)
     </label>
     <p class="note">
-      Each item is the whole computer's memory, CPU or disk in use, with the VMs' part drawn solid and everything else
-      pale. A trace draws it moving over time, a bar as it is now; the figure is the percent in use. A name goes small
-      under the figure, or on its side beside a drawing alone. Clicking an item opens the VMs' part over time. An item
-      with neither a drawing nor a figure is left out, and with all three left out, the app's own icon stays in the menu
-      bar as the way back in.
+      Each item is the whole computer's memory, CPU or disk in use, with the VMs' part drawn pale at the bottom and
+      everything else solid above it, so its top edge is the total. A trace draws it moving over time, a bar as it is
+      now; the figure is the percent in use. A name goes small under the figure, or on its side beside a drawing alone.
+      Clicking an item opens the VMs' part over time. An item with neither a drawing nor a figure is left out, and with
+      all three left out, the app's own icon stays in the menu bar as the way back in.
     </p>
     <p class="note">
       An item turns the warning colour, and so does the figure in the window it opens, when memory or CPU is past the
