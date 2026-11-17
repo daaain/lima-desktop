@@ -753,6 +753,26 @@ test("A project's heading describes the whole project whatever the filter leaves
   await close();
 });
 
+for (const dark of [false, true]) {
+  test(`A project's heading sits on a faint hatch, its charts on the page's own ground${dark ? ' (dark)' : ''}`, async () => {
+    const { page, errors, close } = await open('/containers', { dark });
+    const project = page.getByRole('group', { name: 'Compose project atlas' });
+    await project.locator('.share').waitFor();
+    // The popover's "everything else" diagonals, faint: it stands out from its lines as the list is scrolled.
+    assert.match(await project.evaluate((el) => getComputedStyle(el).backgroundImage), /^repeating-linear-gradient\(135deg/);
+    // Behind its charts, the page itself, so their shapes read as they do on a line.
+    const bg = await page.evaluate(() => getComputedStyle(document.body).backgroundColor);
+    for (const chart of ['.share', '.sketch']) {
+      assert.equal(await project.locator(chart).first().evaluate((el) => getComputedStyle(el).backgroundColor), bg, `${chart} on the page's ground`);
+    }
+    // Its first line hangs from it, and a line's hover stays the plain wash.
+    const line = project.locator('xpath=following-sibling::div[1]').locator('.line').first();
+    assert.equal(await line.evaluate((el) => getComputedStyle(el).backgroundImage), 'none');
+    assert.deepEqual(errors, []);
+    await close();
+  });
+}
+
 test('On a narrow window the order is chosen from a word, as the heads are gone', async () => {
   const { page, errors, close } = await open('/', { width: 420, height: 900 });
   await page.locator('article').first().waitFor();
