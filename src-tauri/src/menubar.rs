@@ -1276,6 +1276,7 @@ mod tests {
         let mut v = vec![ABSENT; VM_METRICS.len()];
         v[VM_METRICS.iter().position(|c| *c == "host_disk_alloc").unwrap()] = 20;
         s.ingest(vm, t + 60_000 - 1, v);
+        s.saw(vm, t + 90_000); // still there, as the collector says at each list
         s.flush(t + 90_000).unwrap();
         let to = t + 90_000;
         for res in [Res::Mem, Res::Cpu] {

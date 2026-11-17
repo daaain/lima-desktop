@@ -334,7 +334,8 @@ pub struct StackColumns {
     pub before: Option<&'static str>,
     /// A VM's part holds its nearest reading through its gaps while the VM was there (from when it
     /// was first seen to [`HELD_PAST`] after it was last): a disk image stays while its VM is
-    /// stopped, and a stopped one's is saved once a minute, not at every tick.
+    /// stopped, and a stopped one's is saved once a minute, not at every tick. A VM deleted and
+    /// made again under the same name is one entity, so the time between is held as well.
     pub holds: bool,
 }
 
@@ -363,9 +364,10 @@ fn unmeasured_vms(vms: &[StackVm], n: usize) -> Vec<usize> {
     (0..n).filter(|&j| gap[j]).collect()
 }
 
-/// How long after a VM was last seen its held part goes on: past the minute its newest saved
-/// reading stands for, and the moments before that's written.
-const HELD_PAST: i64 = MINUTE;
+/// How long after a VM was last seen its held part goes on: the collector says it's seen at each
+/// `limactl list`, every 3 s, and a stack writes what's pending before it reads, so a VM that's
+/// still there is never further behind than this.
+const HELD_PAST: i64 = 20_000;
 
 /// Each gap holds the reading before it, the first ones the first reading, in the buckets (each
 /// starting at its `ts`, `width` wide) that overlap [`from`, `to`]; the rest are left empty.
@@ -1929,8 +1931,8 @@ mod tests {
         let a = &st.vms[0].avg;
         assert_eq!(a[at(t + 30_000)], None); // before it was there
         assert_eq!(a[at(t + MINUTE + 10_000)], Some(20)); // there, its first reading still to come
-        assert_eq!(a[at(t + 3 * MINUTE + 30_000)], Some(21)); // just after it was last seen
-        assert_eq!(a[at(t + 4 * MINUTE + 30_000)], None); // long gone
+        assert_eq!(a[at(t + 3 * MINUTE + 10_000)], Some(21)); // just after it was last seen
+        assert_eq!(a[at(t + 3 * MINUTE + 30_000)], None); // gone
     }
 
     #[test]

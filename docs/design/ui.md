@@ -208,7 +208,7 @@ under the sentence, figures and bar it explains, with the allocation as a dashed
   compressed; no VM's process has any, so it's part of what the VMs leave and kept inside it) in
   everything else's hatch, crossed; everything else hatched above; the computer's total is the
   top. A gap is where the computer wasn't measured, or a VM wasn't though it ran (a reading or two late or lost; a longer while, it was stopped); the right edge is the newest bucket measured, as the VMs' newest readings may still be on their way. A stopped VM's disk image is saved once a
-  minute, and the backend's stack holds a disk's nearest reading through its gaps while the VM was there (from when it was first seen to a minute after it was last), so a deleted VM's band ends and a new one's begins; one with no history (from before it was saved) is drawn at its size now throughout. The legend is
+  minute, and the backend's stack holds a disk's nearest reading through its gaps while the VM was there (from when it was first seen to 20 s after it was last), so a deleted VM's band ends and a new one's begins (not one deleted and made again under the same name, as `default` often is: it's one VM to the store, held across the time between); one with no history (from before it was saved) is drawn at its size now throughout. The legend is
   the list: each VM's name (in `--warn` while it isn't answering), its figure now and, in grey, its
   peak in the range. On memory, a VM's or an app's figure, and its band, is its share of the
   memory in use, its compressed memory counted at the size the compressor keeps it in, so the parts
