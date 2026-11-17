@@ -22,7 +22,7 @@ use crate::stall::{End, Stall};
 pub const ABSENT: i64 = -1;
 const CODEC_VERSION: u64 = 1;
 const ZSTD_LEVEL: i32 = 3;
-const MINUTE: i64 = 60_000;
+pub const MINUTE: i64 = 60_000;
 const HOUR: i64 = 3_600_000;
 /// Spans up to this long are answered from raw samples; longer ones from minute rollups.
 const RAW_QUERY_SPAN: i64 = 6 * HOUR;
@@ -330,6 +330,9 @@ pub struct StackColumns {
     pub wired: Option<&'static str>,
     pub part: &'static str,
     pub before: Option<&'static str>,
+    /// A VM's part holds its nearest reading through its gaps: a disk image stays while its VM is
+    /// stopped, and a stopped one's is saved once a minute, not at every tick.
+    pub holds: bool,
 }
 
 /// How many buckets in a row a VM may be missing a reading because it's late or lost, not because
@@ -357,13 +360,24 @@ fn unmeasured_vms(vms: &[StackVm], n: usize) -> Vec<usize> {
     (0..n).filter(|&j| gap[j]).collect()
 }
 
+/// Each gap holds the reading before it, the first ones the first reading.
+fn hold(values: &mut [Option<i64>]) {
+    let mut last = values.iter().flatten().next().copied();
+    for v in values.iter_mut() {
+        match v {
+            Some(x) => last = Some(*x),
+            None => *v = last,
+        }
+    }
+}
+
 pub fn stack_columns(metric: &str) -> Option<StackColumns> {
     // A VM's memory: its share of the computer's use (host_mem); before that was kept, its
     // footprint (host_rss), which counts its compressed memory at full size.
-    let (used, total, wired, part, before) = match metric {
-        "mem" => ("mem_used", "mem_total", Some("mem_wired"), "host_mem", Some("host_rss")),
-        "cpu" => ("cpu_mc", "cpu_total_mc", None, "host_cpu_mc", None),
-        "disk" => ("disk_used", "disk_total", None, "host_disk_alloc", None),
+    let (used, total, wired, part, before, holds) = match metric {
+        "mem" => ("mem_used", "mem_total", Some("mem_wired"), "host_mem", Some("host_rss"), false),
+        "cpu" => ("cpu_mc", "cpu_total_mc", None, "host_cpu_mc", None, false),
+        "disk" => ("disk_used", "disk_total", None, "host_disk_alloc", None, true),
         _ => return None,
     };
     Some(StackColumns {
@@ -372,6 +386,7 @@ pub fn stack_columns(metric: &str) -> Option<StackColumns> {
         wired,
         part,
         before,
+        holds,
     })
 }
 
@@ -761,6 +776,11 @@ impl Store {
             if avg.iter().any(Option::is_some) {
                 let peak = b.max.iter().flatten().copied().max();
                 out.push(StackVm { name, avg, peak });
+            }
+        }
+        if cols.holds {
+            for v in out.iter_mut() {
+                hold(&mut v.avg);
             }
         }
         for j in unmeasured_vms(&out, h.ts.len()) {
@@ -1862,6 +1882,36 @@ mod tests {
         assert!(st.vms[1].avg.iter().all(|v| v.is_some_and(|v| (20..=22).contains(&v))));
         assert_eq!(st.vms[1].peak, Some(22));
         assert!(s.stack("swap", t, t + MINUTE, 6).unwrap().ts.is_empty());
+    }
+
+    #[test]
+    fn a_disk_stack_holds_each_vm_s_nearest_reading_through_its_gaps() {
+        let mut s = Store::in_memory().unwrap();
+        let t = 10 * MINUTE;
+        let host = s.entity(Kind::Host, "", "host", "this computer", 0).unwrap();
+        let vm = s.entity(Kind::Vm, "a", "a", "a", 0).unwrap();
+        let col = |m: &str| HOST_METRICS.iter().position(|c| *c == m).unwrap();
+        let alloc = VM_METRICS.iter().position(|c| *c == "host_disk_alloc").unwrap();
+        for i in 0..120 {
+            let mut h = vec![ABSENT; HOST_METRICS.len()];
+            (h[col("disk_used")], h[col("disk_total")]) = (50, 100);
+            s.ingest(host, t + i * 1000, h);
+        }
+        // Stopped: its image once a minute, at the minute's end.
+        for m in 0..2 {
+            let mut v = vec![ABSENT; VM_METRICS.len()];
+            v[alloc] = 20 + m;
+            s.ingest(vm, t + m * MINUTE + MINUTE - 1, v);
+        }
+        let st = s.stack("disk", t, t + 2 * MINUTE, 120).unwrap();
+        // None of the computer's readings dropped as if the VM's were late.
+        assert!(st.used.iter().all(Option::is_some));
+        let a = &st.vms[0].avg;
+        let second_minute = st.ts.iter().position(|&ts| ts >= t + MINUTE).unwrap();
+        assert_eq!(a[0], Some(20)); // before its first reading: the first
+        assert_eq!(a[second_minute], Some(20)); // between: the one before
+        assert_eq!(a[a.len() - 1], Some(21));
+        assert!(a.iter().all(Option::is_some));
     }
 
     #[test]

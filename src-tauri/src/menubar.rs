@@ -1262,32 +1262,32 @@ mod tests {
         use crate::store::{ABSENT, HOST_METRICS, Kind, Store, VM_METRICS};
         let mut s = Store::in_memory().unwrap();
         let host = s.entity(Kind::Host, "", "host", "this computer", 0).unwrap();
-        // Stopped: only its disk image, as the collector saves it.
         let vm = s.entity(Kind::Vm, "a", "a", "a", 0).unwrap();
         let col = |m: &str| HOST_METRICS.iter().position(|c| *c == m).unwrap();
-        let alloc = VM_METRICS.iter().position(|c| *c == "host_disk_alloc").unwrap();
         let t = 10 * 60_000;
-        for i in 0..30 {
+        for i in 0..90 {
             let mut h = vec![ABSENT; HOST_METRICS.len()];
             (h[col("mem_used")], h[col("mem_total")]) = (i, 100);
             (h[col("cpu_mc")], h[col("cpu_total_mc")]) = (i, 100);
             (h[col("disk_used")], h[col("disk_total")]) = (50, 100);
             s.ingest(host, t + i * 1000, h);
-            let mut v = vec![ABSENT; VM_METRICS.len()];
-            v[alloc] = 20;
-            s.ingest(vm, t + i * 1000, v);
         }
-        s.flush(t + 30_000).unwrap();
-        let to = t + 30_000;
+        // Stopped all the first minute: its disk image, saved once for it, as the collector does.
+        let mut v = vec![ABSENT; VM_METRICS.len()];
+        v[VM_METRICS.iter().position(|c| *c == "host_disk_alloc").unwrap()] = 20;
+        s.ingest(vm, t + 60_000 - 1, v);
+        s.flush(t + 90_000).unwrap();
+        let to = t + 90_000;
         for res in [Res::Mem, Res::Cpu] {
             let h = saved_history(&mut s, res, to, 1);
             assert_eq!(h.len(), COLUMNS);
-            assert_eq!(h.back().unwrap().whole, 0.29); // the newest
+            assert_eq!(h.back().unwrap().whole, 0.89); // the newest
             assert_eq!(h.back().unwrap().vms, 0.0); // stopped, it takes none
         }
+        // Every column has the stopped VM's image, held since it was saved.
         let disk = saved_history(&mut s, Res::Disk, to, 1);
         assert_eq!(disk.len(), COLUMNS);
-        assert_eq!((disk.back().unwrap().whole, disk.back().unwrap().vms), (0.5, 0.2));
+        assert!(disk.iter().all(|d| (d.whole, d.vms) == (0.5, 0.2)));
         // Saved longer ago than the span: a fresh start.
         assert!(saved_history(&mut s, Res::Mem, to + SAVED_SPAN.as_millis() as i64 + 60_000, 1).is_empty());
     }
