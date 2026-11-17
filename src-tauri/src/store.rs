@@ -88,8 +88,9 @@ pub const VM_METRICS: &[&str] = &[
     "host_disk_alloc",
     "host_mem",
 ];
-/// cpu in millicores; memory in bytes (mem_peak: the cgroup's high-water mark since start);
-/// *_bps in bytes/s; oom_kills cumulative.
+/// cpu in millicores; memory in bytes (mem: podman's figure, the cgroup's memory less its inactive
+/// file cache; mem_peak: the cgroup's high-water mark since start; mem_own: its anon + shmem, the
+/// part only swap could take away); *_bps in bytes/s; oom_kills cumulative.
 pub const CT_METRICS: &[&str] = &[
     "cpu_mc",
     "mem",
@@ -101,6 +102,7 @@ pub const CT_METRICS: &[&str] = &[
     "net_tx_bps",
     "blk_r_bps",
     "blk_w_bps",
+    "mem_own",
 ];
 
 /// The whole computer (`host_use.rs`): memory in bytes (used as Activity Monitor counts it, total,
