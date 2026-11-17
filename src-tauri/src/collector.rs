@@ -880,13 +880,17 @@ fn counter_events(vm: &str, pending: Vec<PendingKill>, reason: &str) -> Vec<OomE
 /// Whether a VM was stopped all of a minute, so that its disk image (measured on the host, needing
 /// no probe) is saved once for that minute. Never for a minute it ran in: a minute's rollup has
 /// one count of rows, which its memory and CPU averages are weighed by, so rows with only the disk
-/// in them would make that minute's few readings weigh as a whole minute's.
+/// in them would make that minute's few readings weigh as a whole minute's. Ticks are seconds
+/// apart, so a minute counts as stopped only when the ticks either side of it saw it stopped too: a
+/// VM seen running just before or after may have saved a probe row inside it.
 #[derive(Debug, Default)]
 struct StoppedMinute {
     /// The start of the minute being watched.
     minute: Option<i64>,
     throughout: bool,
     alloc: Option<i64>,
+    /// Whether the last tick saw it running.
+    was_running: bool,
 }
 
 impl StoppedMinute {
@@ -896,11 +900,11 @@ impl StoppedMinute {
         let minute = now - now.rem_euclid(MINUTE);
         let mut over = None;
         if self.minute != Some(minute) {
-            if let (Some(m), true, Some(a)) = (self.minute, self.throughout, self.alloc) {
+            if let (Some(m), true, false, Some(a)) = (self.minute, self.throughout, running, self.alloc) {
                 over = Some((m + MINUTE - 1, a));
             }
             // The first minute is seen only from now: the VM may have run earlier in it.
-            self.throughout = self.minute.is_some();
+            self.throughout = self.minute.is_some() && !self.was_running;
             (self.minute, self.alloc) = (Some(minute), None);
         }
         if running {
@@ -908,6 +912,7 @@ impl StoppedMinute {
         } else if alloc.is_some() {
             self.alloc = alloc;
         }
+        self.was_running = running;
         over
     }
 }
@@ -1047,13 +1052,34 @@ mod tests {
         assert_eq!(s.tick(t + m, false, Some(40)), None);
         assert_eq!(s.tick(t + m + 30_000, false, Some(41)), None);
         // Stopped all of the last: its newest reading, at that minute's last moment.
-        assert_eq!(s.tick(t + 2 * m, true, None), Some((t + 2 * m - 1, 41)));
+        assert_eq!(s.tick(t + 2 * m, false, Some(41)), Some((t + 2 * m - 1, 41)));
         // Ran in this one: its probe's rows have it.
-        assert_eq!(s.tick(t + 2 * m + 30_000, false, Some(41)), None);
-        assert_eq!(s.tick(t + 3 * m, false, None), None);
+        assert_eq!(s.tick(t + 2 * m + 30_000, true, None), None);
+        assert_eq!(s.tick(t + 3 * m, false, Some(41)), None);
+        // Nor the next: the tick before it saw it running.
+        assert_eq!(s.tick(t + 4 * m, false, None), None);
         // Stopped throughout, but no image measured.
-        assert_eq!(s.tick(t + 4 * m, false, Some(42)), None);
-        assert_eq!(s.tick(t + 5 * m, false, Some(42)), Some((t + 5 * m - 1, 42)));
+        assert_eq!(s.tick(t + 5 * m, false, Some(42)), None);
+        assert_eq!(s.tick(t + 6 * m, false, Some(42)), Some((t + 6 * m - 1, 42)));
+    }
+
+    #[test]
+    fn a_minute_a_vm_stopped_or_started_in_near_its_edge_isn_t_taken_for_a_stopped_one() {
+        // Ticks every 10 s, at :05, :15, …
+        let (m, t) = (60_000, 600_000);
+        let tick = |s: &mut super::StoppedMinute, at: i64, running| s.tick(t + at, running, Some(40));
+        let mut s = super::StoppedMinute::default();
+        tick(&mut s, 5_000, true);
+        tick(&mut s, 55_000, true);
+        // It stops at m+1:02, its last probe row at m+1:00; the first tick of m+1 sees it stopped.
+        assert_eq!(tick(&mut s, m + 5_000, false), None);
+        assert_eq!(tick(&mut s, 2 * m + 5_000, false), None); // m+1 had a probe row in it
+        tick(&mut s, 2 * m + 55_000, false);
+        // Stopped all of m+2.
+        assert_eq!(tick(&mut s, 3 * m + 5_000, false), Some((t + 3 * m - 1, 40)));
+        tick(&mut s, 3 * m + 55_000, false);
+        // It starts at m+3:57, its probe saving a row at m+3:58: the tick closing m+3 sees it running.
+        assert_eq!(tick(&mut s, 4 * m + 5_000, true), None);
     }
 
     #[test]
