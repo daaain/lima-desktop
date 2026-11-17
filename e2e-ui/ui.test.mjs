@@ -737,6 +737,22 @@ test("Each VM's containers are split by compose project, each project's heading 
   await vmPage.close();
 });
 
+test("A project's heading describes the whole project whatever the filter leaves under it", async () => {
+  const { page, errors, close } = await open('/containers');
+  await page.locator('.line').first().waitFor();
+  const project = page.getByRole('group', { name: 'Compose project atlas' });
+  const memory = project.locator('.said strong').first();
+  const before = await memory.innerText();
+  // By image, the search leaves one of atlas's twelve: only it is listed under the heading...
+  await page.getByPlaceholder(/^Search/).fill('postgres');
+  await page.waitForFunction(() => document.querySelectorAll('.line').length === 1);
+  // ...but the heading still counts and adds up all twelve, as its chart and peak do.
+  assert.match(await project.innerText(), /^atlas\s+twelve running\b/);
+  assert.equal(await memory.innerText(), before);
+  assert.deepEqual(errors, []);
+  await close();
+});
+
 test('On a narrow window the order is chosen from a word, as the heads are gone', async () => {
   const { page, errors, close } = await open('/', { width: 420, height: 900 });
   await page.locator('article').first().waitFor();

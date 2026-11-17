@@ -7,6 +7,7 @@
   import { range, rangeWindow } from '$lib/range.svelte';
   import { theLast } from '$lib/ranges';
   import { BY_MEMORY, CONTAINER_COLUMNS, CONTAINER_SORTS, containerRows, filterContainers, groupContainers, lineHistory, readContainerFilter, type ContainerSort } from '$lib/containers';
+  import type { ContainerLive } from '$lib/api';
   import { podmanFailures, podmanScope } from '$lib/perVm';
   import { withParam } from '$lib/url';
   import ContainerLine from '$lib/ContainerLine.svelte';
@@ -31,6 +32,20 @@
   const scope = $derived(podmanScope(live.snapshot));
   const all = $derived(containerRows(live.snapshot));
   const rows = $derived(filterContainers(all, { ...urlFilter, query }));
+  // Every container of each compose project, keyed `vm/project`, whatever the filter: a project's
+  // heading describes the whole project, as its range (compose_series) does, and the filter only
+  // decides which of its lines are listed under it.
+  const projectContainers = $derived.by(() => {
+    const byProject = new Map<string, ContainerLive[]>();
+    for (const { vm, c } of all) {
+      if (!c.composeProject) continue;
+      const key = keyOf(vm, c.composeProject);
+      const project = byProject.get(key);
+      if (project) project.push(c);
+      else byProject.set(key, [c]);
+    }
+    return byProject;
+  });
 
   const history = new History();
   // Each running container's line's range (containers.lineHistory), each compose project's, and
@@ -112,7 +127,7 @@
         {#each g.projects as p (p.project)}
           <div animate:glide>
             {#if p.project}
-              <ProjectHead project={p.project} containers={p.rows.map((r) => r.c)} history={history.get({ vm: g.vm, project: p.project })}
+              <ProjectHead project={p.project} containers={projectContainers.get(keyOf(g.vm, p.project)) ?? []} history={history.get({ vm: g.vm, project: p.project })}
                 vmHistory={history.get(g.live?.entity)} vmMemory={g.live?.instance.memory ?? 0} vmCpus={g.live?.instance.cpus ?? 1} />
             {/if}
             {#each p.rows as { vm, c } (c.id)}
