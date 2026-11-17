@@ -4,7 +4,9 @@
 # the time to look them over), whose notes are the version's CHANGELOG.md section.
 # Run by hand on any branch (Actions → Release → Run workflow, or `gh workflow run release.yml --ref
 # <branch>`), it's a dry run of all of that: the same checks and builds, the files kept as the run's
-# artifacts, and the release it would publish shown in the run's summary, releasing nothing.
+# artifacts, and the release it would publish shown in the run's summary, releasing nothing. With
+# `builds` off (`gh workflow run release.yml --ref <branch> -f builds=false`), only the version's
+# check and the notes: the release's notes in the summary, in a minute rather than 22.
 #
 # Unsigned: the macOS app is only ad-hoc signed (as every arm64 binary must be), so a downloaded copy
 # is quarantined and macOS refuses it until the quarantine is removed (the release notes and the
@@ -19,6 +21,11 @@ on:
   push:
     tags: ['v*']
   workflow_dispatch:
+    inputs:
+      builds:
+        description: Build the apps too (off, it only checks the version and shows the notes, in a minute)
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -56,11 +63,22 @@ jobs:
       - name: Release notes from CHANGELOG.md
         env:
           VERSION: ${{ steps.check.outputs.version }}
+          BUILDS: ${{ inputs.builds }}
         run: |
           mkdir notes
           if [ "$GITHUB_EVENT_NAME" = push ]; then node tools/changes.mjs notes "$VERSION" > notes/changes.md
           else node tools/changes.mjs pending > notes/changes.md; fi
           cat notes/changes.md
+          # A dry run without the builds ends here, so the notes go in its summary now.
+          if [ "$GITHUB_EVENT_NAME" != push ] && [ "$BUILDS" = false ]; then
+            {
+              echo "# Dry run, notes only: Lima Desktop, from $GITHUB_REF_NAME"
+              echo "The next release's notes: what \`.changes/\` holds (\`just release\` folds it into CHANGELOG.md under its version), above the install instructions. No apps built."
+              echo
+              echo "---"
+              if [ -s notes/changes.md ]; then cat notes/changes.md; else echo "_Nothing in \`.changes/\`._"; fi
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: notes
@@ -76,6 +94,7 @@ jobs:
   macos:
     name: macOS (universal .dmg)
     needs: version
+    if: github.event_name == 'push' || inputs.builds
     runs-on: macos-15-intel
     timeout-minutes: 45
     steps:
@@ -112,6 +131,7 @@ jobs:
   linux:
     name: Linux (.deb, AppImage)
     needs: version
+    if: github.event_name == 'push' || inputs.builds
     # The oldest Ubuntu with Tauri's WebKitGTK 4.1, not CI's 26.04: a binary runs on systems with
     # the glibc it was built against or newer, so building on 24.04 reaches more of them.
     runs-on: ubuntu-24.04
