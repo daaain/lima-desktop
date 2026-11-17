@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import type { Snapshot, Stack, VmLive, Warn } from './api';
 import {
-  agoLabel, allocatedAside, allocatedTip, amount, appTip, APPS_PENDING, chartLabel, containersByVm, containerTip, layerAside, layerFigure, layers, listsTop, ofSentence,
+  agoLabel, allocatedAside, allocatedTip, amount, appTip, APPS_PENDING, chartLabel, containersByVm, containerTip, insideAside, insideTip, layerAside, sizeTip, layerFigure, layers,
+  listsTop, ofSentence,
   parseTab, parseTabRange, percentFigure, pickTop, recordingPhrase, reportedFigure, reportedTip, shares, stackChart, stackRefreshMs, TAB_RANGES, topApps,
   topContainers, WIRED, type Layer,
 } from './menubar';
@@ -126,6 +127,14 @@ describe('shares', () => {
     const old = shares(snap([running('c', { host_rss: 50 * GiB })], { mem_used: 40 * GiB, mem_total: 64 * GiB }), 'mem')!;
     expect(old.parts.map((p) => [p.now, p.reported])).toEqual([[40 * GiB, null]]);
   });
+  it("carries what each VM's guest has in use, on the memory tab only", () => {
+    const fleet = snap(
+      [running('a', { host_mem: 30 * GiB, mem_used: 7 * GiB, host_cpu_mc: 900 }), running('b', { host_mem: 10 * GiB, host_cpu_mc: 100 })],
+      { mem_used: 50 * GiB, mem_total: 64 * GiB, cpu_mc: 1000, cpu_total_mc: 8000 },
+    );
+    expect(shares(fleet, 'mem')!.parts.map((p) => [p.name, p.inside])).toEqual([['a', 7 * GiB], ['b', null]]);
+    expect(shares(fleet, 'cpu')!.parts.map((p) => p.inside)).toEqual([null, null]);
+  });
   it('changes nothing when the VMs fit', () => {
     const s = shares(snap([running('a', { host_cpu_mc: 600 }), running('b', { host_cpu_mc: 400 })], { cpu_mc: 1000, cpu_total_mc: 8000 }), 'cpu')!;
     expect(s.parts.map((p) => p.now)).toEqual([600, 400]);
@@ -240,8 +249,8 @@ describe('layers', () => {
 
 describe("the legend's figures", () => {
   const layer = (o: Partial<Layer>): Layer => ({
-    name: 'a', now: 10 * GiB, reported: null, running: true, stalled: false, allocated: 16 * GiB, values: [8 * GiB, 9 * GiB], peak: 16.6 * GiB,
-    constant: false, ...o,
+    name: 'a', now: 10 * GiB, reported: null, running: true, stalled: false, allocated: 16 * GiB, inside: 3.5 * GiB, values: [8 * GiB, 9 * GiB],
+    peak: 16.6 * GiB, constant: false, ...o,
   });
   it('gives the peak in the range for memory and CPU', () => {
     expect(layerAside('mem', layer({}), '1h')).toBe('peak 16.6 GiB in 1 h');
@@ -265,6 +274,34 @@ describe("the legend's figures", () => {
     expect(allocatedAside('disk', layer({ allocated: 100 * GB }), 1)).toBe('');
     expect(allocatedAside('mem', layer({ allocated: null }), 1)).toBe('');
   });
+  it("says what the guest needs, under its allocation, only where containers listed under it leave the lines", () => {
+    expect(insideAside('mem', layer({}), 2)).toBe('3.5 GiB needed inside');
+    // With one container listed, the line is its own (the page adds one for it).
+    expect(insideAside('mem', layer({}), 1)).toBe('3.5 GiB needed inside');
+    expect(insideAside('mem', layer({}), 0)).toBe('');
+    // Memory only: CPU used inside is what the computer gives it already.
+    expect(insideAside('cpu', layer({ allocated: 8000, inside: 2000 }), 2)).toBe('');
+    // Without the guest's reading.
+    expect(insideAside('mem', layer({ inside: null }), 2)).toBe('');
+  });
+  it("gives a VM's allocation and its guest's need over its figure and peak, whatever is listed under it", () => {
+    expect(sizeTip('mem', layer({}))).toBe('16.0 GiB allocated to VM\n3.5 GiB needed inside');
+    expect(sizeTip('mem', layer({ inside: null }))).toBe('16.0 GiB allocated to VM');
+    expect(sizeTip('cpu', layer({ allocated: 8000, inside: null }))).toBe('8 cores allocated to VM');
+    // A disk's size is its figure's measure already; one only the range still holds has neither.
+    expect(sizeTip('disk', layer({ allocated: 100 * GB, inside: null }))).toBeUndefined();
+    expect(sizeTip('mem', layer({ allocated: null, inside: null }))).toBeUndefined();
+  });
+  it("says why the guest's need is less than what it holds, pointed at", () => {
+    expect(insideTip(layer({ name: 'harbor', now: 40.9 * GiB, inside: 7.5 * GiB }))).toBe(
+      "harbor's processes and kernel need 7.5 GiB. The rest of the 40.9 GiB it holds on this computer is the guest's file cache, and memory " +
+        "it has used and freed: the guest could drop it, but this computer doesn't get it back while the VM runs. Restarting the VM does.",
+    );
+    // Its share counts what macOS has compressed at its compressed size, so it can be the smaller.
+    expect(insideTip(layer({ name: 'atlas', now: 28.9 * GiB, inside: 40.1 * GiB }))).toBe(
+      "atlas's processes and kernel need 40.1 GiB: more than its 28.9 GiB share of this computer's memory in use, as macOS has compressed part of it.",
+    );
+  });
   it('says whose allocation it is, pointed at', () => {
     expect(allocatedTip('mem', layer({ name: 'harbor', allocated: 8 * GiB }))).toBe('harbor is allocated 8.0 GiB of memory');
     expect(allocatedTip('cpu', layer({ name: 'harbor', allocated: 4000 }))).toBe('harbor is allocated 4 cores');
@@ -279,7 +316,7 @@ describe("the legend's figures", () => {
 describe('stackChart', () => {
   const at = { from: 0, to: 200, width: 100, height: 100 };
   const layer = (name: string, values: (number | null)[]): Layer => ({
-    name, now: 1, reported: null, running: true, stalled: false, allocated: null, values, peak: null, constant: false,
+    name, now: 1, reported: null, running: true, stalled: false, allocated: null, inside: null, values, peak: null, constant: false,
   });
 
   it('stacks the VMs from the bottom, everything else above, each bucket held across itself', () => {

@@ -12,8 +12,8 @@
   import { api, type Snapshot, type Stack, type Theme, type TopApps, type Warn } from '$lib/api';
   import { inOrder } from '$lib/inOrder';
   import {
-    agoLabel, allocatedAside, allocatedTip, amount, appTip, APPS_PENDING, chartLabel, containersByVm, containerTip, layerAside, layerFigure, layers, listsTop, ofSentence,
-    parseTab, parseTabRange, percentFigure, rangeLabel, recordingPhrase, reportedFigure, reportedTip, shares, stackChart, stackRefreshMs, stalledTip, topApps,
+    agoLabel, allocatedAside, allocatedTip, amount, appTip, APPS_PENDING, chartLabel, containersByVm, containerTip, insideAside, insideTip, layerAside, layerFigure, layers, listsTop, ofSentence,
+    parseTab, parseTabRange, percentFigure, rangeLabel, recordingPhrase, reportedFigure, reportedTip, shares, sizeTip, stackChart, stackRefreshMs, stalledTip, topApps,
     topContainers, SHADES, STACK_POINTS, TAB_RANGES, TABS, TOP_N, WIRED, type Tab,
   } from '$lib/menubar';
   import { followsLive, rangeMs, type AnyRangeKey } from '$lib/ranges';
@@ -248,23 +248,43 @@
           <span class="sw shade-{i % SHADES}"></span>
           <span class="part">
             <span class="name serif" class:hot={l.stalled} title={l.stalled ? stalledTip(l.name) : l.name}>{l.name}</span>
-            <span class="fig num" class:muted={l.now == null}>{layerFigure(tab, l)}{@render reported(l.now, l.reported)}</span>
+            <span class="fig num" class:muted={l.now == null} title={sizeTip(tab, l)}>{layerFigure(tab, l)}{@render reported(l.now, l.reported)}</span>
           </span>
-          <span class="aside num">{current ? layerAside(tab, l, range) : ''}</span>
+          <span class="aside num" title={sizeTip(tab, l)}>{current ? layerAside(tab, l, range) : ''}</span>
         </li>
         {#if listsTop(tab)}
           {@const under = containersUnder.get(l.name) ?? []}
+          {@const allocated = allocatedAside(tab, l, under.length)}
+          {@const inside = insideAside(tab, l, under.length)}
+          {#snippet vmAside(j: number)}
+            <!-- Under the VM's peak, on the lines its containers leave spare: its allocation, then what its guest needs. -->
+            {#if j === 0 && allocated}
+              <span class="aside num" data-allocated={l.name} title={allocatedTip(tab, l)}>{allocated}</span>
+            {:else if j === 1 && inside}
+              <span class="aside num" data-inside={l.name} title={insideTip(l)}>{inside}</span>
+            {:else}
+              <span class="aside num"></span>
+            {/if}
+          {/snippet}
           {#each under as c, j (c.id)}
-            <!-- The VM's allocation, under its peak, on the line its first container leaves spare. -->
-            {@const allocated = j === 0 ? allocatedAside(tab, l, under.length) : ''}
             <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
             <li class="row sub" class:hl={lit === vmLit(l.name)} data-container={c.name} data-in={l.name} title={containerTip(tab, c)}
               onmouseenter={() => (lit = vmLit(l.name))} onmouseleave={() => (lit = null)}>
               <span></span>
               <span class="part"><span class="name serif">{c.name}</span><span class="fig num">{amount(tab, c.now)}</span></span>
-              <span class="aside num" data-allocated={allocated ? l.name : undefined} title={allocated ? allocatedTip(tab, l) : undefined}>{allocated}</span>
+              {@render vmAside(j)}
             </li>
           {/each}
+          {#if under.length === 1 && inside}
+            <!-- One container leaves one line spare, which the allocation takes: what the guest needs gets its own. -->
+            <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+            <li class="row sub" class:hl={lit === vmLit(l.name)} data-in={l.name}
+              onmouseenter={() => (lit = vmLit(l.name))} onmouseleave={() => (lit = null)}>
+              <span></span>
+              <span class="part"></span>
+              {@render vmAside(1)}
+            </li>
+          {/if}
         {/if}
       {/each}
       {#if tab === 'mem' && now?.wired != null}

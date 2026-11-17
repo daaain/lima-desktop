@@ -229,7 +229,19 @@ for (const dark of [false, true]) {
       ['quill', 'quill-devbox', '8.0 GiB allocated to VM'], ['lantern', 'lantern-devbox', '16.0 GiB allocated to VM'],
     ]);
     assert.equal(await page.locator('[data-allocated="harbor"]').getAttribute('title'), 'harbor is allocated 8.0 GiB of memory');
-    assert.equal(await page.locator('.row[data-container="app"] .aside').innerText(), '');
+    // Under the allocation, what the guest needs: on the line a second container leaves (harbor's app),
+    // or on one of its own under a lone one (atlas's frontend, quill's devbox, and so on).
+    assert.deepEqual(await page.locator('[data-inside]').evaluateAll((els) => els.map((e) => [e.dataset.inside, e.closest('.row').dataset.container ?? null])), [
+      ['atlas', null], ['harbor', 'app'], ['quill', null], ['lantern', null],
+    ]);
+    assert.match(await page.locator('[data-inside="harbor"]').innerText(), /^[\d.]+ GiB needed inside$/);
+    assert.match(await page.locator('[data-inside="harbor"]').getAttribute('title'), /^harbor's processes and kernel need [\d.]+ GiB\. The rest of the [\d.]+ GiB it holds/);
+    // Both lines over every VM's figure and peak too, ember's (nothing listed) among them.
+    for (const name of ['harbor', 'ember']) {
+      for (const part of ['.fig', '.aside']) {
+        assert.match(await page.locator(`.row[data-vm="${name}"] ${part}`).getAttribute('title'), /^[\d.]+ GiB allocated to VM\n[\d.]+ [MG]iB needed inside$/);
+      }
+    }
     // It takes no room of its own: a container's line is as tall with it as without.
     const tall = (sel) => page.locator(sel).evaluate((el) => el.getBoundingClientRect().height);
     assert.equal(await tall('.row[data-container="harbor-devbox"]'), await tall('.row[data-container="app"]'));
@@ -251,6 +263,8 @@ for (const dark of [false, true]) {
     assert.match(await page.locator('.row[data-container="harbor-devbox"] .part').innerText(), /^harbor-devbox\s+\d\.\d cores$/);
     assert.equal(await page.locator('[data-allocated="harbor"]').innerText(), '4 cores allocated to VM');
     assert.equal(await page.locator('[data-allocated="ember"]').count(), 0);
+    assert.equal(await page.locator('[data-inside]').count(), 0);
+    assert.equal(await page.locator('.row[data-vm="ember"] .fig').getAttribute('title'), '2 cores allocated to VM');
     assert.equal(await page.locator('.row[data-container="harbor-devbox"]').getAttribute('title'), 'harbor-devbox\nMeasured inside harbor: part of its CPU above, not more on top of it');
     assert.equal(await page.locator('.row.sub[data-app]').count(), 5);
     await shoot(page, `menubar-cpu${suffix}`);
