@@ -584,8 +584,23 @@ impl Collector {
                     Err(_) => {}
                 }
             }
+            // A stopped VM's disk image, which only `reconcile` measures, at the computer's moment so
+            // it's on the same buckets in a chart.
+            let stopped: Vec<(i64, Vec<i64>)> = {
+                let vms = self.vms.lock().expect("vms lock");
+                vms.values()
+                    .filter_map(|v| {
+                        stopped_disk_row(v.live.instance.running(), v.live.entity, &v.live.latest)
+                    })
+                    .collect()
+            };
             if let Some(id) = entity {
-                self.store().ingest(id, now_ms(), row.clone());
+                let ts = now_ms();
+                let mut store = self.store();
+                store.ingest(id, ts, row.clone());
+                for (vm, vm_row) in stopped {
+                    store.ingest(vm, ts, vm_row);
+                }
             }
             *self.host_use.lock().expect("lock") = Some(HostLive {
                 entity,
@@ -857,6 +872,19 @@ fn counter_events(vm: &str, pending: Vec<PendingKill>, reason: &str) -> Vec<OomE
         .collect()
 }
 
+/// A stopped VM's row to save, with its entity: only its disk image's real size, measured on the
+/// host. `None` while it runs (its probe's rows carry that), or with nowhere to save it or nothing
+/// measured.
+fn stopped_disk_row(running: bool, entity: Option<i64>, latest: &HashMap<String, i64>) -> Option<(i64, Vec<i64>)> {
+    let (entity, &alloc) = (entity?, latest.get("host_disk_alloc")?);
+    if running {
+        return None;
+    }
+    let mut row = vec![ABSENT; VM_METRICS.len()];
+    row[VM_METRICS.iter().position(|m| *m == "host_disk_alloc")?] = alloc;
+    Some((entity, row))
+}
+
 /// Host-side columns for a VM row: what it costs this computer in memory and CPU — the process the
 /// guest runs in (`host_proc`), plus Lima's host agent and driver — and the disk image's real,
 /// allocated size (a sparse file's blocks, not its virtual length). Memory twice: `host_rss`, each
@@ -974,6 +1002,22 @@ pub fn container_row(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_stopped_vm_s_disk_image_is_saved_as_a_row_of_its_own() {
+        let col = |m: &str| super::VM_METRICS.iter().position(|c| *c == m).unwrap();
+        let alloc: super::HashMap<String, i64> = [("host_disk_alloc".to_string(), 40)].into();
+        let (id, row) = super::stopped_disk_row(false, Some(7), &alloc).unwrap();
+        assert_eq!(id, 7);
+        assert_eq!(row.len(), super::VM_METRICS.len());
+        assert_eq!(row[col("host_disk_alloc")], 40);
+        assert!(row.iter().enumerate().all(|(i, &v)| i == col("host_disk_alloc") || v == super::ABSENT));
+        // A running VM's comes with its probe's rows.
+        assert_eq!(super::stopped_disk_row(true, Some(7), &alloc), None);
+        // Nowhere to save it, or nothing measured (no image).
+        assert_eq!(super::stopped_disk_row(false, None, &alloc), None);
+        assert_eq!(super::stopped_disk_row(false, Some(7), &super::HashMap::new()), None);
+    }
+
     #[test]
     fn a_disk_image_is_measured_by_what_it_takes_by_either_lima_s_name() {
         use std::io::Write;

@@ -212,15 +212,15 @@ export interface Layer {
   values: (number | null)[] | null;
   /** The most it reached in the range, as the backend says. */
   peak: number | null;
-  /** Drawn at its size now throughout: it has no history in the range (a stopped VM's disk). */
+  /** Drawn at its size now throughout: it has no history in the range (a stopped VM's disk, saved before it was kept). */
   constant: boolean;
 }
 
 /**
  * The VMs in the order they're stacked (the largest now at the bottom, then those without a reading
  * now by their peak): the snapshot's, and any the range still holds (one stopped since, say).
- * A disk image stays while its VM is stopped and isn't measured, so on the disk tab a VM's gaps hold
- * its nearest reading, and one with no history at all is drawn at its size now.
+ * A disk image stays while its VM is stopped, and older versions didn't save it, so on the disk tab a
+ * VM's gaps hold its nearest reading, and one with no history at all is drawn at its size now.
  */
 export function layers(s: Shares | null, stack: Stack | null | undefined, tab: Tab): Layer[] {
   const n = stack?.ts.length ?? 0;

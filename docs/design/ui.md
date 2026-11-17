@@ -207,8 +207,8 @@ under the sentence, figures and bar it explains, with the allocation as a dashed
   memory, the computer's wired memory (the kernel's, the GPU's and drivers', never paged out or
   compressed; no VM's process has any, so it's part of what the VMs leave and kept inside it) in
   everything else's hatch, crossed; everything else hatched above; the computer's total is the
-  top. A gap is where the computer wasn't measured, or a VM wasn't though it ran (a reading or two late or lost; a longer while, it was stopped); the right edge is the newest bucket measured, as the VMs' newest readings may still be on their way. A stopped VM's disk image has no history, so
-  it's drawn at its size now throughout, and a disk's gaps hold its nearest reading. The legend is
+  top. A gap is where the computer wasn't measured, or a VM wasn't though it ran (a reading or two late or lost; a longer while, it was stopped); the right edge is the newest bucket measured, as the VMs' newest readings may still be on their way. A stopped VM's disk image is saved too; with
+  no history (saved before it was), it's drawn at its size now throughout, and a disk's gaps hold its nearest reading. The legend is
   the list: each VM's name (in `--warn` while it isn't answering), its figure now and, in grey, its
   peak in the range. On memory, a VM's or an app's figure, and its band, is its share of the
   memory in use, its compressed memory counted at the size the compressor keeps it in, so the parts

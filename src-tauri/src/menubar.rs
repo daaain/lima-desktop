@@ -651,12 +651,8 @@ fn fill_from_saved(app: &AppHandle) {
 }
 
 /// The last [`COLUMNS`] measurements of `res` saved in the [`SAVED_SPAN`] up to `to`, taken every
-/// `interval_secs`. Not the disk's: a stopped VM's image is measured only live, never saved, so
-/// the VMs' part would step up at the first tick; the disk changes slowly, and that tick fills it.
+/// `interval_secs`.
 fn saved_history(store: &mut Store, res: Res, to: i64, interval_secs: u64) -> VecDeque<Share> {
-    if res == Res::Disk {
-        return VecDeque::new();
-    }
     let from = to - SAVED_SPAN.as_millis() as i64;
     // A bucket per measurement, at most.
     let points = (SAVED_SPAN.as_secs() / interval_secs.max(1)) as usize + 1;
@@ -1262,18 +1258,24 @@ mod tests {
     }
 
     #[test]
-    fn a_restart_carries_on_memory_and_cpu_from_the_last_saved_but_not_disk() {
-        use crate::store::{ABSENT, HOST_METRICS, Kind, Store};
+    fn a_restart_carries_on_each_trace_from_the_last_saved() {
+        use crate::store::{ABSENT, HOST_METRICS, Kind, Store, VM_METRICS};
         let mut s = Store::in_memory().unwrap();
         let host = s.entity(Kind::Host, "", "host", "this computer", 0).unwrap();
+        // Stopped: only its disk image, as the collector saves it.
+        let vm = s.entity(Kind::Vm, "a", "a", "a", 0).unwrap();
         let col = |m: &str| HOST_METRICS.iter().position(|c| *c == m).unwrap();
+        let alloc = VM_METRICS.iter().position(|c| *c == "host_disk_alloc").unwrap();
         let t = 10 * 60_000;
         for i in 0..30 {
             let mut h = vec![ABSENT; HOST_METRICS.len()];
             (h[col("mem_used")], h[col("mem_total")]) = (i, 100);
             (h[col("cpu_mc")], h[col("cpu_total_mc")]) = (i, 100);
-            (h[col("disk_used")], h[col("disk_total")]) = (i, 100);
+            (h[col("disk_used")], h[col("disk_total")]) = (50, 100);
             s.ingest(host, t + i * 1000, h);
+            let mut v = vec![ABSENT; VM_METRICS.len()];
+            v[alloc] = 20;
+            s.ingest(vm, t + i * 1000, v);
         }
         s.flush(t + 30_000).unwrap();
         let to = t + 30_000;
@@ -1281,9 +1283,11 @@ mod tests {
             let h = saved_history(&mut s, res, to, 1);
             assert_eq!(h.len(), COLUMNS);
             assert_eq!(h.back().unwrap().whole, 0.29); // the newest
+            assert_eq!(h.back().unwrap().vms, 0.0); // stopped, it takes none
         }
-        // A stopped VM's image isn't saved, only measured live: the VMs' part would be short.
-        assert!(saved_history(&mut s, Res::Disk, to, 1).is_empty());
+        let disk = saved_history(&mut s, Res::Disk, to, 1);
+        assert_eq!(disk.len(), COLUMNS);
+        assert_eq!((disk.back().unwrap().whole, disk.back().unwrap().vms), (0.5, 0.2));
         // Saved longer ago than the span: a fresh start.
         assert!(saved_history(&mut s, Res::Mem, to + SAVED_SPAN.as_millis() as i64 + 60_000, 1).is_empty());
     }
