@@ -68,6 +68,13 @@ for (const dark of [false, true]) {
 
   test(`VM overview${suffix}`, async () => {
     const { page, errors, close } = await open('/', { dark });
+    // A restart nudged only where a VM holds far more than its guest needs: lantern, mostly idle in 16 GiB.
+    await page.locator('p.restart').first().waitFor();
+    assert.deepEqual(
+      await page.locator('p.restart').evaluateAll((els) => els.map((e) => e.closest('article').querySelector('a.name').textContent)),
+      ['lantern'],
+    );
+    assert.match(await page.locator('p.restart').first().textContent(), /^[\d.]+ GiB more than it needs: restart to free it$/);
     await page.getByRole('heading', { level: 1 }).waitFor();
     // ember has stopped answering, which outranks the two VMs past three quarters.
     assert.equal(await page.getByRole('heading', { level: 1 }).innerText(), "ember isn't answering.");
@@ -109,6 +116,11 @@ for (const dark of [false, true]) {
     // Two hours ago it also stalled, with memory nearly full and nothing killed: that, not the
     // container's own limit, is why it needs more memory.
     await page.getByRole('heading', { level: 1, name: 'harbor needs more memory and CPU, judging by the last 6 h.' }).waitFor();
+    // On vz, what it costs the computer, what its guest needs, and that a restart gives back the rest.
+    assert.match(
+      await page.locator('figcaption.note', { hasText: 'On vz' }).innerText(),
+      /^On vz, guest memory is only backed as it's touched, and isn't given back when the guest frees it: right now this VM costs your computer [\d.]+ GiB of RAM, and its guest needs [\d.]+ GiB\. Restarting the VM gives back the rest\.$/,
+    );
     assert.match(
       await page.locator('figure', { hasText: 'Memory' }).first().innerText(),
       /The VM ran out of memory and stalled once in the last 6 h\. 1 OOM kill was a container hitting its own memory limit\./,

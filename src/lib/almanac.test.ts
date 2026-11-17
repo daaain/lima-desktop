@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   bandPeak, bandRise, containersHeadline, containersSentence, countWord, projectSaid, exitedSentence, fullWindow, holdsSentence, intervalPhrase, ownLimit, pressureSentence, rowMemory,
-  runsSentence, fleetHeadline, hostBar, hostRamSentence, quarters, selfMemory, share, shareChart, shareTip, sketch, unusedHeadline, unusedLede, vmHeadline, vmSentence,
+  restartNote, runsSentence, fleetHeadline, hostBar, hostRamSentence, quarters, selfMemory, vzMemoryNote, share, shareChart, shareTip, sketch, unusedHeadline, unusedLede, vmHeadline, vmSentence,
 } from './almanac';
 import type { Hint } from './rightsize';
 import { container, vm } from './testing';
@@ -475,5 +475,31 @@ describe('hostRamSentence', () => {
     expect(hostRamSentence([on('a', 8, 8)])).toBeNull();
     expect(hostRamSentence([on('a', 8)])).toBeNull();
     expect(hostRamSentence([])).toBeNull();
+  });
+});
+
+describe("what a VM holds beyond its guest's need, and that restarting gives it back", () => {
+  it('says what the guest needs and that a restart gives back the rest, under the VM page\'s memory chart', () => {
+    expect(vzMemoryNote(47.5 * GiB, 7.5 * GiB)).toBe(
+      "On vz, guest memory is only backed as it's touched, and isn't given back when the guest frees it: right now this VM costs your " +
+        'computer 47.5 GiB of RAM, and its guest needs 7.5 GiB. Restarting the VM gives back the rest.',
+    );
+    // Nothing to give back: the guest needs all it holds (or more, read a moment apart).
+    expect(vzMemoryNote(4 * GiB, 4.2 * GiB)).toBe(
+      "On vz, guest memory is only backed as it's touched, and isn't given back when the guest frees it: right now this VM costs your computer 4.0 GiB of RAM.",
+    );
+    // Without the guest's reading.
+    expect(vzMemoryNote(4 * GiB, undefined)).toBe(
+      "On vz, guest memory is only backed as it's touched, and isn't given back when the guest frees it: right now this VM costs your computer 4.0 GiB of RAM.",
+    );
+  });
+  it('nudges a restart on the overview only where the VM holds far more than its guest needs', () => {
+    expect(restartNote(47.5 * GiB, 7.5 * GiB)).toBe('40.0 GiB more than it needs: restart to free it');
+    // A guest's own cache and a moment's growth aren't worth a restart: at least twice, and 4 GiB over.
+    expect(restartNote(9 * GiB, 5 * GiB)).toBe('');
+    expect(restartNote(7 * GiB, 3.5 * GiB)).toBe('');
+    expect(restartNote(8.1 * GiB, 4 * GiB)).toBe('4.1 GiB more than it needs: restart to free it');
+    expect(restartNote(undefined, 7.5 * GiB)).toBe('');
+    expect(restartNote(47.5 * GiB, undefined)).toBe('');
   });
 });

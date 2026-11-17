@@ -2,7 +2,7 @@
   import { live } from '$lib/live.svelte';
   import { bytes, cores, permille } from '$lib/format';
   import type { Instance, VmLive } from '$lib/api';
-  import { band, bandRise, countWord, fleetHeadline, gauges, hostRamSentence, share, sketch, vmSentence } from '$lib/almanac';
+  import { band, bandRise, countWord, fleetHeadline, gauges, hostRamSentence, restartNote, share, sketch, vmSentence } from '$lib/almanac';
   import { History } from '$lib/history.svelte';
   import { range } from '$lib/range.svelte';
   import { theLast } from '$lib/ranges';
@@ -106,6 +106,7 @@
       {#each running as vm (vm.instance.name)}
         {@const i = vm.instance}
         {@const l = vm.latest}
+        {@const restart = restartNote(l.host_rss, l.mem_used)}
         {@const g = gauges(vm)}
         {@const h = history.get(vm.entity)}
         {@const ctRunning = vm.containers.filter((c) => c.state === 'running').length}
@@ -149,6 +150,9 @@
               <a href={`/containers?vm=${encodeURIComponent(i.name)}`}>{ctRunning} of {vm.containers.length} running</a>
             {/if}
             <p class="label" title="What the VM costs this computer right now: the memory its virtual machine process holds, as Activity Monitor counts it">{bytes(l.host_rss)} RAM on your computer</p>
+            {#if restart}
+              <p class="label restart" title="On vz the VM keeps what its guest has used and freed, and its file cache; Lima has no way to ask for it back while it runs">{restart}</p>
+            {/if}
           </div>
         </article>
       {/each}

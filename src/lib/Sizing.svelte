@@ -2,7 +2,7 @@
   // A VM's four figures (memory, CPU, pressure, disk), each a verdict in a sentence, the numbers
   // behind it, a bar and the history; then the resize form, which the verdicts can fill in.
   import { api, locked, type Instance, type Latest, type OomEvent, type Series, type Summary, type VmStall } from './api';
-  import { pressureSentence, share } from './almanac';
+  import { pressureSentence, share, vzMemoryNote } from './almanac';
   import { bytes, cores, cpuLabel, GiB, permille } from './format';
   import { cpuHint, diskHint, memoryHint, type Hint } from './rightsize';
   import { inRange, type RangeKey } from './ranges';
@@ -134,7 +134,7 @@
     <Chart data={series} format={(v) => bytes(v)} ceiling={inst.memory} {markers}
       lines={[{ key: 'mem_used', label: 'used in the guest', color: '--series-1' }, { key: 'host_rss', label: 'RAM on your computer', color: '--series-3' }]} />
     {#if inst.vmType === 'vz'}
-      <figcaption class="note">On vz, guest memory is only backed as it's touched: right now this VM costs your computer {bytes(latest.host_rss)} of RAM.</figcaption>
+      <figcaption class="note">{vzMemoryNote(latest.host_rss, latest.mem_used)}</figcaption>
     {/if}
   </figure>
   <figure>
