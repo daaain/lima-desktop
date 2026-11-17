@@ -53,6 +53,13 @@ test("a heading in an entry is refused: it would end the release's section early
   assert.throws(() => parse('c.md', fragment('Fixed', 'patch', '- a:\n\n  ```md\n## in a block\n  ```')), /## /);
 });
 
+test('a code block left open is refused: it would turn the rest of the changelog into code', () => {
+  assert.throws(() => parse('o.md', fragment('Fixed', 'patch', '- a:\n\n  ```sh\n  echo')), /o\.md: .*never closed/);
+  // A ~~~ inside a ``` block doesn't close it.
+  assert.throws(() => parse('o.md', fragment('Fixed', 'patch', '- a:\n\n  ```md\n  ~~~\n  # inside\n  ~~~')), /never closed/);
+  assert.equal(parse('o.md', fragment('Fixed', 'patch', '- a:\n\n  ```md\n  ~~~\n  # inside\n  ~~~\n  ```')).bump, 'patch');
+});
+
 test('a fragment saved with CRLF, or a blank line in its frontmatter, reads as any other', () => {
   const crlf = fragment('Fixed', 'patch', '- a').replaceAll('\n', '\r\n');
   assert.deepEqual(parse('c.md', crlf).body, '- a');

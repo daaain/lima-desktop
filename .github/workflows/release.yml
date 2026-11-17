@@ -49,6 +49,10 @@ jobs:
       version: ${{ steps.check.outputs.version }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The whole history: a dry run lists the pending fragments in the order they landed,
+          # which git can only tell from the commits that added them.
+          fetch-depth: 0
       # On a tag, the tag's version; on a dry run, whatever tauri.conf.json says.
       - name: tauri.conf.json, Cargo.toml and package.json all say the same version, and CHANGELOG.md has its section
         id: check

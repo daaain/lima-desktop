@@ -56,11 +56,14 @@ export function parse(name, text) {
   // A release's notes end at the next `## `, wherever it is, a code block included; any other
   // heading, outside one, would nest under the release's own wrongly.
   if (/^\s*## /m.test(body)) throw new ChangesError(`${name}: a \`## \` heading line, even in a code block, would end the release's notes there`);
-  let fenced = false;
+  // The fence a code block opened with, if one is open: only the same kind closes it.
+  let fence = null;
   for (const line of body.split('\n')) {
-    if (/^\s*(```|~~~)/.test(line)) fenced = !fenced;
-    else if (!fenced && /^\s*#{1,6} /.test(line)) throw new ChangesError(`${name}: no heading in an entry: the release gives it its section's`);
+    const marker = /^\s*(```|~~~)/.exec(line)?.[1];
+    if (marker && (!fence || marker === fence)) fence = fence ? null : marker;
+    else if (!fence && /^\s*#{1,6} /.test(line)) throw new ChangesError(`${name}: no heading in an entry: the release gives it its section's`);
   }
+  if (fence) throw new ChangesError(`${name}: a code block is never closed: the rest of the changelog would read as code`);
   return { name, section, bump, body };
 }
 
