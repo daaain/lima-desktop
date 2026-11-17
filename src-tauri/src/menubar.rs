@@ -1,6 +1,6 @@
 //! The menu bar: up to three items (memory, CPU, disk), each the whole computer's use as a figure,
-//! drawn — a trace of the last few measurements, or an upright bar — with the VMs' part solid and
-//! everything else pale. Clicking one opens the popover (the UI's `/menubar` page, in a small
+//! drawn — a trace of the last few measurements, or an upright bar — with the VMs' part solid on
+//! top of everything else, pale. Clicking one opens the popover (the UI's `/menubar` page, in a small
 //! borderless window under it) on that resource; its menu (right click) opens the app or quits.
 //! With all three off the app's own icon stays, as the way back in when the window is closed.
 //!
@@ -279,14 +279,16 @@ impl Mask {
         self.fill(x0, x0 + FRAME, 0, h, SOLID);
         self.fill(x1 - FRAME, x1, 0, h, SOLID);
     }
-    /// A column inside the frame, from the bottom: the VMs solid, the rest of the whole pale.
+    /// A column inside the frame, from the bottom: everything else pale, the VMs solid on top, so
+    /// the solid's top edge is the whole.
     fn column(&mut self, x0: u32, x1: u32, s: Share) {
         let inside = self.height - 2 * FRAME;
         let bottom = self.height - FRAME;
         let px = |f: f32| (f.clamp(0.0, 1.0) * inside as f32).round() as u32;
         let (whole, vms) = (px(s.whole), px(s.vms).min(px(s.whole)));
-        self.fill(x0, x1, bottom - whole, bottom - vms, PALE);
-        self.fill(x0, x1, bottom - vms, bottom, SOLID);
+        let rest = whole - vms;
+        self.fill(x0, x1, bottom - rest, bottom, PALE);
+        self.fill(x0, x1, bottom - whole, bottom - rest, SOLID);
     }
     /// The last [`COLUMNS`] measurements from `x`, oldest first, the newest at the right; columns
     /// touch.
@@ -1301,13 +1303,14 @@ mod tests {
     }
 
     #[test]
-    fn a_trace_draws_the_vms_solid_under_everything_else_pale_newest_at_the_right() {
+    fn a_trace_draws_the_vms_solid_over_everything_else_pale_newest_at_the_right() {
         let i = trace(&[used(0.5, 0.25)]);
         assert_eq!((i.width, i.height, i.rgba.len()), (48, 36, 48 * 36 * 4));
         let x = i.width - FRAME - 1; // the newest column
-        assert_eq!(px(&i, x, H - FRAME - 1), [0, 0, 0, SOLID]); // VMs, at the bottom
-        assert_eq!(px(&i, x, H - FRAME - 10), [0, 0, 0, PALE]); // everything else, above them
-        assert_eq!(px(&i, x, FRAME + 2), [0, 0, 0, 0]); // free
+        let top = H - FRAME - (H - 2 * FRAME) / 2; // the whole, half the inside
+        assert_eq!(px(&i, x, H - FRAME - 1), [0, 0, 0, PALE]); // everything else, at the bottom
+        assert_eq!(px(&i, x, top), [0, 0, 0, SOLID]); // VMs, above it, up to the whole
+        assert_eq!(px(&i, x, top - 1), [0, 0, 0, 0]); // free
         assert_eq!(px(&i, FRAME, H - FRAME - 1), [0, 0, 0, 0]); // no older measurement yet
         assert_eq!(px(&i, 0, 0)[3], SOLID); // the frame
     }
