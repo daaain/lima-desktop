@@ -23,7 +23,7 @@
 
   const t = $derived(projectTotals(containers));
   // No limit of its own, so measured against the VM, its peak the sum's in the range.
-  // The processes' own memory too, where every running line has it, so its darker part adds up theirs.
+  // The processes' own memory too, where every running line has it, so its strongest part adds up theirs.
   const memory = $derived(rowMemory({ mem: t.mem, ...(t.own == null ? {} : { mem_own: t.own }) }, { vmMemory, over: range.key, history: band(history, 'mem'), startedAt: null }));
 </script>
 

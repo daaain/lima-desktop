@@ -75,7 +75,8 @@
         <Chart title="Memory" data={series} format={(v) => bytes(v)} ceiling={limit} markers={oomMarkers}
           lines={[
             { key: 'mem', label: 'used', color: '--series-1' },
-            { key: 'mem_own', label: "processes' own", color: '--series-3' },
+            // The bar's strongest part's colour: the CPU chart beside this one has the third series'.
+            { key: 'mem_own', label: "processes' own", color: '--fg' },
             { key: 'mem_peak', label: 'peak (cgroup)', color: '--series-2' },
           ]} />
         <Chart title="CPU" data={series} format={cpuLabel}

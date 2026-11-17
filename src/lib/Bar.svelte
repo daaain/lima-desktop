@@ -1,12 +1,12 @@
 <script lang="ts">
   // A share of a scale, notched at quarters. Optionally a paler bar behind it (e.g. the peak), a
-  // darker part of it (e.g. a container's processes' own memory, of a figure that also counts cache)
+  // strongest part of it (e.g. a container's processes' own memory, of a figure that also counts cache)
   // and a tick (e.g. p95). Past three quarters it takes the warning colour, unless `plain`.
   import { isHot } from './almanac';
 
   let { pct, behind, own, tick, plain = false, quiet = false, hot, label }: {
     pct: number; behind?: number;
-    /** Of `pct`, the part drawn darker: no wider than it. */
+    /** Of `pct`, the part drawn strongest: no wider than it. */
     own?: number;
     tick?: number; plain?: boolean; quiet?: boolean;
     /** Overrides the three-quarters rule (e.g. measured against a limit that isn't the scale). */
@@ -34,8 +34,8 @@
   .fill { background: var(--bar); }
   .fill.some { min-width: 2px; }
   .behind { background: var(--soft); }
-  /* The darker part is darker by lightness, not another hue: the strongest grey, the foreground's.
-     There is no darker warning colour, so past three quarters it is the rest that goes paler. */
+  /* The strongest part differs by lightness, not hue: the foreground's colour, the most contrast there is.
+     There is no stronger warning colour, so past three quarters it is the rest that goes fainter. */
   .own { background: var(--fg); }
   .hot .fill { background: var(--warn); }
   .hot .fill.split { opacity: 0.5; }

@@ -728,7 +728,7 @@ test("Each VM's containers are split by compose project, each project's heading 
   assert.match(await project.innerText(), /^atlas\s+twelve running\b/);
   // What it uses between them is drawn against the VM's memory and cores, as the lines are.
   await project.getByRole('img', { name: /^Memory .+ now, .+ of it the processes' own memory, the rest .+; peak .+ in the last 24 h; full width is the VM's 48\.0 GiB$/ }).waitFor();
-  // Its bar's darker part adds up its lines' processes' own memory.
+  // Its bar's strongest part adds up its lines' processes' own memory.
   assert.equal(await project.locator('.bar .own').count(), 1);
   assert.ok(await project.getByRole('img', { name: /^CPU .+ of the VM's 8 cores$/ }).isVisible());
   // Above them, the project over the range: its containers' histories added up, with its peak.
@@ -1079,7 +1079,7 @@ test("A container's memory is drawn against its VM or its own limit, its peak fr
   assert.match(await memory('warehouse').innerText(), /^\d+\.\d MiB of VM\npeak 1[78]\.\d GiB in 24 h$/);
   const bar = await line('warehouse').locator('.bar').first().getAttribute('aria-label');
   assert.match(bar, /^Memory \d+\.\d MiB now, \d+\.\d MiB of it the processes' own memory, the rest file cache and kernel memory the VM can reclaim; peak 1[78]\.\d GiB in the last 24 h, 300\.0 MiB since it started 3 min ago; full width is the VM's 48\.0 GiB$/);
-  // The figure is podman's; the bar's darker part, inside it, is the processes' own memory.
+  // The figure is podman's; the bar's strongest part, inside it, is the processes' own memory.
   const [fill, own] = await Promise.all(['.fill', '.own'].map((s) => line('warehouse').locator(`.bar ${s}`).first().evaluate((el) => el.getBoundingClientRect().width)));
   assert.ok(own > 0 && own < fill, `the processes' own ${own}px inside the figure's ${fill}px`);
   // harbor's app has a limit of its own: its bar is that wide, and it's past three quarters of it.
@@ -1154,7 +1154,7 @@ test('One time range for the whole app, chosen in the masthead and kept for next
   await ranges.getByRole('button', { name: '6 h' }).click();
   assert.deepEqual(await chosen(), ['6 h']);
   await page.waitForFunction(() => /peak [^\n]+ in 6 h/.test(document.body.innerText) && !/ in 24 h/.test(document.body.innerText));
-  assert.match(await page.locator('main > .note').last().innerText(), /the tick the peak in the last 6 h\./);
+  assert.match(await page.locator('main > .note').last().innerText(), /the tick is the peak in the last 6 h\./);
   // A VM's page follows it: its lines, charts and verdicts.
   await page.locator('header nav').getByRole('link', { name: 'VMs' }).click();
   await page.locator('article .name', { hasText: 'harbor' }).click();

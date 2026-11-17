@@ -223,7 +223,7 @@ export function bandRise(band: Band | undefined): number | undefined {
 // The figure is podman's: the cgroup's memory less its inactive file cache. That still counts
 // active file cache and reclaimable kernel memory (a devbox's 6.7 GiB was 2.0 GiB of its processes'
 // own), so where the probe read it, the bar draws the processes' own memory (`mem_own`: anon and
-// shmem, what only swap could take away) as the darker part of the figure, and the label says so.
+// shmem, what only swap could take away) as the strongest part of the figure, and the label says so.
 
 /** A container's own memory limit: an unlimited one reports its VM's memory, or near it, as its limit. */
 export const ownLimit = (memLimit: number | undefined | null, vmMemory: number): number | undefined =>

@@ -3,7 +3,7 @@
   // how long it has been up, and what can be done to it. Used by the Containers view and a VM's page.
   // Both bars are measured against what the container may use (its memory limit, else its VM's
   // memory; its VM's cores), never against the other lines, so a line reads the same in any list.
-  // The memory bar's darker part is the processes' own memory, said in its tooltip: the figure beside
+  // The memory bar's strongest part is the processes' own memory, said in its tooltip: the figure beside
   // it is podman's, and the line has no room for a second one.
   import type { ContainerLive, Series } from './api';
   import { band, rowMemory, share, sketch } from './almanac';
