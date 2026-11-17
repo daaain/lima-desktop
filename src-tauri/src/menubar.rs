@@ -23,7 +23,7 @@ use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent}
 use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
 
 use crate::collector::{Collector, Snapshot, now_ms};
-use crate::store::Stack;
+use crate::store::{Stack, Store};
 use crate::settings::{Drawing, Item, MenuBar, Saved, Warn};
 
 /// The popover window's label, and its width in points.
@@ -293,12 +293,14 @@ impl Mask {
         self.fill(x1 - FRAME, x1, 0, h, SOLID);
     }
     /// A column inside the frame, from the bottom: the VMs pale, the rest of the whole solid above
-    /// them, so its top edge (the whole) stands out, VMs or none.
+    /// them, so its top edge (the whole) stands out, VMs or none: solid as thick as the frame's
+    /// line at least, even where the VMs are nearly all of it.
     fn column(&mut self, x0: u32, x1: u32, s: Share) {
         let inside = self.height - 2 * FRAME;
         let bottom = self.height - FRAME;
         let px = |f: f32| (f.clamp(0.0, 1.0) * inside as f32).round() as u32;
-        let (whole, vms) = (px(s.whole), px(s.vms).min(px(s.whole)));
+        let whole = px(s.whole);
+        let vms = px(s.vms).min(whole.saturating_sub(FRAME));
         self.fill(x0, x1, bottom - whole, bottom - vms, SOLID);
         self.fill(x0, x1, bottom - vms, bottom, PALE);
     }
@@ -638,20 +640,34 @@ pub fn start(app: &AppHandle) {
 /// Each history from the last [`COLUMNS`] measurements saved in the last [`SAVED_SPAN`].
 fn fill_from_saved(app: &AppHandle) {
     let collector = app.state::<std::sync::Arc<Collector>>();
-    let to = now_ms();
-    let from = to - SAVED_SPAN.as_millis() as i64;
-    // A bucket per measurement, at most.
-    let points = (SAVED_SPAN.as_secs() / collector.interval_secs().max(1)) as usize + 1;
+    let interval = collector.interval_secs();
     let mut store = collector.store();
     let state = app.state::<State>();
     let mut h = state.history.lock().expect("menu bar lock");
+    let to = now_ms();
     for res in RESOURCES {
-        match store.stack(res.id(), from, to, points) {
-            Ok(stack) => {
-                let saved = saved_shares(&stack);
-                h[res.index()] = saved[saved.len().saturating_sub(COLUMNS)..].iter().copied().collect();
-            }
-            Err(e) => log::warn!("can't read the saved {} for the menu bar: {e}", res.id()),
+        h[res.index()] = saved_history(&mut store, res, to, interval);
+    }
+}
+
+/// The last [`COLUMNS`] measurements of `res` saved in the [`SAVED_SPAN`] up to `to`, taken every
+/// `interval_secs`. Not the disk's: a stopped VM's image is measured only live, never saved, so
+/// the VMs' part would step up at the first tick; the disk changes slowly, and that tick fills it.
+fn saved_history(store: &mut Store, res: Res, to: i64, interval_secs: u64) -> VecDeque<Share> {
+    if res == Res::Disk {
+        return VecDeque::new();
+    }
+    let from = to - SAVED_SPAN.as_millis() as i64;
+    // A bucket per measurement, at most.
+    let points = (SAVED_SPAN.as_secs() / interval_secs.max(1)) as usize + 1;
+    match store.stack(res.id(), from, to, points) {
+        Ok(stack) => {
+            let saved = saved_shares(&stack);
+            saved[saved.len().saturating_sub(COLUMNS)..].iter().copied().collect()
+        }
+        Err(e) => {
+            log::warn!("can't read the saved {} for the menu bar: {e}", res.id());
+            VecDeque::new()
         }
     }
 }
@@ -1243,6 +1259,47 @@ mod tests {
         assert_eq!((s[0].whole, s[0].vms, s[0].free), (0.5, 0.2, 50));
         assert_eq!((s[1].whole, s[1].vms, s[1].free), (0.8, 0.25, 20));
         assert!(saved_shares(&Stack::default()).is_empty());
+    }
+
+    #[test]
+    fn a_restart_carries_on_memory_and_cpu_from_the_last_saved_but_not_disk() {
+        use crate::store::{ABSENT, HOST_METRICS, Kind, Store};
+        let mut s = Store::in_memory().unwrap();
+        let host = s.entity(Kind::Host, "", "host", "this computer", 0).unwrap();
+        let col = |m: &str| HOST_METRICS.iter().position(|c| *c == m).unwrap();
+        let t = 10 * 60_000;
+        for i in 0..30 {
+            let mut h = vec![ABSENT; HOST_METRICS.len()];
+            (h[col("mem_used")], h[col("mem_total")]) = (i, 100);
+            (h[col("cpu_mc")], h[col("cpu_total_mc")]) = (i, 100);
+            (h[col("disk_used")], h[col("disk_total")]) = (i, 100);
+            s.ingest(host, t + i * 1000, h);
+        }
+        s.flush(t + 30_000).unwrap();
+        let to = t + 30_000;
+        for res in [Res::Mem, Res::Cpu] {
+            let h = saved_history(&mut s, res, to, 1);
+            assert_eq!(h.len(), COLUMNS);
+            assert_eq!(h.back().unwrap().whole, 0.29); // the newest
+        }
+        // A stopped VM's image isn't saved, only measured live: the VMs' part would be short.
+        assert!(saved_history(&mut s, Res::Disk, to, 1).is_empty());
+        // Saved longer ago than the span: a fresh start.
+        assert!(saved_history(&mut s, Res::Mem, to + SAVED_SPAN.as_millis() as i64 + 60_000, 1).is_empty());
+    }
+
+    #[test]
+    fn the_top_edge_stays_solid_where_the_vms_are_nearly_all_of_it() {
+        // Inside, 32 px: the whole 16, the VMs 15.7, both 16 rounded.
+        let i = trace(&[used(0.5, 0.49)]);
+        let x = i.width - FRAME - 1;
+        let top = H - FRAME - 16;
+        assert_eq!(px(&i, x, top)[3], SOLID);
+        assert_eq!(px(&i, x, top + FRAME - 1)[3], SOLID);
+        assert_eq!(px(&i, x, top + FRAME)[3], PALE);
+        // Under a line's worth in all, all solid.
+        let i = trace(&[used(0.03, 0.03)]);
+        assert_eq!(px(&i, x, H - FRAME - 1)[3], SOLID);
     }
 
     #[test]

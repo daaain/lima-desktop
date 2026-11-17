@@ -55,7 +55,8 @@ impl Item {
 }
 
 /// The menu bar's items, one per resource: the whole computer's use as a figure, the VMs' part
-/// drawn solid. With all three off the app's own icon stays, as the way back in.
+/// drawn pale under everything else, solid. With all three off the app's own icon stays, as the
+/// way back in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct MenuBar {
