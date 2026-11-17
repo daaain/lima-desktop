@@ -1,0 +1,10 @@
+# Prettier formats the Markdown only (`just format`, checked by `just check`): each paragraph and
+# list item on one line (.prettierrc.json), so an edit never rewraps the lines around it. The code
+# keeps its own style, so everything else is ignored here, editors' format-on-save included.
+*
+!*/
+!*.md
+# Vendored from foldyard, kept as it comes.
+.claude/skills/foldyard/
+# Written by `just release` from the .changes/ fragments, which are formatted.
+CHANGELOG.md

@@ -1,65 +1,24 @@
 # The UI: sentences first, every number drawn
 
-**Question:** the app shows a lot of numbers that are all fine most of the time. How should it look
-so that the one that isn't fine is the first thing read, and the rest is still there to compare?
+**Question:** the app shows a lot of numbers that are all fine most of the time. How should it look so that the one that isn't fine is the first thing read, and the rest is still there to compare?
 
-**Answer:** each page opens with a sentence that says what matters; each thing on it gets a
-sentence of its own; and every number sits next to a small drawing of itself on a stated scale.
-One typeface for what is said, one for what is counted, one colour for "look at this".
+**Answer:** each page opens with a sentence that says what matters; each thing on it gets a sentence of its own; and every number sits next to a small drawing of itself on a stated scale. One typeface for what is said, one for what is counted, one colour for "look at this".
 
 <img src="https://daaain.github.io/lima-desktop/overview.png" alt="The VM overview" width="720">
 
-The pictures in this guide and the README are drawn from invented data by the UI's browser tests
-(`just ui-e2e`) and published by CI
-([development.md](../development.md#the-ui-in-a-browser-on-fake-data-just-ui-e2e)).
+The pictures in this guide and the README are drawn from invented data by the UI's browser tests (`just ui-e2e`) and published by CI ([development.md](../development.md#the-ui-in-a-browser-on-fake-data-just-ui-e2e)).
 
 ## Words
 
-- **A page's headline is a sentence with a full stop**, worst news first: "Two VMs are past three
-  quarters of their memory or disk.", "harbor needs more memory and CPU, judging by the last 6 h.", "17 of 19 containers are running."
-  When nothing is wrong it says so ("Every running VM has room to spare."). A VM that has stopped
-  answering is the worst news of all ("ember isn't answering.", on the overview and its own page),
-  and its last reading isn't described as if it were now. The sentences live in
-  `src/lib/almanac.ts`, each with its tests; a sentence is never assembled in a component.
-- **How full something is, is said in quarters**: less than a quarter, more than a quarter, more
-  than half, more than three quarters. A sentence can't carry "34 %" honestly a second later; the
-  figure beside it can.
-- **Past three quarters is the one threshold** (`WARN_PCT`). The sentence, the figure, the bar and
-  the history all turn at the same point, so they never disagree. The menu bar's items and their
-  popover are the exception: they're about the whole computer, and when they warn is chosen in
-  Settings (memory and CPU past a percent in use, the disk with less than so many GB free, as a
-  percent says little across disk sizes). Right-sizing's verdicts (`rightsize.ts`) are stricter
-  and separate: they look at a window of history, and say "needs
-  more" only on evidence (the whole VM running out, whether the kernel killed something or the VM
-  stalled with memory past 90 % or under pressure; sustained full memory pressure; a peak over
-  90 %). A container hitting its own limit, or a stall of unknown cause, never says the VM needs
-  more.
-- **What is said over time names the range it is over**, the one chosen in the masthead (see
-  **Time range**, below): "The VM ran out of memory and stalled once in the last 6 h.", "1 kill
-  and 1 stall in the last hour, newest first", "peak 1.2 GiB in 7 days". A verdict judged from the
-  range ends "judging by the last 24 h"; what is now is said as now ("More than half of its memory
-  is in use."). Every range reads in a sentence (`ranges.theLast`: "the last 15 min", "the last
-  hour", "the last 6 h", "the last 24 h", "the last 7 days", "the last 30 days"), and in a column's
-  few words as the picker labels it (`ranges.inRange`: "in 6 h"). A VM is never said to need less
-  than it has on less than a day: under 24 h the memory verdict says "too short a time to tell
-  whether it could do with less" where it otherwise would, and over a longer range that holds less
-  than a day of samples it says "less than a day of history so far".
-- **Counts up to twelve are spelled at the start of a sentence** ("Five are running"), digits
-  elsewhere. Names are never abbreviated; a long one is cut with an ellipsis and whole in its
-  tooltip.
-- **Tooltips are the app's own, not the browser's.** Any element's `title` is shown by one
-  tooltip (`Tooltip.svelte`, timing in `tips.ts`) after the pointer rests 200 ms — the browser's
-  takes a second or more — then at once from one thing to the next while one is showing. The
-  `title` moves to `aria-description` so screen readers keep it. Something that reads out what's
-  under the pointer itself (the share chart) feeds the same tooltip.
-- **"Stalled" is a VM that has stopped answering, and only that.** Pressure (Linux's PSI) is said
-  as work waiting: "84 % · waiting 0.4 %", "waiting on memory now", "work waited on CPU up to
-  39 % of the time"; its tooltip names PSI for anyone who knows it by that name.
-- **No all-caps labels.** A label is either a serif head over a column ("Memory", "CPU") or a small
-  grey line under a figure saying what it is ("peak", "cores, 95th percentile").
-- Units stay on the figure (`38.9 GiB of 45.8 GiB`), in the binary units the rest of the app uses.
-  The one exception is the menu bar popover's Disk tab, in powers of 1000 (`994.7 GB`), so it says
-  the same as Finder does of the same disk (`format.decimalBytes`).
+- **A page's headline is a sentence with a full stop**, worst news first: "Two VMs are past three quarters of their memory or disk.", "harbor needs more memory and CPU, judging by the last 6 h.", "17 of 19 containers are running." When nothing is wrong it says so ("Every running VM has room to spare."). A VM that has stopped answering is the worst news of all ("ember isn't answering.", on the overview and its own page), and its last reading isn't described as if it were now. The sentences live in `src/lib/almanac.ts`, each with its tests; a sentence is never assembled in a component.
+- **How full something is, is said in quarters**: less than a quarter, more than a quarter, more than half, more than three quarters. A sentence can't carry "34 %" honestly a second later; the figure beside it can.
+- **Past three quarters is the one threshold** (`WARN_PCT`). The sentence, the figure, the bar and the history all turn at the same point, so they never disagree. The menu bar's items and their popover are the exception: they're about the whole computer, and when they warn is chosen in Settings (memory and CPU past a percent in use, the disk with less than so many GB free, as a percent says little across disk sizes). Right-sizing's verdicts (`rightsize.ts`) are stricter and separate: they look at a window of history, and say "needs more" only on evidence (the whole VM running out, whether the kernel killed something or the VM stalled with memory past 90 % or under pressure; sustained full memory pressure; a peak over 90 %). A container hitting its own limit, or a stall of unknown cause, never says the VM needs more.
+- **What is said over time names the range it is over**, the one chosen in the masthead (see **Time range**, below): "The VM ran out of memory and stalled once in the last 6 h.", "1 kill and 1 stall in the last hour, newest first", "peak 1.2 GiB in 7 days". A verdict judged from the range ends "judging by the last 24 h"; what is now is said as now ("More than half of its memory is in use."). Every range reads in a sentence (`ranges.theLast`: "the last 15 min", "the last hour", "the last 6 h", "the last 24 h", "the last 7 days", "the last 30 days"), and in a column's few words as the picker labels it (`ranges.inRange`: "in 6 h"). A VM is never said to need less than it has on less than a day: under 24 h the memory verdict says "too short a time to tell whether it could do with less" where it otherwise would, and over a longer range that holds less than a day of samples it says "less than a day of history so far".
+- **Counts up to twelve are spelled at the start of a sentence** ("Five are running"), digits elsewhere. Names are never abbreviated; a long one is cut with an ellipsis and whole in its tooltip.
+- **Tooltips are the app's own, not the browser's.** Any element's `title` is shown by one tooltip (`Tooltip.svelte`, timing in `tips.ts`) after the pointer rests 200 ms — the browser's takes a second or more — then at once from one thing to the next while one is showing. The `title` moves to `aria-description` so screen readers keep it. Something that reads out what's under the pointer itself (the share chart) feeds the same tooltip.
+- **"Stalled" is a VM that has stopped answering, and only that.** Pressure (Linux's PSI) is said as work waiting: "84 % · waiting 0.4 %", "waiting on memory now", "work waited on CPU up to 39 % of the time"; its tooltip names PSI for anyone who knows it by that name.
+- **No all-caps labels.** A label is either a serif head over a column ("Memory", "CPU") or a small grey line under a figure saying what it is ("peak", "cores, 95th percentile").
+- Units stay on the figure (`38.9 GiB of 45.8 GiB`), in the binary units the rest of the app uses. The one exception is the menu bar popover's Disk tab, in powers of 1000 (`994.7 GB`), so it says the same as Finder does of the same disk (`format.decimalBytes`).
 
 ## Type
 
@@ -68,17 +27,11 @@ The pictures in this guide and the README are drawn from invented data by the UI
 | what is said | Newsreader (variable, optical sizes), `--serif` | headlines, VM and container names, verdicts, section heads |
 | what is counted | Inter (variable), `--sans`, tabular figures (`.num`) | figures, small labels, buttons, tables |
 
-Both are bundled (`@fontsource-variable/*`): the app makes no network request for them. Sizes step
-down by role, not by page: the headline (`h1.headline`, up to 4rem), column and section heads
-(`h2.head`, about 2rem), names (1.7rem on the overview, 1.25rem in a list), a figure's number
-(1.55–1.75rem, semibold) with its "of …" in grey beside it, labels (0.8rem). In the resize form
-the three numbers are the largest thing in the sentence, because they are what is being changed.
+Both are bundled (`@fontsource-variable/*`): the app makes no network request for them. Sizes step down by role, not by page: the headline (`h1.headline`, up to 4rem), column and section heads (`h2.head`, about 2rem), names (1.7rem on the overview, 1.25rem in a list), a figure's number (1.55–1.75rem, semibold) with its "of …" in grey beside it, labels (0.8rem). In the resize form the three numbers are the largest thing in the sentence, because they are what is being changed.
 
 ## Colour
 
-Tokens are in `src/routes/+layout.svelte`, light and dark: the computer's, following it as it
-changes, unless Settings chooses one (`data-theme` on `<html>`, `lib/theme.svelte.ts`; the window's
-own title bar follows too). The charts read their colours once, so they're rebuilt on either change.
+Tokens are in `src/routes/+layout.svelte`, light and dark: the computer's, following it as it changes, unless Settings chooses one (`data-theme` on `<html>`, `lib/theme.svelte.ts`; the window's own title bar follows too). The charts read their colours once, so they're rebuilt on either change.
 
 | token | for |
 | --- | --- |
@@ -89,223 +42,33 @@ own title bar follows too). The charts read their colours once, so they're rebui
 | `--bar`, `--soft`, `--track` | a bar's fill, the paler stretch behind it (a peak, an allocation), its track |
 | `--wash` | the one tinted block on a page: the thing being acted on (resize, a container's detail) |
 
-Nothing is told apart by hue alone: an exited container is a hollow ring, not a different colour
-of dot; the paler stretch of a bar is lighter, not another hue. There are no boxes or shadows: a
-section starts at a hairline in `--fg`, rows are separated by hairlines in `--border`.
+Nothing is told apart by hue alone: an exited container is a hollow ring, not a different colour of dot; the paler stretch of a bar is lighter, not another hue. There are no boxes or shadows: a section starts at a hairline in `--fg`, rows are separated by hairlines in `--border`.
 
 ## Drawings
 
 Four, each a component, each with its scale said in words nearby.
 
-- **Bar** (`Bar.svelte`): a share of a scale, notched at quarters so "past the third notch" can be
-  read without the number. It can carry a paler bar behind it (a container's peak) and a tick (a
-  VM's peak, or the 95th percentile of its CPU). The scale is the thing's own allocation, except
-  where a note says otherwise: a container's memory is drawn against its own limit if it has one,
-  else its VM's memory, its CPU against its VM's cores (never against the other containers listed,
-  so a line reads the same in any list); a stopped VM's memory against the largest stopped VM, an image or volume against the
-  largest one listed (never warning: being large isn't past anything).
-- **Share** (`MemoryShare.svelte`): above a container's memory bar instead of a sketch, the range
-  of its VM: the VM's memory in use as a soft area, the container's own in front, under a
-  dashed line at the VM's memory. Each column is the most in its stretch of time, so the
-  container's highest point is the bar's tick; gaps (a stall, before it existed) stay gaps. Hover
-  reads one moment ("13:32 · this container 12.0 GiB (25 % of the VM) · VM 38.4 GiB of 48.0 GiB in
-  use"; past a day, the moment's day too). Its geometry is `almanac.shareChart`, redrawn only when
-  the history is.
-- **Sketch** (`Sketch.svelte`): the range above a bar, as about a hundred columns side by side
-  with no gaps between them, on a ground that rises to the highest value reached, on the bar's
-  scale. Where the columns stop short of the ground shows how far below its peak something usually
-  sits. On hover it becomes the distribution instead: one column per percent of the scale, again
-  touching, as tall as the time spent there, with a tick at the maximum. Each is drawn as one
-  stepped outline, so touching columns leave no faint seams between them. The data is the same hundred points either way (`almanac.sketch`),
-  fetched per entity when it appears or the range changes, then again as a new column comes due
-  but at most once a minute: every minute up to 1 h, every 3.6 min at 6 h, every 14.4 min at 24 h
-  (`history.svelte.ts`, `ranges.historyRefreshMs`).
-- **Capacity** (`Capacity.svelte`): one bar per resource for the whole computer, a block per VM.
-  Full width is what the host has (its cores, RAM, and the filesystem Lima's instances are on,
-  from the backend's `host`); a block is as wide as its VM's allocation and solid as far as the VM
-  uses it, the ones past three quarters in `--warn`. Disk counts what each image really takes on
-  the host, so a VM that isn't running still has a block: only as wide as its image, and quieter.
-  Hovering a block names its VM and its numbers in the line above. When VMs are allocated more
-  than the host has (CPUs usually are), the allocations are the scale.
+- **Bar** (`Bar.svelte`): a share of a scale, notched at quarters so "past the third notch" can be read without the number. It can carry a paler bar behind it (a container's peak) and a tick (a VM's peak, or the 95th percentile of its CPU). The scale is the thing's own allocation, except where a note says otherwise: a container's memory is drawn against its own limit if it has one, else its VM's memory, its CPU against its VM's cores (never against the other containers listed, so a line reads the same in any list); a stopped VM's memory against the largest stopped VM, an image or volume against the largest one listed (never warning: being large isn't past anything).
+- **Share** (`MemoryShare.svelte`): above a container's memory bar instead of a sketch, the range of its VM: the VM's memory in use as a soft area, the container's own in front, under a dashed line at the VM's memory. Each column is the most in its stretch of time, so the container's highest point is the bar's tick; gaps (a stall, before it existed) stay gaps. Hover reads one moment ("13:32 · this container 12.0 GiB (25 % of the VM) · VM 38.4 GiB of 48.0 GiB in use"; past a day, the moment's day too). Its geometry is `almanac.shareChart`, redrawn only when the history is.
+- **Sketch** (`Sketch.svelte`): the range above a bar, as about a hundred columns side by side with no gaps between them, on a ground that rises to the highest value reached, on the bar's scale. Where the columns stop short of the ground shows how far below its peak something usually sits. On hover it becomes the distribution instead: one column per percent of the scale, again touching, as tall as the time spent there, with a tick at the maximum. Each is drawn as one stepped outline, so touching columns leave no faint seams between them. The data is the same hundred points either way (`almanac.sketch`), fetched per entity when it appears or the range changes, then again as a new column comes due but at most once a minute: every minute up to 1 h, every 3.6 min at 6 h, every 14.4 min at 24 h (`history.svelte.ts`, `ranges.historyRefreshMs`).
+- **Capacity** (`Capacity.svelte`): one bar per resource for the whole computer, a block per VM. Full width is what the host has (its cores, RAM, and the filesystem Lima's instances are on, from the backend's `host`); a block is as wide as its VM's allocation and solid as far as the VM uses it, the ones past three quarters in `--warn`. Disk counts what each image really takes on the host, so a VM that isn't running still has a block: only as wide as its image, and quieter. Hovering a block names its VM and its numbers in the line above. When VMs are allocated more than the host has (CPUs usually are), the allocations are the scale.
 
-The long charts on a VM's page (`Chart.svelte`, uPlot) are the only drawings with axes; each sits
-under the sentence, figures and bar it explains, with the allocation as a dashed line.
+The long charts on a VM's page (`Chart.svelte`, uPlot) are the only drawings with axes; each sits under the sentence, figures and bar it explains, with the allocation as a dashed line.
 
 ## Pages
 
-- **Time range**: one for the whole app (`range.svelte.ts`), chosen in the masthead under the
-  section tabs ("over the last 15 min · 1 h · 6 h · 24 h · 7 days · 30 days", the chosen one
-  filled), on the pages with history — the VMs, a VM, Containers — and not on Images, Volumes or
-  Settings, which have none. Everything drawn or said over time follows it: a VM's charts, its
-  verdicts and its out-of-memory list and markers; every line's sketch, share chart and peak; a
-  container's detail; the overview's sketches and the kills its sentences count. So all of a page
-  answers for the same window, and its charts line up as one is hovered. A range up to 6 h moves
-  on with the clock, a measurement at a time (`liveTo`); a longer one is fetched once as it's
-  chosen. It opens on 24 h the first time, then on whatever was chosen last, kept in the webview's
-  storage as a list's order is. Arriving at a VM from its OOM or "stalled" badge widens the range,
-  if need be, to the shortest that holds the latest kill or stall: that is what was asked to be
-  seen, so the range stays so on every page until chosen again. What is now (a figure, a bar, the
-  overview's headline and capacity bars) stays now.
-- **VMs**: the headline; the three capacity bars, and under memory's, where compression makes a
-  difference, one muted sentence on what the running VMs hold of this computer's RAM as Activity
-  Monitor counts it, and what that is with their compressed memory at its compressed size
-  (`hostRamSentence`); a VM's own figures (its row's "RAM on your computer", its sizing chart) stay
-  Activity Monitor's, as a VM is sized for what it touches, not for what compression saves; then running VMs, each a row under the column
-  heads Memory, CPU, Disk, Containers (a figure, a sketch, a bar, a note), with one dot per
-  container; then the VMs that aren't running, with a bar for the memory each is set to. Both lists
-  go by name until a column head is chosen (see **Order**, below); the count head ("Five are
-  running") stands for the names, and the stopped VMs follow by what each is set to. Below 980px the
-  column heads go and each cell carries its own.
-- **Order**: every list under serif column heads (VMs, a VM's containers, Containers, Images,
-  Volumes) is ordered by clicking a head (`SortHead.svelte`, `lib/order.ts`). A head orders its
-  column the natural way first (names A to Z, amounts most first); chosen again, the other way.
-  There are no arrows: the chosen head's stretch of the rule under the heads is drawn 3px (a hover
-  raises the same mark in grey), and only a reversed order says which way, in small grey words at
-  the column's right end on the head's baseline ("least first", "Z to A"), broken into lines where
-  the column is tight (columns are at least wide enough for that). What has no value (not running, not measured) is
-  last either way. Where a list is grouped by VM, ordering by name orders the groups too; otherwise
-  the groups keep their own order (the most memory first, the fullest disk first). Each list opens
-  as it did before it could be ordered — VMs by name, containers by memory, images and volumes with
-  the unused first — and keeps the choice for next time. A live order changes as the numbers do, so
-  lines glide to their new places (`motion.ts`). Where the heads are hidden on a narrow window, the
-  order is chosen in words instead ("Listed by memory in use, most first", `OrderPicker.svelte`).
-  The page always shows its scrollbar (disabled when there's nothing to scroll), so going from a
-  short page to a long one doesn't shift everything sideways.
-- **Settings**: the headline says how often each running VM is measured; the choices (1, 2, 5,
-  10 s) and what a slower one costs and saves; then the theme: System, Light or Dark; then what is
-  in the menu bar (Memory, CPU and Disk, each drawn as a Trace, a Bar or None, and with its Figure
-  or not; an item with neither is left out; and whether each is named "mem", "cpu", "disk", small
-  under the figure, or on its side beside a drawing alone); then whether closing the window keeps
-  recording, in the menu bar. Each choice is saved as it's made.
-- **A new version** (`UpdateNotice.svelte`): when the backend's daily look at GitHub finds a newer
-  release, one muted line beside the masthead's status line, "Lima Desktop 0.3.0 is out ·
-  Download ×", Download in `--accent`. It isn't a sentence, so no full stop, and nothing about it
-  warns: a new version is news, not a problem. Download opens the release page in the browser;
-  nothing is installed. × puts that version away for good, and a later one shows again. It sits in
-  a row that is there anyway, so on a wide window the page doesn't move; on a narrow one it takes a
-  line of its own under the status line. The menu bar's popover says it too, on a line above its footer; put away in either window, it's put away in both. Settings ends with **New versions**, a checkbox ("Say when a new version is out")
-  and one sentence saying GitHub is asked once a day and sent nothing about the person. Off, nothing
-  is asked and nothing is shown.
-- **The menu bar's popover** (`routes/menubar`, a borderless window of its own that the backend
-  builds on the first click, at `?tab=mem|cpu|disk`, then hides when it loses the focus and shows
-  again under the item clicked, telling the page its tab with an event rather than loading it
-  again): only the page, none of the main window's chrome, and no card or shadow of its own; it
-  fills the window, which it asks the backend to fit to its height (`fit_popover`); it scrolls only
-  if it must, with no scrollbar, as one would flash up for the moment the page has grown and the
-  window not yet. On Linux, which tells of no clicks on a tray item, its menu opens the popover
-  ("Memory, CPU and Disk…"), at the top right of the screen. The window and
-  `app.html` paint the theme's background before the page does, so it never flashes white. Tabs
-  for Memory, CPU and Disk; the whole computer's use now as the big figure ("70 %", in `--warn`
-  when it warns, as the menu bar's item does, by the thresholds chosen in Settings, read again each
-  time the popover is shown) and beside it its own range picker (2 min to 24 h for memory and CPU,
-  opening on 1 h; 1 h to 30 days for the disk, opening on 7 days; each tab's kept in the webview's
-  storage), not the app's range, as it answers a different question; 2 min is the popover's alone,
-  to watch memory and CPU move second by second. Under both, what the figure is of, its parts in
-  the order they're stacked ("of this computer's 64.0 GiB in use: the VMs 35.0 GiB, wired 4.0 GiB,
-  everything else 5.8 GiB"). Then the range as a stacked area: a band per VM, the largest now at
-  the bottom, in shades of `--bar` (of `--warn` when the figure warns); on
-  memory, the computer's wired memory (the kernel's, the GPU's and drivers', never paged out or
-  compressed; no VM's process has any, so it's part of what the VMs leave and kept inside it) in
-  everything else's hatch, crossed; everything else hatched above; the computer's total is the
-  top. A gap is where the computer wasn't measured, or a VM wasn't though it ran (a reading or two late or lost; a longer while, it was stopped); the right edge is the newest bucket measured, as the VMs' newest readings may still be on their way. A stopped VM's disk image is saved once a
-  minute, and the backend's stack holds a disk's nearest reading through its gaps while the VM was there (from when it was first seen to 20 s after it was last), so a deleted VM's band ends and a new one's begins (not one deleted and made again under the same name, as `default` often is: it's one VM to the store, held across the time between); one with no history (from before it was saved) is drawn at its size now throughout. The legend is
-  the list: each VM's name (in `--warn` while it isn't answering), its figure now and, in grey, its
-  peak in the range. On memory, a VM's or an app's figure, and its band, is its share of the
-  memory in use, its compressed memory counted at the size the compressor keeps it in, so the parts
-  add up to the computer's; after it, small, `--muted` and in brackets where it differs, what
-  Activity Monitor says ("33.0 GiB (47.1)", its unit only where that differs), which counts
-  compressed memory at full size, as its tooltip says ("peak 16.6 GiB in 1 h"), or for a disk, which only grows between clean-ups,
-  what it grew ("grew 4.5 GB in 7 days"); then wired memory with a few words on what it is
-  ("kernel, GPU and drivers", more in its tooltip), everything else, and what's free. On memory and
-  CPU, not the disk, the legend breaks two rows down a level: the five containers using the most,
-  across every VM, each indented under the VM it runs in (a VM with none of the five has none; from
-  the snapshot, named as the Containers view names them; its tooltip says it's measured inside the
-  VM, so part of the VM's figure, not more on top of it), and the five apps using the most under
-  everything else, which they are part of (`top_apps.rs`: a process in an `.app` counts toward the
-  outermost bundle, so Chrome's helpers are one "Google Chrome"; anything else by its name; the
-  tooltip says how many processes); a container's tooltip names it in full, and one whose figure
-  would round to nothing ("0.0 cores") isn't listed. These rows are a name and a figure in the tab's format, smaller,
-  in `--muted` and not bold, with no rule between them and their row. A VM with containers listed
-  under it is busy and has that line to spare, so under its peak, in the first container's last
-  column, it says what the VM is allocated ("8.0 GiB allocated to VM", "4 cores allocated to VM"; its tooltip
-  names the VM, `menubar.allocatedAside`); a VM with none listed is usually idle, and stays one line.
-  It says "allocated", not "max": a VM's cost on the computer can pass it by the VMM's own share. Every row's name runs on
-  into the figures' column as far as its own figure. They have no band of their own, and pointing at one
-  lights its VM, or everything else. CPU needs two samples, so for the moment after the popover is
-  shown the apps are "measuring the busiest apps…", never figures that look real. Pointing at a
-  row or a band, a VM's, wired memory's or everything else's, brings that band forward in
-  `--accent` and lights its row. It polls at the measuring interval while it's shown and fetches
-  nothing while it's hidden; it fetches the stack as a tab or range is chosen, then, for a range up
-  to 6 h, again as each of its 120 columns comes due, but not more often than the computer is
-  measured (`menubar.stackRefreshMs`): every second at 2 min, every 7.5 s at 15 min; the busiest
-  apps at the measuring interval, and not at all on the disk. Its words and
-  geometry are `lib/menubar.ts`.
-- **A VM**: the headline verdict; four figures (Memory, CPU, Pressure, Disk), each a verdict
-  sentence, three numbers, a bar and its chart; the resize sentence; "Out of memory" when there
-  is anything to list: OOM kills, and stalls, where the VM stopped responding without the kernel
-  killing anything. A stall is put down to memory only when the last reading had memory past 90 %
-  or work waiting on it over 10 % of the time; otherwise its cause is said to be unknown. Stalls are
-  shaded on the Memory chart from start to end. The note over the list counts kills and stalls by
-  what ran out, the whole VM once for both. Below 640px its five columns would be wider than the
-  page, so each kill or stall wraps onto a few lines instead, its cause on lines of its own. A stall still going on is the headline ("ember isn't
-  answering."), is said under it, and is a "stalled" badge on the overview. Then its containers as
-  lines, by compose project as on Containers.
-- **Containers**: the headline and a dot per container; filters; then the column heads (the
-  overview's serif ones, `.column-heads`, as on a VM's page, Images and Volumes) and a group per VM ("atlas runs
-  twelve, all in atlas, and one has exited."), each container a line with memory and CPU drawn.
-  Within a VM, what is in no compose project comes first, under no heading (it is the VM's own);
-  then each project under a heading row (`ProjectHead.svelte`): its name, "twelve running, one
-  exited", and what its running containers use between them, drawn in the lines' own columns
-  against the VM's memory and cores. It describes the whole project whatever the filter: the
-  filter only decides which of its lines are listed under it. Otherwise a filtered list is what it
-  lists: a VM's heading counts its listed containers, and VMs and projects are ranked by them, so
-  under a search a project can rank below one whose heading shows less. Above its bars, the project over the range
-  (`compose_series`): its containers added up moment by moment, removed and recreated ones
-  included, so its least, average and peak are what they used together at one moment, at any range.
-  The collector writes that sum as the project's own series at each stats round, before minute
-  rollups would lose which container ran when; history from before the project had one is its
-  containers' added up instead (from the store's compose labels), where beyond 6 h containers taking
-  turns within a minute can look as if they ran at once. A compose container's line is drawn the same way across recreations: the containers
-  that have had its service and name, one after another, so `db`'s chart doesn't start again when
-  compose recreates it (its "since it started" is still the container's own). The column chosen orders the projects too, by what they add
-  up to (by memory for time up), and the lines within each.
-- **A container's line** (`ContainerLine.svelte`, on Containers and a VM's page) answers "who is
-  eating this VM?". Its memory is "242.2 MiB of VM" (or "of 1.0 GiB limit", which goes under the
-  figure for want of room), then "peak 30.3 GiB in 24 h", in the range chosen; the bar is now, pale
-  the peak since it started, the tick the peak in the range (`almanac.rowMemory`). That peak comes from the
-  history, not the cgroup's own `mem_peak`, which starts again with the container: one that
-  filled its VM and was restarted would otherwise show only its new, small peak. Until the history
-  arrives it is the peak since it started, without a range.
-- **A container's detail** answers "is this unusual for it?": above its charts, a sentence on its
-  own scale ("It uses less than a quarter of its peak in the last 24 h.", or "… of its 1.0 GiB
-  limit."), the figures ("242.2 MiB now · peak 30.3 GiB in the last 24 h, 300.5 MiB since it started
-  3 min ago") and a bar whose full width is its peak in the range, or its limit (ticked) if that
-  is higher (`almanac.selfMemory`).
-- **Images, Volumes**: the headline counts what no container uses ("Seven of 27 images aren't used
-  by any container."), with a dot per image or volume (a hollow ring for unused) and a sentence on
-  whose disk is past three quarters, how many unused images are dangling, and what removing the
-  unused would free. Then a group per VM, the fullest disk first: its sentence ("quill holds four
-  images; two aren't used."), its disk drawn against the three-quarters rule, and its clean-up
-  buttons; then each image or volume as a line (`ItemLine.svelte`), the unused first, with its size
-  drawn and who uses it. An image's size counts layers it shares with other images, so image sizes
-  are never added up: what removing images would free comes only from `system df`, which walks
-  every volume, so it runs once per VM as the app first sees it running, then on **Measure again**.
-  It gives what each image holds alone, and each volume's size and users, which until then are a
-  dash. What removing an image frees is drawn solid inside its size and said under it ("frees
-  404.4 MiB", "frees all of it", "frees nothing" for one of several tags, which only untags): what
-  it holds alone, and, as podman removes the build steps `podman images` hides along with the last
-  image built on them, what those steps added (`images.ts` `removal`, from libpod's parent links).
-  Its tooltip says what goes with it and names a few of the listed images that keep the rest. One
-  measurement serves both pages, and a VM's is taken again after
-  something is removed from it. Both lists are fetched from the start and kept, so neither page
-  opens blank. A line opens a detail under it, as a container's does: an image's layers (in Dockerfile order, the
-  base first; the config-only steps folded away; a layer opens what it added, what it deletes struck through), or a volume's files, a folder at a time, with the start of a file
-  (read-only, over Lima's ssh). Details unfold and fold back, without motion when the system asks
-  for less of it.
+- **Time range**: one for the whole app (`range.svelte.ts`), chosen in the masthead under the section tabs ("over the last 15 min · 1 h · 6 h · 24 h · 7 days · 30 days", the chosen one filled), on the pages with history — the VMs, a VM, Containers — and not on Images, Volumes or Settings, which have none. Everything drawn or said over time follows it: a VM's charts, its verdicts and its out-of-memory list and markers; every line's sketch, share chart and peak; a container's detail; the overview's sketches and the kills its sentences count. So all of a page answers for the same window, and its charts line up as one is hovered. A range up to 6 h moves on with the clock, a measurement at a time (`liveTo`); a longer one is fetched once as it's chosen. It opens on 24 h the first time, then on whatever was chosen last, kept in the webview's storage as a list's order is. Arriving at a VM from its OOM or "stalled" badge widens the range, if need be, to the shortest that holds the latest kill or stall: that is what was asked to be seen, so the range stays so on every page until chosen again. What is now (a figure, a bar, the overview's headline and capacity bars) stays now.
+- **VMs**: the headline; the three capacity bars, and under memory's, where compression makes a difference, one muted sentence on what the running VMs hold of this computer's RAM as Activity Monitor counts it, and what that is with their compressed memory at its compressed size (`hostRamSentence`); a VM's own figures (its row's "RAM on your computer", its sizing chart) stay Activity Monitor's, as a VM is sized for what it touches, not for what compression saves; then running VMs, each a row under the column heads Memory, CPU, Disk, Containers (a figure, a sketch, a bar, a note), with one dot per container; then the VMs that aren't running, with a bar for the memory each is set to. Both lists go by name until a column head is chosen (see **Order**, below); the count head ("Five are running") stands for the names, and the stopped VMs follow by what each is set to. Below 980px the column heads go and each cell carries its own.
+- **Order**: every list under serif column heads (VMs, a VM's containers, Containers, Images, Volumes) is ordered by clicking a head (`SortHead.svelte`, `lib/order.ts`). A head orders its column the natural way first (names A to Z, amounts most first); chosen again, the other way. There are no arrows: the chosen head's stretch of the rule under the heads is drawn 3px (a hover raises the same mark in grey), and only a reversed order says which way, in small grey words at the column's right end on the head's baseline ("least first", "Z to A"), broken into lines where the column is tight (columns are at least wide enough for that). What has no value (not running, not measured) is last either way. Where a list is grouped by VM, ordering by name orders the groups too; otherwise the groups keep their own order (the most memory first, the fullest disk first). Each list opens as it did before it could be ordered — VMs by name, containers by memory, images and volumes with the unused first — and keeps the choice for next time. A live order changes as the numbers do, so lines glide to their new places (`motion.ts`). Where the heads are hidden on a narrow window, the order is chosen in words instead ("Listed by memory in use, most first", `OrderPicker.svelte`). The page always shows its scrollbar (disabled when there's nothing to scroll), so going from a short page to a long one doesn't shift everything sideways.
+- **Settings**: the headline says how often each running VM is measured; the choices (1, 2, 5, 10 s) and what a slower one costs and saves; then the theme: System, Light or Dark; then what is in the menu bar (Memory, CPU and Disk, each drawn as a Trace, a Bar or None, and with its Figure or not; an item with neither is left out; and whether each is named "mem", "cpu", "disk", small under the figure, or on its side beside a drawing alone); then whether closing the window keeps recording, in the menu bar. Each choice is saved as it's made.
+- **A new version** (`UpdateNotice.svelte`): when the backend's daily look at GitHub finds a newer release, one muted line beside the masthead's status line, "Lima Desktop 0.3.0 is out · Download ×", Download in `--accent`. It isn't a sentence, so no full stop, and nothing about it warns: a new version is news, not a problem. Download opens the release page in the browser; nothing is installed. × puts that version away for good, and a later one shows again. It sits in a row that is there anyway, so on a wide window the page doesn't move; on a narrow one it takes a line of its own under the status line. The menu bar's popover says it too, on a line above its footer; put away in either window, it's put away in both. Settings ends with **New versions**, a checkbox ("Say when a new version is out") and one sentence saying GitHub is asked once a day and sent nothing about the person. Off, nothing is asked and nothing is shown.
+- **The menu bar's popover** (`routes/menubar`, a borderless window of its own that the backend builds on the first click, at `?tab=mem|cpu|disk`, then hides when it loses the focus and shows again under the item clicked, telling the page its tab with an event rather than loading it again): only the page, none of the main window's chrome, and no card or shadow of its own; it fills the window, which it asks the backend to fit to its height (`fit_popover`); it scrolls only if it must, with no scrollbar, as one would flash up for the moment the page has grown and the window not yet. On Linux, which tells of no clicks on a tray item, its menu opens the popover ("Memory, CPU and Disk…"), at the top right of the screen. The window and `app.html` paint the theme's background before the page does, so it never flashes white. Tabs for Memory, CPU and Disk; the whole computer's use now as the big figure ("70 %", in `--warn` when it warns, as the menu bar's item does, by the thresholds chosen in Settings, read again each time the popover is shown) and beside it its own range picker (2 min to 24 h for memory and CPU, opening on 1 h; 1 h to 30 days for the disk, opening on 7 days; each tab's kept in the webview's storage), not the app's range, as it answers a different question; 2 min is the popover's alone, to watch memory and CPU move second by second. Under both, what the figure is of, its parts in the order they're stacked ("of this computer's 64.0 GiB in use: the VMs 35.0 GiB, wired 4.0 GiB, everything else 5.8 GiB"). Then the range as a stacked area: a band per VM, the largest now at the bottom, in shades of `--bar` (of `--warn` when the figure warns); on memory, the computer's wired memory (the kernel's, the GPU's and drivers', never paged out or compressed; no VM's process has any, so it's part of what the VMs leave and kept inside it) in everything else's hatch, crossed; everything else hatched above; the computer's total is the top. A gap is where the computer wasn't measured, or a VM wasn't though it ran (a reading or two late or lost; a longer while, it was stopped); the right edge is the newest bucket measured, as the VMs' newest readings may still be on their way. A stopped VM's disk image is saved once a minute, and the backend's stack holds a disk's nearest reading through its gaps while the VM was there (from when it was first seen to 20 s after it was last), so a deleted VM's band ends and a new one's begins (not one deleted and made again under the same name, as `default` often is: it's one VM to the store, held across the time between); one with no history (from before it was saved) is drawn at its size now throughout. The legend is the list: each VM's name (in `--warn` while it isn't answering), its figure now and, in grey, its peak in the range. On memory, a VM's or an app's figure, and its band, is its share of the memory in use, its compressed memory counted at the size the compressor keeps it in, so the parts add up to the computer's; after it, small, `--muted` and in brackets where it differs, what Activity Monitor says ("33.0 GiB (47.1)", its unit only where that differs), which counts compressed memory at full size, as its tooltip says ("peak 16.6 GiB in 1 h"), or for a disk, which only grows between clean-ups, what it grew ("grew 4.5 GB in 7 days"); then wired memory with a few words on what it is ("kernel, GPU and drivers", more in its tooltip), everything else, and what's free. On memory and CPU, not the disk, the legend breaks two rows down a level: the five containers using the most, across every VM, each indented under the VM it runs in (a VM with none of the five has none; from the snapshot, named as the Containers view names them; its tooltip says it's measured inside the VM, so part of the VM's figure, not more on top of it), and the five apps using the most under everything else, which they are part of (`top_apps.rs`: a process in an `.app` counts toward the outermost bundle, so Chrome's helpers are one "Google Chrome"; anything else by its name; the tooltip says how many processes); a container's tooltip names it in full, and one whose figure would round to nothing ("0.0 cores") isn't listed. These rows are a name and a figure in the tab's format, smaller, in `--muted` and not bold, with no rule between them and their row. A VM with containers listed under it is busy and has that line to spare, so under its peak, in the first container's last column, it says what the VM is allocated ("8.0 GiB allocated to VM", "4 cores allocated to VM"; its tooltip names the VM, `menubar.allocatedAside`); a VM with none listed is usually idle, and stays one line. It says "allocated", not "max": a VM's cost on the computer can pass it by the VMM's own share. Every row's name runs on into the figures' column as far as its own figure. They have no band of their own, and pointing at one lights its VM, or everything else. CPU needs two samples, so for the moment after the popover is shown the apps are "measuring the busiest apps…", never figures that look real. Pointing at a row or a band, a VM's, wired memory's or everything else's, brings that band forward in `--accent` and lights its row. It polls at the measuring interval while it's shown and fetches nothing while it's hidden; it fetches the stack as a tab or range is chosen, then, for a range up to 6 h, again as each of its 120 columns comes due, but not more often than the computer is measured (`menubar.stackRefreshMs`): every second at 2 min, every 7.5 s at 15 min; the busiest apps at the measuring interval, and not at all on the disk. Its words and geometry are `lib/menubar.ts`.
+- **A VM**: the headline verdict; four figures (Memory, CPU, Pressure, Disk), each a verdict sentence, three numbers, a bar and its chart; the resize sentence; "Out of memory" when there is anything to list: OOM kills, and stalls, where the VM stopped responding without the kernel killing anything. A stall is put down to memory only when the last reading had memory past 90 % or work waiting on it over 10 % of the time; otherwise its cause is said to be unknown. Stalls are shaded on the Memory chart from start to end. The note over the list counts kills and stalls by what ran out, the whole VM once for both. Below 640px its five columns would be wider than the page, so each kill or stall wraps onto a few lines instead, its cause on lines of its own. A stall still going on is the headline ("ember isn't answering."), is said under it, and is a "stalled" badge on the overview. Then its containers as lines, by compose project as on Containers.
+- **Containers**: the headline and a dot per container; filters; then the column heads (the overview's serif ones, `.column-heads`, as on a VM's page, Images and Volumes) and a group per VM ("atlas runs twelve, all in atlas, and one has exited."), each container a line with memory and CPU drawn. Within a VM, what is in no compose project comes first, under no heading (it is the VM's own); then each project under a heading row (`ProjectHead.svelte`): its name, "twelve running, one exited", and what its running containers use between them, drawn in the lines' own columns against the VM's memory and cores. It describes the whole project whatever the filter: the filter only decides which of its lines are listed under it. Otherwise a filtered list is what it lists: a VM's heading counts its listed containers, and VMs and projects are ranked by them, so under a search a project can rank below one whose heading shows less. Above its bars, the project over the range (`compose_series`): its containers added up moment by moment, removed and recreated ones included, so its least, average and peak are what they used together at one moment, at any range. The collector writes that sum as the project's own series at each stats round, before minute rollups would lose which container ran when; history from before the project had one is its containers' added up instead (from the store's compose labels), where beyond 6 h containers taking turns within a minute can look as if they ran at once. A compose container's line is drawn the same way across recreations: the containers that have had its service and name, one after another, so `db`'s chart doesn't start again when compose recreates it (its "since it started" is still the container's own). The column chosen orders the projects too, by what they add up to (by memory for time up), and the lines within each.
+- **A container's line** (`ContainerLine.svelte`, on Containers and a VM's page) answers "who is eating this VM?". Its memory is "242.2 MiB of VM" (or "of 1.0 GiB limit", which goes under the figure for want of room), then "peak 30.3 GiB in 24 h", in the range chosen; the bar is now, pale the peak since it started, the tick the peak in the range (`almanac.rowMemory`). That peak comes from the history, not the cgroup's own `mem_peak`, which starts again with the container: one that filled its VM and was restarted would otherwise show only its new, small peak. Until the history arrives it is the peak since it started, without a range.
+- **A container's detail** answers "is this unusual for it?": above its charts, a sentence on its own scale ("It uses less than a quarter of its peak in the last 24 h.", or "… of its 1.0 GiB limit."), the figures ("242.2 MiB now · peak 30.3 GiB in the last 24 h, 300.5 MiB since it started 3 min ago") and a bar whose full width is its peak in the range, or its limit (ticked) if that is higher (`almanac.selfMemory`).
+- **Images, Volumes**: the headline counts what no container uses ("Seven of 27 images aren't used by any container."), with a dot per image or volume (a hollow ring for unused) and a sentence on whose disk is past three quarters, how many unused images are dangling, and what removing the unused would free. Then a group per VM, the fullest disk first: its sentence ("quill holds four images; two aren't used."), its disk drawn against the three-quarters rule, and its clean-up buttons; then each image or volume as a line (`ItemLine.svelte`), the unused first, with its size drawn and who uses it. An image's size counts layers it shares with other images, so image sizes are never added up: what removing images would free comes only from `system df`, which walks every volume, so it runs once per VM as the app first sees it running, then on **Measure again**. It gives what each image holds alone, and each volume's size and users, which until then are a dash. What removing an image frees is drawn solid inside its size and said under it ("frees 404.4 MiB", "frees all of it", "frees nothing" for one of several tags, which only untags): what it holds alone, and, as podman removes the build steps `podman images` hides along with the last image built on them, what those steps added (`images.ts` `removal`, from libpod's parent links). Its tooltip says what goes with it and names a few of the listed images that keep the rest. One measurement serves both pages, and a VM's is taken again after something is removed from it. Both lists are fetched from the start and kept, so neither page opens blank. A line opens a detail under it, as a container's does: an image's layers (in Dockerfile order, the base first; the config-only steps folded away; a layer opens what it added, what it deletes struck through), or a volume's files, a folder at a time, with the start of a file (read-only, over Lima's ssh). Details unfold and fold back, without motion when the system asks for less of it.
 
 ## Adding to it
 
-A new number needs three things before it goes on a page: the sentence it changes (and a test for
-that sentence), the scale it's drawn against, and what "past three quarters" would mean for it.
-If the last has no answer, it is a figure with a label, not a bar. A new state worth seeing goes
-into the fake fleet (`e2e-ui/fake-backend.js`) so the browser test and the README show it.
+A new number needs three things before it goes on a page: the sentence it changes (and a test for that sentence), the scale it's drawn against, and what "past three quarters" would mean for it. If the last has no answer, it is a figure with a label, not a bar. A new state worth seeing goes into the fake fleet (`e2e-ui/fake-backend.js`) so the browser test and the README show it.

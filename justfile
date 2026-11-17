@@ -119,10 +119,16 @@ readme-menubar:
 # Everything CI would run: type checks, all tests, clippy (the browser run is `just ui-e2e`)
 check:
     pnpm check
+    pnpm exec prettier --check .
     pnpm test
     node --test 'tools/*.test.mjs'
     cd src-tauri && cargo test
     cd src-tauri && cargo clippy --all-targets -- -D warnings
+
+# Format the Markdown: each paragraph and list item on one line, so an edit never rewraps the lines
+# around it (Prettier, Markdown only: .prettierrc.json, .prettierignore)
+format:
+    pnpm exec prettier --write .
 
 # The quick subset: the UI's and the tools' unit tests, and the backend's tests
 test:
