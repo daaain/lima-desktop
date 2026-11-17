@@ -12,7 +12,7 @@
 
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::Serialize;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 
 use crate::oom::{OomEvent, Source};
@@ -34,6 +34,9 @@ pub enum Kind {
     Container,
     /// The computer itself (`host_use.rs`): one entity.
     Host,
+    /// A compose project in a VM: its running containers added up at each stats round, as the
+    /// collector samples them (keyed by the project's name).
+    Project,
 }
 
 impl Kind {
@@ -42,12 +45,14 @@ impl Kind {
             Kind::Vm => "vm",
             Kind::Container => "container",
             Kind::Host => "host",
+            Kind::Project => "project",
         }
     }
     fn parse(s: &str) -> Kind {
         match s {
             "vm" => Kind::Vm,
             "host" => Kind::Host,
+            "project" => Kind::Project,
             _ => Kind::Container,
         }
     }
@@ -56,7 +61,7 @@ impl Kind {
     pub fn metrics(self) -> &'static [&'static str] {
         match self {
             Kind::Vm => VM_METRICS,
-            Kind::Container => CT_METRICS,
+            Kind::Container | Kind::Project => CT_METRICS,
             Kind::Host => HOST_METRICS,
         }
     }
@@ -283,7 +288,7 @@ pub struct Store {
 }
 
 /// A series answer shaped for a chart: one timestamp axis, per metric min/max/avg arrays.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Series {
     /// Seconds between the samples where they come steadily (the sparsest, if the interval
@@ -798,91 +803,327 @@ impl Store {
         let ncols = self.ncols(entity);
         let names = self.kinds.get(&entity).map(|k| k.metrics()).unwrap_or(&[]);
         let use_raw = to - from <= RAW_QUERY_SPAN;
-        let rows = if use_raw {
-            self.rows_between("raw", entity, from, to, MINUTE)?
-        } else {
-            self.rows_between("rollup", entity, from, to, HOUR)?
-        };
-        // A bucket is never narrower than the samples are apart (5 s or 10 s ones in a 15 min
-        // window), with a quarter to spare for late ones: else most buckets would be empty, and
-        // the chart's line nothing but breaks. Fewer buckets, then.
-        let spacing = steady_spacing(rows.iter().map(|r| r.0));
-        let width = width.unwrap_or_else(|| ((to - from) / points.max(1) as i64).max(spacing + spacing / 4)).max(1);
-        let points = ((to - from + width - 1) / width).max(1) as usize;
-        let sample_secs = if use_raw {
-            (spacing + 500) / 1000
-        } else {
-            MINUTE / 1000
-        };
-        let mut buckets: Vec<Option<Bucket>> = (0..points).map(|_| None).collect();
-        for (ts, vals) in &rows {
-            let b = (((ts - from) / width) as usize).min(points - 1);
-            let acc = buckets[b].get_or_insert_with(|| {
-                (
-                    vec![i64::MAX; ncols],
-                    vec![i64::MIN; ncols],
-                    vec![0; ncols],
-                    vec![0; ncols],
-                )
-            });
-            for c in 0..ncols {
-                let (lo, hi, avg, weight) = if use_raw {
-                    let v = vals.get(c).copied().unwrap_or(ABSENT);
-                    (v, v, v, 1)
-                } else {
-                    let n = vals.first().copied().unwrap_or(0);
-                    let at = |k: usize| vals.get(1 + 3 * c + k).copied().unwrap_or(ABSENT);
-                    (at(0), at(1), at(2), n)
-                };
-                if avg == ABSENT || weight <= 0 {
-                    continue;
-                }
-                acc.0[c] = acc.0[c].min(lo);
-                acc.1[c] = acc.1[c].max(hi);
-                acc.2[c] += avg as i128 * weight as i128;
-                acc.3[c] += weight as i128;
-            }
-        }
-        let mut series = Series {
-            sample_secs,
-            ts: Vec::new(),
-            metrics: HashMap::new(),
-        };
-        let mut bands: Vec<Band> = (0..ncols).map(|_| Band::default()).collect();
-        // Empty buckets stay in as nulls (from the first sample on), so a chart breaks its line
-        // over a gap (the app or the VM was down) instead of drawing through it.
-        let first = buckets
-            .iter()
-            .position(Option::is_some)
-            .unwrap_or(buckets.len());
-        let last = buckets
-            .iter()
-            .rposition(Option::is_some)
-            .map_or(0, |i| i + 1);
-        for (i, b) in buckets.iter().enumerate().take(last).skip(first) {
-            series.ts.push(from + i as i64 * width);
-            let Some((lo, hi, sum, n)) = b else {
-                for band in bands.iter_mut() {
-                    band.min.push(None);
-                    band.max.push(None);
-                    band.avg.push(None);
-                }
-                continue;
-            };
-            for c in 0..ncols {
-                let has = n[c] > 0;
-                bands[c].min.push(has.then_some(lo[c]));
-                bands[c].max.push(has.then_some(hi[c]));
-                bands[c].avg.push(has.then(|| (sum[c] / n[c]) as i64));
-            }
-        }
-        for (c, band) in bands.into_iter().enumerate() {
-            if let Some(name) = names.get(c) {
-                series.metrics.insert(name.to_string(), band);
-            }
-        }
-        Ok((series, width))
+        let rows = self.rows_for(entity, from, to, use_raw)?;
+        Ok(bucket(&rows, ncols, names, from, to, points, width, use_raw))
     }
+
+    /// An entity's rows in [from, to]: raw samples, else minute rollups (`[n, min, max, avg, …]`).
+    fn rows_for(
+        &mut self,
+        entity: i64,
+        from: i64,
+        to: i64,
+        use_raw: bool,
+    ) -> rusqlite::Result<Vec<(i64, Vec<i64>)>> {
+        if use_raw {
+            self.rows_between("raw", entity, from, to, MINUTE)
+        } else {
+            self.rows_between("rollup", entity, from, to, HOUR)
+        }
+    }
+
+    /// A compose project in `vm` over [from, to], on [`Store::series`]'s buckets; with `line` (a
+    /// service and a name), that line of it: the containers that have had them, one after another.
+    /// A project is read from its own series (`Kind::Project`: the collector adds its containers up
+    /// at each stats round), so a bucket's least, average and peak are what they used together at
+    /// one moment, at any range. Before that series began (a build that kept none), its lines are
+    /// added up instead ([`Store::summed_series`]).
+    pub fn compose_series(
+        &mut self,
+        vm: &str,
+        project: &str,
+        line: Option<(&str, &str)>,
+        from: i64,
+        to: i64,
+        points: usize,
+    ) -> rusqlite::Result<Series> {
+        let lines = self.compose_entities(vm, project, line, from, to)?;
+        let own = match line {
+            Some(_) => None,
+            None => self.project_entity(vm, project)?,
+        };
+        let Some((id, first_seen)) = own else {
+            return self.summed_series(&lines, from, to, points);
+        };
+        // Its own from its first whole minute: the one it began in, only part there, is its lines'.
+        let since = first_seen + (MINUTE - first_seen.rem_euclid(MINUTE)) % MINUTE;
+        let use_raw = to - from <= RAW_QUERY_SPAN;
+        let mut rows = if from < since {
+            self.summed_rows(&lines, from, to.min(since - 1), use_raw)?
+        } else {
+            Vec::new()
+        };
+        rows.extend(self.rows_for(id, from.max(since), to, use_raw)?);
+        Ok(bucket(&rows, CT_METRICS.len(), CT_METRICS, from, to, points, None, use_raw).0)
+    }
+
+    /// The id and first sample time of compose `project`'s own series in `vm`, if it has one.
+    fn project_entity(&self, vm: &str, project: &str) -> rusqlite::Result<Option<(i64, i64)>> {
+        self.db
+            .query_row(
+                "SELECT id, first_seen FROM entity WHERE kind='project' AND vm=?1 AND key=?2",
+                params![vm, project],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()
+    }
+
+    /// Compose containers as one series, on [`Store::series`]'s buckets: `lines` ([`Store::summed_rows`]).
+    fn summed_series(
+        &mut self,
+        lines: &[Vec<i64>],
+        from: i64,
+        to: i64,
+        points: usize,
+    ) -> rusqlite::Result<Series> {
+        self.write_dirty()?;
+        let Some(&first) = lines.iter().flatten().next() else {
+            return Ok(Series::default());
+        };
+        let ncols = self.ncols(first);
+        let names = self.kinds.get(&first).map(|k| k.metrics()).unwrap_or(&[]);
+        let use_raw = to - from <= RAW_QUERY_SPAN;
+        let rows = self.summed_rows(lines, from, to, use_raw)?;
+        Ok(bucket(&rows, ncols, names, from, to, points, None, use_raw).0)
+    }
+
+    /// `lines`, each the containers one line has been (one after another, never two at once),
+    /// added up over [from, to] moment by moment, each counted only where it has a sample, so a
+    /// moment's sum is what they used together. A VM's containers are sampled on the same ticks.
+    /// Beyond 6 h (`!use_raw`), minute rollups are added up instead (`add_minute`, `sum_minute`),
+    /// which can't tell lines there at once from lines taking turns within a minute: exact for one
+    /// line, an approximation for several (a project's history from before it had its own series).
+    fn summed_rows(
+        &mut self,
+        lines: &[Vec<i64>],
+        from: i64,
+        to: i64,
+        use_raw: bool,
+    ) -> rusqlite::Result<Rows> {
+        let Some(&first) = lines.iter().flatten().next() else {
+            return Ok(Vec::new());
+        };
+        let ncols = self.ncols(first);
+        Ok(if use_raw {
+            let mut at: BTreeMap<i64, Vec<i64>> = BTreeMap::new();
+            for &e in lines.iter().flatten() {
+                for (ts, vals) in self.rows_for(e, from, to, true)? {
+                    add_sample(at.entry(ts).or_insert_with(|| vec![ABSENT; ncols]), &vals);
+                }
+            }
+            at.into_iter().collect()
+        } else {
+            // Each minute, each line's part of it, column by column.
+            let mut at: BTreeMap<i64, Vec<Vec<Option<Part>>>> = BTreeMap::new();
+            for (l, line) in lines.iter().enumerate() {
+                for &e in line {
+                    for (t0, vals) in self.rows_for(e, from, to, false)? {
+                        let minute = at.entry(t0).or_insert_with(|| vec![vec![None; ncols]; lines.len()]);
+                        add_minute(&mut minute[l], &vals);
+                    }
+                }
+            }
+            at.into_iter().map(|(t0, parts)| (t0, sum_minute(&parts, ncols))).collect()
+        })
+    }
+
+    /// The containers of compose `project` in `vm` seen in [from, to], removed ones and those
+    /// recreated under a new id included (the store keeps their labels), as lines: each the
+    /// containers that have had one service and name, one after another. With `line` (a service
+    /// and a name), only that one.
+    pub fn compose_entities(
+        &mut self,
+        vm: &str,
+        project: &str,
+        line: Option<(&str, &str)>,
+        from: i64,
+        to: i64,
+    ) -> rusqlite::Result<Vec<Vec<i64>>> {
+        self.write_dirty()?;
+        let (service, name) = line.unzip();
+        let rows = {
+            let mut st = self.db.prepare_cached(
+                "SELECT id, coalesce(service, ''), name FROM entity
+                 WHERE kind='container' AND vm=?1 AND project=?2
+                   AND (?3 IS NULL OR service=?3) AND (?4 IS NULL OR name=?4)
+                   AND last_seen >= ?5 AND first_seen <= ?6
+                 ORDER BY first_seen",
+            )?;
+            st.query_map(params![vm, project, service, name, from, to], |r| {
+                Ok((r.get::<_, i64>(0)?, (r.get::<_, String>(1)?, r.get::<_, String>(2)?)))
+            })?
+            .collect::<Result<Vec<_>, _>>()?
+        };
+        let mut lines: Vec<((String, String), Vec<i64>)> = Vec::new();
+        for (id, key) in rows {
+            // Known as a container even when gone before this run, so its columns are named.
+            self.kinds.insert(id, Kind::Container);
+            match lines.iter_mut().find(|(k, _)| *k == key) {
+                Some((_, ids)) => ids.push(id),
+                None => lines.push((key, vec![id])),
+            }
+        }
+        Ok(lines.into_iter().map(|(_, ids)| ids).collect())
+    }
+}
+
+/// A raw sample's values added into `sum`, column by column where it has one.
+pub fn add_sample(sum: &mut [i64], vals: &[i64]) {
+    for (slot, &v) in sum.iter_mut().zip(vals) {
+        if v != ABSENT {
+            *slot = if *slot == ABSENT { v } else { *slot + v };
+        }
+    }
+}
+
+/// One line's part of a minute in one column: how many samples, their total, the least and the most.
+#[derive(Debug, Clone, Copy)]
+struct Part {
+    n: i64,
+    total: i128,
+    lo: i64,
+    hi: i64,
+}
+
+/// A minute rollup (`[n, min, max, avg, …]`) of one of a line's containers into the line's part
+/// of that minute. Its containers never run at once, so their samples add up.
+fn add_minute(parts: &mut [Option<Part>], vals: &[i64]) {
+    let n = vals.first().copied().unwrap_or(0);
+    if n <= 0 {
+        return;
+    }
+    for (c, slot) in parts.iter_mut().enumerate() {
+        let at = |k: usize| vals.get(1 + 3 * c + k).copied().unwrap_or(ABSENT);
+        let (lo, hi, avg) = (at(0), at(1), at(2));
+        if avg == ABSENT {
+            continue;
+        }
+        let p = slot.get_or_insert(Part { n: 0, total: 0, lo: i64::MAX, hi: i64::MIN });
+        p.n += n;
+        p.total += avg as i128 * n as i128;
+        p.lo = p.lo.min(lo);
+        p.hi = p.hi.max(hi);
+    }
+}
+
+/// Lines' parts of one minute as one rollup row. Lines run side by side, so the minute had as
+/// many ticks as the line with the most samples in it; one with fewer was there for part of it,
+/// adding nothing the rest of the time. So the average is all their samples' total over those
+/// ticks, the least adds up only the lines there throughout (one there for part of the minute may
+/// have been gone at its least moment), and the most adds up each line's (a bound: they may have
+/// peaked at different seconds).
+fn sum_minute(lines: &[Vec<Option<Part>>], ncols: usize) -> Vec<i64> {
+    let mut row = vec![ABSENT; 1 + 3 * ncols];
+    row[0] = 0;
+    for c in 0..ncols {
+        let parts: Vec<Part> = lines.iter().filter_map(|l| l.get(c).copied().flatten()).collect();
+        let Some(ticks) = parts.iter().map(|p| p.n).max() else {
+            continue;
+        };
+        let total: i128 = parts.iter().map(|p| p.total).sum();
+        row[0] = row[0].max(ticks);
+        row[1 + 3 * c] = parts.iter().filter(|p| p.n == ticks).map(|p| p.lo).sum();
+        row[2 + 3 * c] = parts.iter().map(|p| p.hi).sum();
+        row[3 + 3 * c] = (total / ticks as i128) as i64;
+    }
+    row
+}
+
+/// `rows` (raw samples, else minute rollups) in at most `points` buckets over [from, to], each
+/// `width` wide if given; a bucket keeps the min, max and average of what fell in it.
+#[allow(clippy::too_many_arguments)]
+fn bucket(
+    rows: &[(i64, Vec<i64>)],
+    ncols: usize,
+    names: &[&str],
+    from: i64,
+    to: i64,
+    points: usize,
+    width: Option<i64>,
+    use_raw: bool,
+) -> (Series, i64) {
+    // A bucket is never narrower than the samples are apart (5 s or 10 s ones in a 15 min
+    // window), with a quarter to spare for late ones: else most buckets would be empty, and
+    // the chart's line nothing but breaks. Fewer buckets, then.
+    let spacing = steady_spacing(rows.iter().map(|r| r.0));
+    let width = width.unwrap_or_else(|| ((to - from) / points.max(1) as i64).max(spacing + spacing / 4)).max(1);
+    let points = ((to - from + width - 1) / width).max(1) as usize;
+    let sample_secs = if use_raw {
+        (spacing + 500) / 1000
+    } else {
+        MINUTE / 1000
+    };
+    let mut buckets: Vec<Option<Bucket>> = (0..points).map(|_| None).collect();
+    for (ts, vals) in rows {
+        let b = (((ts - from) / width) as usize).min(points - 1);
+        let acc = buckets[b].get_or_insert_with(|| {
+            (
+                vec![i64::MAX; ncols],
+                vec![i64::MIN; ncols],
+                vec![0; ncols],
+                vec![0; ncols],
+            )
+        });
+        for c in 0..ncols {
+            let (lo, hi, avg, weight) = if use_raw {
+                let v = vals.get(c).copied().unwrap_or(ABSENT);
+                (v, v, v, 1)
+            } else {
+                let n = vals.first().copied().unwrap_or(0);
+                let at = |k: usize| vals.get(1 + 3 * c + k).copied().unwrap_or(ABSENT);
+                (at(0), at(1), at(2), n)
+            };
+            if avg == ABSENT || weight <= 0 {
+                continue;
+            }
+            acc.0[c] = acc.0[c].min(lo);
+            acc.1[c] = acc.1[c].max(hi);
+            acc.2[c] += avg as i128 * weight as i128;
+            acc.3[c] += weight as i128;
+        }
+    }
+    let mut series = Series {
+        sample_secs,
+        ts: Vec::new(),
+        metrics: HashMap::new(),
+    };
+    let mut bands: Vec<Band> = (0..ncols).map(|_| Band::default()).collect();
+    // Empty buckets stay in as nulls (from the first sample on), so a chart breaks its line
+    // over a gap (the app or the VM was down) instead of drawing through it.
+    let first = buckets
+        .iter()
+        .position(Option::is_some)
+        .unwrap_or(buckets.len());
+    let last = buckets
+        .iter()
+        .rposition(Option::is_some)
+        .map_or(0, |i| i + 1);
+    for (i, b) in buckets.iter().enumerate().take(last).skip(first) {
+        series.ts.push(from + i as i64 * width);
+        let Some((lo, hi, sum, n)) = b else {
+            for band in bands.iter_mut() {
+                band.min.push(None);
+                band.max.push(None);
+                band.avg.push(None);
+            }
+            continue;
+        };
+        for c in 0..ncols {
+            let has = n[c] > 0;
+            bands[c].min.push(has.then_some(lo[c]));
+            bands[c].max.push(has.then_some(hi[c]));
+            bands[c].avg.push(has.then(|| (sum[c] / n[c]) as i64));
+        }
+    }
+    for (c, band) in bands.into_iter().enumerate() {
+        if let Some(name) = names.get(c) {
+            series.metrics.insert(name.to_string(), band);
+        }
+    }
+    (series, width)
+}
+
+impl Store {
 
     /// Max / average / p95 of every metric of `entity` over [from, to] — the right-sizing numbers.
     /// p95 is computed from raw samples when the window still has them (≤ raw retention).
@@ -1163,6 +1404,292 @@ mod tests {
         let mut v = vec![0; VM_METRICS.len()];
         v[1] = mem;
         v
+    }
+
+    fn ct_row(mem: i64) -> Vec<i64> {
+        let mut v = vec![ABSENT; CT_METRICS.len()];
+        v[1] = mem;
+        v
+    }
+
+    /// A container of `project` in `vm`, as the collector makes one: its entity, then its labels.
+    fn ct(
+        s: &mut Store,
+        vm: &str,
+        id: &str,
+        name: &str,
+        project: &str,
+        service: &str,
+        now: i64,
+    ) -> i64 {
+        let e = s.entity(Kind::Container, vm, id, name, now).unwrap();
+        s.label_entity(e, Some(project), Some(service)).unwrap();
+        e
+    }
+
+    /// Two containers at 1 Hz from `start` for `secs`, at 10 each but for one 100 apiece: a's at
+    /// second `a_spike`, b's at `b_spike`, sampled on the same ticks as the collector does.
+    fn two_spikes(
+        s: &mut Store,
+        a: i64,
+        b: i64,
+        start: i64,
+        secs: i64,
+        a_spike: i64,
+        b_spike: i64,
+    ) {
+        for i in 0..secs {
+            let ts = start + i * 1000;
+            s.ingest(a, ts, ct_row(if i == a_spike { 100 } else { 10 }));
+            s.ingest(b, ts, ct_row(if i == b_spike { 100 } else { 10 }));
+        }
+        s.flush(start + secs * 1000).unwrap();
+    }
+
+    #[test]
+    fn summed_series_peaks_at_one_moment_not_per_bucket() {
+        let mut s = Store::in_memory().unwrap();
+        let start = 10 * HOUR;
+        let a = ct(&mut s, "acme", "a", "shop-web-1", "shop", "web", start);
+        let b = ct(&mut s, "acme", "b", "shop-db-1", "shop", "db", start);
+        two_spikes(&mut s, a, b, start, 120, 10, 50);
+        // One bucket over both spikes: from raw samples, the sum's own peak.
+        let raw = s.summed_series(&[vec![a], vec![b]], start, start + HOUR, 1).unwrap();
+        assert_eq!(raw.metrics["mem"].max, vec![Some(110)]);
+        assert_eq!(raw.metrics["mem"].min, vec![Some(20)]);
+
+        // Beyond 6 h, from minute rollups: spikes a minute apart don't add up either.
+        let mut s = Store::in_memory().unwrap();
+        let a = ct(&mut s, "acme", "a", "shop-web-1", "shop", "web", start);
+        let b = ct(&mut s, "acme", "b", "shop-db-1", "shop", "db", start);
+        two_spikes(&mut s, a, b, start, 120, 10, 70);
+        let day = s
+            .summed_series(&[vec![a], vec![b]], start - 12 * HOUR, start + 12 * HOUR, 1)
+            .unwrap();
+        assert_eq!(day.sample_secs, 60);
+        assert_eq!(day.metrics["mem"].max, vec![Some(110)]);
+    }
+
+    #[test]
+    fn summed_series_counts_each_member_where_it_has_samples() {
+        let mut s = Store::in_memory().unwrap();
+        let start = 10 * HOUR;
+        let old = ct(&mut s, "acme", "old", "shop-web-1", "shop", "web", start);
+        let new = ct(
+            &mut s,
+            "acme",
+            "new",
+            "shop-web-1",
+            "shop",
+            "web",
+            start + 60_000,
+        );
+        for i in 0..60 {
+            s.ingest(old, start + i * 1000, ct_row(30));
+            s.ingest(new, start + 60_000 + i * 1000, ct_row(50));
+        }
+        s.flush(start + 120_000).unwrap();
+        let got = s
+            .summed_series(&[vec![old, new]], start, start + 120_000, 2)
+            .unwrap();
+        assert_eq!(got.metrics["mem"].avg, vec![Some(30), Some(50)]);
+        assert!(
+            s.summed_series(&[], start, start + 120_000, 2)
+                .unwrap()
+                .ts
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn compose_entities_finds_a_project_or_one_line_across_recreations() {
+        let mut s = Store::in_memory().unwrap();
+        let start = 10 * HOUR;
+        let gone = ct(&mut s, "acme", "c0", "shop-web-1", "shop", "web", start);
+        let web = ct(
+            &mut s,
+            "acme",
+            "c1",
+            "shop-web-1",
+            "shop",
+            "web",
+            start + HOUR,
+        );
+        let web2 = ct(
+            &mut s,
+            "acme",
+            "c2",
+            "shop-web-2",
+            "shop",
+            "web",
+            start + HOUR,
+        );
+        let db = ct(
+            &mut s,
+            "acme",
+            "c3",
+            "shop-db-1",
+            "shop",
+            "db",
+            start + HOUR,
+        );
+        ct(
+            &mut s,
+            "acme",
+            "c4",
+            "blog-web-1",
+            "blog",
+            "web",
+            start + HOUR,
+        );
+        ct(
+            &mut s,
+            "other",
+            "c5",
+            "shop-web-1",
+            "shop",
+            "web",
+            start + HOUR,
+        );
+        let long_ago = ct(
+            &mut s,
+            "acme",
+            "c6",
+            "shop-web-1",
+            "shop",
+            "web",
+            start - 48 * HOUR,
+        );
+        s.flush(start + HOUR).unwrap();
+        // Lines, each its containers in order, the lines in any order.
+        let lines = |mut v: Vec<Vec<i64>>| {
+            v.iter_mut().for_each(|l| l.sort());
+            v.sort();
+            v
+        };
+        let range = (start - HOUR, start + 2 * HOUR);
+        let project = s.compose_entities("acme", "shop", None, range.0, range.1).unwrap();
+        assert_eq!(lines(project.clone()), lines(vec![vec![gone, web], vec![web2], vec![db]]));
+        assert!(!project.concat().contains(&long_ago));
+        let line = s.compose_entities("acme", "shop", Some(("web", "shop-web-1")), range.0, range.1).unwrap();
+        assert_eq!(lines(line), vec![vec![gone, web]]);
+    }
+
+    /// `mem` from `e` at 1 Hz over seconds `secs` of the minute starting at `t0`.
+    fn run(s: &mut Store, e: i64, t0: i64, secs: std::ops::Range<i64>, mem: i64) {
+        for i in secs {
+            s.ingest(e, t0 + i * 1000, ct_row(mem));
+        }
+    }
+
+    /// One minute's `mem` as a day's range gives it (from minute rollups), in one bucket.
+    fn minute(s: &mut Store, lines: &[Vec<i64>], t0: i64) -> (Option<i64>, Option<i64>, Option<i64>) {
+        s.flush(t0 + MINUTE).unwrap();
+        let day = s.summed_series(lines, t0 - 12 * HOUR, t0 + 12 * HOUR, 1).unwrap();
+        let m = &day.metrics["mem"];
+        (m.min[0], m.avg[0], m.max[0])
+    }
+
+    #[test]
+    fn summed_rollups_weigh_a_part_minute_by_its_readings() {
+        // a all minute at 100; b, another line, only its last second: 101 on average, not 200.
+        let mut s = Store::in_memory().unwrap();
+        let t0 = 10 * HOUR;
+        let a = ct(&mut s, "acme", "a", "shop-web-1", "shop", "web", t0);
+        let b = ct(&mut s, "acme", "b", "shop-db-1", "shop", "db", t0);
+        run(&mut s, a, t0, 0..60, 100);
+        run(&mut s, b, t0, 59..60, 100);
+        assert_eq!(minute(&mut s, &[vec![a], vec![b]], t0), (Some(100), Some(101), Some(200)));
+    }
+
+    #[test]
+    fn summed_rollups_join_a_line_recreated_within_a_minute() {
+        // The old container the first half, its replacement the second: one line at 100 throughout.
+        let mut s = Store::in_memory().unwrap();
+        let t0 = 10 * HOUR;
+        let old = ct(&mut s, "acme", "old", "shop-web-1", "shop", "web", t0);
+        let new = ct(&mut s, "acme", "new", "shop-web-1", "shop", "web", t0 + 30_000);
+        run(&mut s, old, t0, 0..30, 100);
+        run(&mut s, new, t0, 30..60, 100);
+        assert_eq!(minute(&mut s, &[vec![old, new]], t0), (Some(100), Some(100), Some(100)));
+    }
+
+    #[test]
+    fn summed_rollups_leave_a_part_minute_line_out_of_the_least() {
+        // b ran half the minute, so at the least moment it may not have been there at all.
+        let mut s = Store::in_memory().unwrap();
+        let t0 = 10 * HOUR;
+        let a = ct(&mut s, "acme", "a", "shop-web-1", "shop", "web", t0);
+        let b = ct(&mut s, "acme", "b", "shop-db-1", "shop", "db", t0);
+        run(&mut s, a, t0, 0..60, 50);
+        run(&mut s, b, t0, 0..30, 10);
+        assert_eq!(minute(&mut s, &[vec![a], vec![b]], t0), (Some(50), Some(55), Some(60)));
+    }
+
+    /// One stats round as the collector writes it: each container's sample, and on the same tick
+    /// their sum as `project`'s own.
+    fn round(s: &mut Store, project: &str, ts: i64, samples: &[(i64, i64)]) {
+        let mut sum = vec![ABSENT; CT_METRICS.len()];
+        for &(e, mem) in samples {
+            s.ingest(e, ts, ct_row(mem));
+            add_sample(&mut sum, &ct_row(mem));
+        }
+        let p = s.entity(Kind::Project, "acme", project, project, ts).unwrap();
+        s.ingest(p, ts, sum);
+    }
+
+    /// `mem` over [from, to] as `compose_series` gives it for the project, or one line of it.
+    fn compose_mem(
+        s: &mut Store,
+        line: Option<(&str, &str)>,
+        (from, to): (i64, i64),
+        points: usize,
+    ) -> Band {
+        s.flush(to).unwrap();
+        let mut got = s.compose_series("acme", "shop", line, from, to, points).unwrap();
+        got.metrics.remove("mem").unwrap()
+    }
+
+    #[test]
+    fn compose_series_reads_a_project_from_its_own_series_when_its_lines_take_turns() {
+        // migrate runs the first half of the minute and exits, then web starts: never above 100.
+        let mut s = Store::in_memory().unwrap();
+        let t0 = 10 * HOUR;
+        let migrate = ct(&mut s, "acme", "m", "shop-migrate-1", "shop", "migrate", t0);
+        let web = ct(&mut s, "acme", "w", "shop-web-1", "shop", "web", t0 + 30_000);
+        for i in 0..60 {
+            let who = if i < 30 { migrate } else { web };
+            round(&mut s, "shop", t0 + i * 1000, &[(who, 100)]);
+        }
+        let day = compose_mem(&mut s, None, (t0 - 12 * HOUR, t0 + 12 * HOUR), 1);
+        assert_eq!((day.min[0], day.avg[0], day.max[0]), (Some(100), Some(100), Some(100)));
+        let hour = compose_mem(&mut s, None, (t0, t0 + HOUR), 1);
+        assert_eq!((hour.min[0], hour.avg[0], hour.max[0]), (Some(100), Some(100), Some(100)));
+    }
+
+    #[test]
+    fn compose_series_adds_up_the_lines_from_before_the_project_had_a_series() {
+        // The first minute recorded by a build that kept no project series: its lines added up.
+        // From the second, the project's own, where lines adding up would say 200.
+        let mut s = Store::in_memory().unwrap();
+        let t0 = 10 * HOUR;
+        let a = ct(&mut s, "acme", "a", "shop-web-1", "shop", "web", t0);
+        let b = ct(&mut s, "acme", "b", "shop-db-1", "shop", "db", t0);
+        run(&mut s, a, t0, 0..60, 50);
+        run(&mut s, b, t0, 0..60, 10);
+        let t1 = t0 + MINUTE;
+        for i in 0..60 {
+            let who = if i < 30 { a } else { b };
+            round(&mut s, "shop", t1 + i * 1000, &[(who, 100)]);
+        }
+        // A day's range in minute-wide buckets.
+        let range = (t0, t0 + 7 * HOUR);
+        let project = compose_mem(&mut s, None, range, 420);
+        assert_eq!(project.avg[..2], [Some(60), Some(100)]);
+        assert_eq!(project.max[..2], [Some(60), Some(100)]);
+        // One line is still its containers, the project's series aside.
+        let web = compose_mem(&mut s, Some(("web", "shop-web-1")), range, 420);
+        assert_eq!(web.avg[..2], [Some(50), Some(100)]);
     }
 
     #[test]

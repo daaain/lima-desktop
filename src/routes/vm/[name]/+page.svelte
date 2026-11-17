@@ -2,7 +2,7 @@
   import { tick } from 'svelte';
   import { page } from '$app/state';
   import { live } from '$lib/live.svelte';
-  import { api, type ContainerLive, type OomEvent, type Series, type VmStall } from '$lib/api';
+  import { api, type OomEvent, type Series, type VmStall } from '$lib/api';
   import { bytes } from '$lib/format';
   import { containersSentence, vmHeadline } from '$lib/almanac';
   import { History } from '$lib/history.svelte';
@@ -15,10 +15,10 @@
   import Sizing from '$lib/Sizing.svelte';
   import ContainerLine from '$lib/ContainerLine.svelte';
   import ContainerDetail from '$lib/ContainerDetail.svelte';
+  import ProjectHead from '$lib/ProjectHead.svelte';
   import OrderPicker from '$lib/OrderPicker.svelte';
   import SortHead from '$lib/SortHead.svelte';
-  import { BY_MEMORY, CONTAINER_COLUMNS, CONTAINER_ORDER, CONTAINER_SORTS, type ContainerSort } from '$lib/containers';
-  import { byText, sortBy } from '$lib/order';
+  import { BY_MEMORY, byProject, CONTAINER_COLUMNS, CONTAINER_SORTS, lineHistory, type ContainerSort } from '$lib/containers';
   import { Ordering } from '$lib/ordering.svelte';
   import { glide, unfold } from '$lib/motion';
 
@@ -41,7 +41,12 @@
 
   const history = new History();
   // Each running container's range, and the VM's: a line draws its memory as its part of the VM's.
-  history.follow(() => [vm?.entity, ...(vm?.containers ?? []).filter((c) => c.state === 'running').map((c) => c.entity)]);
+  // The VM's, each running container's line's (containers.lineHistory) and each compose project's.
+  history.follow(() => {
+    const cs = vm?.containers ?? [];
+    const projects = [...new Set(cs.map((c) => c.composeProject).filter((p) => p != null))];
+    return [vm?.entity, ...cs.filter((c) => c.state === 'running').map((c) => lineHistory(name, c)), ...projects.map((project) => ({ vm: name, project }))];
+  });
 
   // Derived on its own: `vm` is a new object at every snapshot, and the series would otherwise be
   // fetched again every second whatever the range.
@@ -154,21 +159,9 @@
   }
 
   const ordering = new Ordering('vm-containers', CONTAINER_SORTS, BY_MEMORY);
-  type Group = { project: string | null; containers: ContainerLive[] };
-  const groups: Group[] = $derived.by(() => {
-    const map = new Map<string | null, ContainerLive[]>();
-    for (const c of vm?.containers ?? []) {
-      const k = c.composeProject ?? null;
-      map.set(k, [...(map.get(k) ?? []), c]);
-    }
-    // Projects A to Z (Z to A when the names are reversed), those in none last; the containers in
-    // each by the column chosen, the largest first by default.
-    const o = ordering.current;
-    const dir = o.by === 'name' && o.reversed ? -1 : 1;
-    return [...map.entries()]
-      .sort(([a], [b]) => (a === null ? 1 : b === null ? -1 : dir * byText(a, b)))
-      .map(([project, containers]) => ({ project, containers: sortBy(containers, CONTAINER_ORDER, o) }));
-  });
+  // Those in no compose project first, under no heading; then each project, ordered as its
+  // containers are, by the column chosen (the most memory first by default).
+  const groups = $derived(byProject(vm?.containers ?? [], (c) => c, ordering.current));
   const heads: { key: ContainerSort; text: string; span?: number }[] = [
     { key: 'name', text: 'Name' }, { key: 'memory', text: 'Memory', span: 2 }, { key: 'cpu', text: 'CPU', span: 2 }, { key: 'up', text: 'Up' },
   ];
@@ -313,10 +306,12 @@
           <span></span>
         </div>
         {#each groups as g (g.project)}
-          {#if groups.length > 1 || g.project}<h3 class="group serif">{g.project ?? 'Not in a compose project'}</h3>{/if}
-          {#each g.containers as c (c.id)}
+          {#if g.project}
+            <ProjectHead project={g.project} containers={g.rows} history={history.get({ vm: name, project: g.project })} vmHistory={history.get(vm.entity)} vmMemory={i.memory} vmCpus={i.cpus} />
+          {/if}
+          {#each g.rows as c (c.id)}
             <div class="row" animate:glide>
-              <ContainerLine vm={name} {c} history={history.get(c.entity)} vmHistory={history.get(vm.entity)} vmCpus={i.cpus} vmMemory={i.memory} second="activity" now={live.snapshot?.updated}
+              <ContainerLine vm={name} {c} history={history.get(lineHistory(name, c))} vmHistory={history.get(vm.entity)} vmCpus={i.cpus} vmMemory={i.memory} second="activity" now={live.snapshot?.updated}
                 selected={open.includes(c.id)} onselect={() => toggle(c.id)} onerror={(e) => (actionError = e)} />
               {#if open.includes(c.id)}
                 <div id={`detail-${c.id}`} transition:unfold>
@@ -341,9 +336,7 @@
   .panel { display: grid; gap: 0.7rem; margin-top: 1.4rem; }
   .lines { --container-columns: minmax(13rem, 1.3fr) minmax(9rem, 1fr) 9.5rem minmax(7rem, 0.6fr) 5.5rem 6.5rem 10rem; border-bottom: 1px solid var(--border); }
   .column-heads { grid-template-columns: var(--container-columns); column-gap: 1.4rem; margin-top: 0.1rem; } /* 0.3rem less: SortHead's min-height */
-  .column-heads + .group, .column-heads + .row > :global(.line) { border-top: 0; }
-  .group { margin: 0; padding: 1rem 0 0.4rem; font-size: 1.05rem; font-weight: 500; color: var(--muted); border-top: 1px solid var(--border); }
-  .group + .row > :global(.line) { border-top: 0; }
+  .column-heads + :global(.project), .column-heads + .row > :global(.line) { border-top: 0; }
   .narrow-order { display: none; }
   .cname { font-weight: 500; }
   .cid { margin-left: 0.4rem; }

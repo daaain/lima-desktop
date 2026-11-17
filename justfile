@@ -6,6 +6,9 @@ set shell := ["bash", "-euo", "pipefail", "-c"]
 snapshots := ".snapshots"
 fixtures := "src-tauri/tests/fixtures"
 
+default:
+    @just --list
+
 # Record N seconds of this Mac's Lima VMs (read-only) into .snapshots/<UTC time>/, and point .snapshots/latest at it
 snapshot seconds="120":
     #!/usr/bin/env bash

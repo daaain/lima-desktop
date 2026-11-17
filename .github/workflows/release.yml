@@ -54,10 +54,13 @@ jobs:
   # One runner compiles both arches (aarch64, then x86_64) and bundles the universal app. Splitting
   # them across runners built faster, but each macOS job waits for a runner of its own, and those
   # waits (5 and 10 minutes in the dry run of 12 November 2026) cost more than the split saved.
+  # On Intel: both arches are cross-compiled either way, and the Apple silicon queue ran dry (v0.4.0,
+  # 16 November 2026: twice 15 minutes waiting "due to capacity constraints", then cancelled).
+  # macos-15-intel is GitHub's last Intel image, hosted until August 2027: back to macos-15 by then.
   macos:
     name: macOS (universal .dmg)
     needs: version
-    runs-on: macos-15
+    runs-on: macos-15-intel
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

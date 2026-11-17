@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  bandPeak, bandRise, containersHeadline, containersSentence, countWord, exitedSentence, fullWindow, holdsSentence, intervalPhrase, ownLimit, pressureSentence, rowMemory,
+  bandPeak, bandRise, containersHeadline, containersSentence, countWord, projectSaid, exitedSentence, fullWindow, holdsSentence, intervalPhrase, ownLimit, pressureSentence, rowMemory,
   runsSentence, fleetHeadline, hostBar, hostRamSentence, quarters, selfMemory, share, shareChart, shareTip, sketch, unusedHeadline, unusedLede, vmHeadline, vmSentence,
 } from './almanac';
 import type { Hint } from './rightsize';
@@ -206,6 +206,15 @@ describe('containersSentence', () => {
   });
 });
 
+describe('projectSaid', () => {
+  it("says how many of a compose project's containers run, and how many have exited", () => {
+    expect(projectSaid({ running: 1, exited: 0 })).toBe('one running');
+    expect(projectSaid({ running: 12, exited: 0 })).toBe('twelve running');
+    expect(projectSaid({ running: 3, exited: 1 })).toBe('three running, one exited');
+    expect(projectSaid({ running: 0, exited: 2 })).toBe('none running, two exited');
+  });
+});
+
 describe('the Containers view in sentences', () => {
   const c = (name: string, state = 'running', composeProject?: string) => ({ name, state, composeProject });
   it('says what a VM runs', () => {
@@ -365,6 +374,7 @@ describe("a container's memory", () => {
     it("says the moment: this container, its share of the VM, the VM's use", () => {
       expect(shareTip('14:10', 242.2 * MiB, 5.3 * GiB, VM)).toBe('14:10 · this container 242.2 MiB (0.5 % of the VM) · VM 5.3 GiB of 46.9 GiB in use');
       expect(shareTip('14:10', 30.3 * GiB, 40 * GiB, VM)).toBe('14:10 · this container 30.3 GiB (65 % of the VM) · VM 40.0 GiB of 46.9 GiB in use');
+      expect(shareTip('14:10', 1 * GiB, 40 * GiB, VM, 'this project')).toBe('14:10 · this project 1.0 GiB (2 % of the VM) · VM 40.0 GiB of 46.9 GiB in use');
     });
     it('says what was not measured', () => {
       expect(shareTip('14:10', null, 5.3 * GiB, VM)).toBe('14:10 · nothing from this container · VM 5.3 GiB of 46.9 GiB in use');

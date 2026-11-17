@@ -147,7 +147,7 @@ longer shows this leak, only ones the app makes itself.
 ## Releasing
 
 The **Release** workflow (`.github/workflows/release.yml`) runs on a `v*` tag. It builds the macOS
-app as a universal `.dmg` on `macos-15`, and the Linux `.deb` and AppImage on `ubuntu-24.04`. Linux
+app as a universal `.dmg` on `macos-15-intel` (the Apple silicon queue can wait for want of runners), and the Linux `.deb` and AppImage on `ubuntu-24.04`. Linux
 builds on 24.04, not CI's 26.04, because a binary needs the glibc it was built against or newer.
 The workflow then publishes a GitHub Release with the files attached and install notes above the
 generated changelog. It goes out as soon as the builds pass, with no draft to look over, so do a

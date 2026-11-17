@@ -1,5 +1,5 @@
 // The Containers view: every running VM's containers in one list, from the live snapshot.
-import type { ContainerLive, Snapshot } from './api';
+import type { ContainerLive, HistoryOf, Snapshot } from './api';
 import { podmanScope } from './perVm';
 import { matches } from './search';
 import { AMOUNTS, byText, most, named, NAMES, sortBy, type Column, type Compare, type Order } from './order';
@@ -64,26 +64,82 @@ export const CONTAINER_ORDER: Record<ContainerSort, Compare<ContainerLive>> = {
   up: most(up, lineName),
 };
 
-/** One VM's containers on the Containers view. */
+/** A container's line's history: across recreations (one after another, by name) when compose
+ *  made it, else its own. */
+export const lineHistory = (vm: string, c: ContainerLive): HistoryOf | undefined =>
+  c.composeProject && c.composeService
+    ? { vm, project: c.composeProject, line: { service: c.composeService, name: c.name } }
+    : c.entity;
+
+/** CONTAINER_ORDER for what holds a container. */
+const orderVia = <T>(container: (t: T) => ContainerLive) =>
+  Object.fromEntries(
+    CONTAINER_SORTS.map((k) => [k, (a: T, b: T, dir: number) => CONTAINER_ORDER[k](container(a), container(b), dir)]),
+  ) as Record<ContainerSort, Compare<T>>;
+
+/** A VM's containers of one compose project; `project` null for those in none. */
+export interface ProjectGroup<T> {
+  project: string | null;
+  rows: T[];
+}
+
+/** What a compose project's running containers use between them, and how many run. */
+export function projectTotals(cs: readonly ContainerLive[]) {
+  const up = cs.filter((c) => c.state === 'running');
+  const sum = (key: (c: ContainerLive) => number | undefined) => up.reduce((n, c) => n + (key(c) ?? 0), 0);
+  return { mem: sum(mem), cpu: sum(cpu), running: up.length, exited: cs.length - up.length };
+}
+
+// Projects follow the column where it adds up (memory, CPU) and go by name for name; for time up,
+// as by default, the one using the most memory first.
+type Totalled = { project: string; mem: number; cpu: number };
+const PROJECT_ORDER: Record<ContainerSort, Compare<Totalled>> = {
+  name: named((p) => p.project),
+  memory: most((p) => p.mem, (p) => p.project),
+  cpu: most((p) => p.cpu, (p) => p.project),
+  up: (a, b) => b.mem - a.mem || byText(a.project, b.project),
+};
+
+/**
+ * `items` (containers, or what holds one: `container` finds it) by compose project, in order `o`:
+ * those in none first, as they come under no heading of their own, then each project, and the
+ * containers in each by the same column.
+ */
+export function byProject<T>(items: readonly T[], container: (t: T) => ContainerLive, o: Order<ContainerSort>): ProjectGroup<T>[] {
+  const none: T[] = [];
+  const byName = new Map<string, T[]>();
+  for (const t of items) {
+    const k = container(t).composeProject;
+    if (!k) none.push(t);
+    else if (byName.has(k)) byName.get(k)!.push(t);
+    else byName.set(k, [t]);
+  }
+  const order = orderVia(container);
+  const rows = (ts: T[]) => sortBy(ts, order, o);
+  const projects: (Totalled & { ts: T[] })[] = [...byName.entries()].map(([project, ts]) => ({ project, ts, ...projectTotals(ts.map(container)) }));
+  return [
+    ...(none.length ? [{ project: null, rows: rows(none) }] : []),
+    ...sortBy(projects, PROJECT_ORDER, o).map((p) => ({ project: p.project, rows: rows(p.ts) })),
+  ];
+}
+
+/** One VM's containers on the Containers view (`rows`, as they come), and in order split by compose project. */
 export interface ContainerGroup {
   vm: string;
   rows: ContainerRow[];
+  projects: ProjectGroup<ContainerRow>[];
 }
-const total = (g: ContainerGroup, key: (c: ContainerLive) => number | undefined) => g.rows.reduce((n, r) => n + (key(r.c) ?? 0), 0);
+const total = (g: { rows: ContainerRow[] }, key: (c: ContainerLive) => number | undefined) => g.rows.reduce((n, r) => n + (key(r.c) ?? 0), 0);
 // Groups follow the column where it adds up (memory, CPU), and go by name for name; for time up,
 // as by default, the VM using the most memory first.
-const GROUP_ORDER: Record<ContainerSort, Compare<ContainerGroup>> = {
+const GROUP_ORDER: Record<ContainerSort, Compare<Omit<ContainerGroup, 'projects'>>> = {
   name: named((g) => g.vm),
   memory: most((g) => total(g, mem), (g) => g.vm),
   cpu: most((g) => total(g, cpu), (g) => g.vm),
   up: (a, b) => total(b, mem) - total(a, mem) || byText(a.vm, b.vm),
 };
 
-const ROW_ORDER = Object.fromEntries(
-  CONTAINER_SORTS.map((k) => [k, (a: ContainerRow, b: ContainerRow, dir: number) => CONTAINER_ORDER[k](a.c, b.c, dir)]),
-) as Record<ContainerSort, Compare<ContainerRow>>;
-
-/** `rows` as one group per VM, the groups and the lines in each in order `o`. */
+/** `rows` as one group per VM, each split by compose project; the groups and the lines in each in order `o`. */
 export function groupContainers(rows: ContainerRow[], o: Order<ContainerSort>): ContainerGroup[] {
   const byVm = new Map<string, ContainerRow[]>();
   for (const r of rows) {
@@ -91,6 +147,6 @@ export function groupContainers(rows: ContainerRow[], o: Order<ContainerSort>): 
     if (group) group.push(r);
     else byVm.set(r.vm, [r]);
   }
-  const groups = [...byVm.entries()].map(([vm, rs]) => ({ vm, rows: sortBy(rs, ROW_ORDER, o) }));
+  const groups = [...byVm.entries()].map(([vm, rs]) => ({ vm, rows: rs, projects: byProject(rs, (r) => r.c, o) }));
   return sortBy(groups, GROUP_ORDER, o);
 }

@@ -706,6 +706,53 @@ test('Containers, images and volumes are ordered by their column heads too', asy
   await images.close();
 });
 
+test("Each VM's containers are split by compose project, each project's heading adding up its lines", async () => {
+  const { page, errors, close } = await open('/containers');
+  await page.locator('.line').first().waitFor();
+  const atlas = page.locator('section', { has: page.locator('h2 a', { hasText: 'atlas' }) });
+  const project = atlas.getByRole('group', { name: 'Compose project atlas' });
+  assert.match(await project.innerText(), /^atlas\s+twelve running\b/);
+  // What it uses between them is drawn against the VM's memory and cores, as the lines are.
+  await project.getByRole('img', { name: /^Memory .+ now; peak .+ in the last 24 h; full width is the VM's 48\.0 GiB$/ }).waitFor();
+  assert.ok(await project.getByRole('img', { name: /^CPU .+ of the VM's 8 cores$/ }).isVisible());
+  // Above them, the project over the range: its containers' histories added up, with its peak.
+  await project.getByRole('img', { name: /this project's part of its VM's memory in use$/ }).waitFor();
+  assert.match(await project.innerText(), /peak .+ in (the last )?\d/);
+  // What is in no project comes first, under no heading: the VM's own.
+  const first = await atlas.locator('.line, .project').first().innerText();
+  assert.match(first, /^atlas-devbox/);
+  // Ordered by name, a project's lines go A to Z within it.
+  await page.locator('.column-heads').getByRole('button', { name: /VMs$/ }).click();
+  const names = await atlas.locator('.project ~ div .name').allInnerTexts();
+  assert.deepEqual(names, [...names].sort((a, b) => a.localeCompare(b)));
+  assert.deepEqual(errors, []);
+  await close();
+
+  // A VM's page heads its projects the same way, with no heading for what is in none.
+  const vmPage = await open('/vm/harbor');
+  await vmPage.page.locator('.line').first().waitFor();
+  assert.equal(await vmPage.page.getByRole('group', { name: 'Compose project harbor' }).count(), 1);
+  assert.equal(await vmPage.page.getByText('Not in a compose project').count(), 0);
+  assert.deepEqual(vmPage.errors, []);
+  await vmPage.close();
+});
+
+test("A project's heading describes the whole project whatever the filter leaves under it", async () => {
+  const { page, errors, close } = await open('/containers');
+  await page.locator('.line').first().waitFor();
+  const project = page.getByRole('group', { name: 'Compose project atlas' });
+  const memory = project.locator('.said strong').first();
+  const before = await memory.innerText();
+  // By image, the search leaves one of atlas's twelve: only it is listed under the heading...
+  await page.getByPlaceholder(/^Search/).fill('postgres');
+  await page.waitForFunction(() => document.querySelectorAll('.line').length === 1);
+  // ...but the heading still counts and adds up all twelve, as its chart and peak do.
+  assert.match(await project.innerText(), /^atlas\s+twelve running\b/);
+  assert.equal(await memory.innerText(), before);
+  assert.deepEqual(errors, []);
+  await close();
+});
+
 test('On a narrow window the order is chosen from a word, as the heads are gone', async () => {
   const { page, errors, close } = await open('/', { width: 420, height: 900 });
   await page.locator('article').first().waitFor();

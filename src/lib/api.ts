@@ -29,6 +29,16 @@ export interface Instance {
 
 export type Latest = Record<string, number>;
 
+/** Compose containers whose history is drawn as one (`api.composeSeries`). */
+export interface ComposeOf {
+  vm: string;
+  project: string;
+  line?: { service: string; name: string };
+}
+
+/** Whose history a chart draws: an entity's own, or compose containers added up. */
+export type HistoryOf = number | ComposeOf;
+
 export interface ContainerLive {
   id: string;
   name: string;
@@ -401,6 +411,10 @@ export const api = {
   volumesPrune: (vm: string) => invoke<Pruned>('volumes_prune', { vm }),
   series: (entity: number, from: number, to: number, points = 600) =>
     invoke<Series>('series', { entity, from, to, points }),
+  /** A compose project's containers in a VM added up moment by moment, those removed or recreated
+   *  in the range included; with `line`, one line's: the containers it has been, one after another. */
+  composeSeries: ({ vm, project, line }: ComposeOf, from: number, to: number, points = 600) =>
+    invoke<Series>('compose_series', { vm, project, service: line?.service ?? null, name: line?.name ?? null, from, to, points }),
   summary: (entity: number, from: number, to: number) =>
     invoke<Record<string, Summary>>('summary', { entity, from, to }),
   /** OOM kills in [from, to], newest first; every VM's when `vm` is null. */

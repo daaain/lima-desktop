@@ -320,9 +320,9 @@ export function shareChart(me: Band | undefined, vm: Band | undefined, vmMemory:
 const percent = (p: number) => `${p < 1 ? p.toFixed(1) : p.toFixed(0)} %`;
 
 /** One moment of the share chart, for its tooltip; `at` is the time, already said. */
-export function shareTip(at: string, me: number | null | undefined, vm: number | null | undefined, vmMemory: number): string {
+export function shareTip(at: string, me: number | null | undefined, vm: number | null | undefined, vmMemory: number, who = 'this container'): string {
   if (me == null && vm == null) return `${at} · no readings`;
-  const mine = me == null ? 'nothing from this container' : `this container ${bytes(me)} (${percent(share(me, vmMemory))} of the VM)`;
+  const mine = me == null ? `nothing from ${who}` : `${who} ${bytes(me)} (${percent(share(me, vmMemory))} of the VM)`;
   return vm == null ? `${at} · ${mine}` : `${at} · ${mine} · VM ${bytes(vm)} of ${bytes(vmMemory)} in use`;
 }
 
@@ -420,6 +420,12 @@ export function containersSentence(containers: { composeProject?: string }[]): s
   if (projects.length === 1 && inProjects === n) return n === 1 ? `${count}, in ${projects[0]}.` : `${count}, all in ${projects[0]}.`;
   if (projects.length === 1) return `${count}, ${inProjects} of them in ${projects[0]}.`;
   return `${count}, in ${projects.length} compose projects.`;
+}
+
+/** Under a compose project's name: "three running, one exited". */
+export function projectSaid({ running, exited }: { running: number; exited: number }): string {
+  const up = running === 0 ? 'none running' : `${countWord(running).toLowerCase()} running`;
+  return exited === 0 ? up : `${up}, ${countWord(exited).toLowerCase()} exited`;
 }
 
 type Listed = { name: string; state: string; composeProject?: string; composeService?: string };

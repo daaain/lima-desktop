@@ -249,10 +249,26 @@ under the sentence, figures and bar it explains, with the allocation as a dashed
   what ran out, the whole VM once for both. Below 640px its five columns would be wider than the
   page, so each kill or stall wraps onto a few lines instead, its cause on lines of its own. A stall still going on is the headline ("ember isn't
   answering."), is said under it, and is a "stalled" badge on the overview. Then its containers as
-  lines.
+  lines, by compose project as on Containers.
 - **Containers**: the headline and a dot per container; filters; then the column heads (the
   overview's serif ones, `.column-heads`, as on a VM's page, Images and Volumes) and a group per VM ("atlas runs
   twelve, all in atlas, and one has exited."), each container a line with memory and CPU drawn.
+  Within a VM, what is in no compose project comes first, under no heading (it is the VM's own);
+  then each project under a heading row (`ProjectHead.svelte`): its name, "twelve running, one
+  exited", and what its running containers use between them, drawn in the lines' own columns
+  against the VM's memory and cores. It describes the whole project whatever the filter: the
+  filter only decides which of its lines are listed under it. Otherwise a filtered list is what it
+  lists: a VM's heading counts its listed containers, and VMs and projects are ranked by them, so
+  under a search a project can rank below one whose heading shows less. Above its bars, the project over the range
+  (`compose_series`): its containers added up moment by moment, removed and recreated ones
+  included, so its least, average and peak are what they used together at one moment, at any range.
+  The collector writes that sum as the project's own series at each stats round, before minute
+  rollups would lose which container ran when; history from before the project had one is its
+  containers' added up instead (from the store's compose labels), where beyond 6 h containers taking
+  turns within a minute can look as if they ran at once. A compose container's line is drawn the same way across recreations: the containers
+  that have had its service and name, one after another, so `db`'s chart doesn't start again when
+  compose recreates it (its "since it started" is still the container's own). The column chosen orders the projects too, by what they add
+  up to (by memory for time up), and the lines within each.
 - **A container's line** (`ContainerLine.svelte`, on Containers and a VM's page) answers "who is
   eating this VM?". Its memory is "242.2 MiB of VM" (or "of 1.0 GiB limit", which goes under the
   figure for want of room), then "peak 30.3 GiB in 24 h", in the range chosen; the bar is now, pale
