@@ -22,7 +22,8 @@ use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
 
-use crate::collector::{Collector, Snapshot};
+use crate::collector::{Collector, Snapshot, now_ms};
+use crate::store::Stack;
 use crate::settings::{Drawing, Item, MenuBar, Saved, Warn};
 
 /// The popover window's label, and its width in points.
@@ -122,6 +123,17 @@ pub fn share(used: Option<i64>, total: Option<i64>, vms: impl Iterator<Item = i6
         vms: ((vms as f64 / total as f64) as f32).clamp(0.0, whole),
         free: (total - used).max(0) as u64,
     })
+}
+
+/// The shares in measurements saved earlier, oldest first: each time the computer was measured, its
+/// use and the part of the VMs measured with it.
+pub fn saved_shares(stack: &Stack) -> Vec<Share> {
+    (0..stack.ts.len())
+        .filter_map(|j| {
+            let vms = stack.vms.iter().filter_map(|v| v.avg.get(j).copied().flatten());
+            share(stack.used.get(j).copied().flatten(), stack.total.get(j).copied().flatten(), vms)
+        })
+        .collect()
 }
 
 /// A VM's part of the memory in use: its share (`host_mem`, its compressed memory at the compressor's
@@ -603,9 +615,15 @@ pub fn keeps_running(app: &AppHandle) -> bool {
         && app.try_state::<State>().is_some_and(|s| s.available.load(Ordering::Relaxed))
 }
 
+/// How far back a trace is filled from the saved measurements when the app starts: a restart (a
+/// rebuild, an update) carries on from the last [`COLUMNS`] in this, a longer break starts empty.
+/// The columns are the last measurements, not fixed moments, so a short gap isn't drawn.
+const SAVED_SPAN: Duration = Duration::from_secs(5 * 60);
+
 /// Puts the chosen items in the menu bar and keeps them current, at the measuring interval.
 pub fn start(app: &AppHandle) {
     app.manage(State::default());
+    fill_from_saved(app);
     apply(app);
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
@@ -615,6 +633,27 @@ pub fn start(app: &AppHandle) {
             tick(&app);
         }
     });
+}
+
+/// Each history from the last [`COLUMNS`] measurements saved in the last [`SAVED_SPAN`].
+fn fill_from_saved(app: &AppHandle) {
+    let collector = app.state::<std::sync::Arc<Collector>>();
+    let to = now_ms();
+    let from = to - SAVED_SPAN.as_millis() as i64;
+    // A bucket per measurement, at most.
+    let points = (SAVED_SPAN.as_secs() / collector.interval_secs().max(1)) as usize + 1;
+    let mut store = collector.store();
+    let state = app.state::<State>();
+    let mut h = state.history.lock().expect("menu bar lock");
+    for res in RESOURCES {
+        match store.stack(res.id(), from, to, points) {
+            Ok(stack) => {
+                let saved = saved_shares(&stack);
+                h[res.index()] = saved[saved.len().saturating_sub(COLUMNS)..].iter().copied().collect();
+            }
+            Err(e) => log::warn!("can't read the saved {} for the menu bar: {e}", res.id()),
+        }
+    }
 }
 
 /// Adds and removes items as Settings says, then draws them (on another thread: see `draw`).
@@ -1126,6 +1165,7 @@ pub fn main_closed(app: &AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::store::StackVm;
 
     fn px(i: &Icon, x: u32, y: u32) -> [u8; 4] {
         let k = ((y * i.width + x) * 4) as usize;
@@ -1185,6 +1225,24 @@ mod tests {
     /// A share with nothing said about what's left of the computer.
     fn used(whole: f32, vms: f32) -> Share {
         Share { whole, vms, ..Share::default() }
+    }
+
+    #[test]
+    fn saved_measurements_become_shares_oldest_first_where_the_computer_was_measured() {
+        let vm = |avg: Vec<Option<i64>>| StackVm { name: "a".into(), avg, peak: None };
+        let stack = Stack {
+            ts: vec![1, 2, 3],
+            used: vec![Some(50), None, Some(80)],
+            total: vec![Some(100), None, Some(100)],
+            wired: None,
+            // One VM measured throughout, another only in the last (stopped before).
+            vms: vec![vm(vec![Some(20), Some(30), Some(10)]), vm(vec![None, None, Some(15)])],
+        };
+        let s = saved_shares(&stack);
+        assert_eq!(s.len(), 2);
+        assert_eq!((s[0].whole, s[0].vms, s[0].free), (0.5, 0.2, 50));
+        assert_eq!((s[1].whole, s[1].vms, s[1].free), (0.8, 0.25, 20));
+        assert!(saved_shares(&Stack::default()).is_empty());
     }
 
     #[test]
