@@ -30,8 +30,21 @@ pub struct Block {
     pub oom_kills: Option<u64>,
     /// (size, used) in kB: `/` then the container store.
     pub disks: Vec<(u64, u64)>,
-    /// container id → (memory.peak bytes, oom_kill count), where cgroup v2 has them.
-    pub cgroups: HashMap<String, (Option<u64>, Option<u64>)>,
+    /// container id → its cgroup's readings, where cgroup v2 has them.
+    pub cgroups: HashMap<String, Cgroup>,
+}
+
+/// One podman container's cgroup, from its `G` line; `None` where the probe printed `-`, or (for
+/// `own`) a probe from before it was added.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct Cgroup {
+    /// `memory.peak` in bytes: its high-water mark since the container started.
+    pub peak: Option<u64>,
+    /// `oom_kill` from `memory.events`.
+    pub oom_kills: Option<u64>,
+    /// `anon` + `shmem` from `memory.stat`, in bytes: what its processes hold themselves, which only
+    /// swap could take away. podman's figure also counts active file cache and reclaimable slab.
+    pub own: Option<u64>,
 }
 
 fn num(s: Option<&str>) -> Option<u64> {
@@ -69,9 +82,12 @@ pub fn parse_line(block: &mut Block, line: &str) -> bool {
         }
         Some("G") => {
             if let Some(id) = f.next() {
-                let peak = num(f.next());
-                let oom = num(f.next());
-                block.cgroups.insert(id.to_string(), (peak, oom));
+                let cgroup = Cgroup {
+                    peak: num(f.next()),
+                    oom_kills: num(f.next()),
+                    own: num(f.next()),
+                };
+                block.cgroups.insert(id.to_string(), cgroup);
             }
         }
         _ => {}
@@ -218,8 +234,8 @@ P cpu some total=5000
 O 0
 D 100000000 20000000
 D 100000000 20000000
-G 0123456789012345678901234567890123456789012345678901234567890123 52428800 0
-G abcdef 1 1
+G 0123456789012345678901234567890123456789012345678901234567890123 52428800 0 31457280
+G abcdef 1 1 -
 .";
 
     fn parse(text: &str) -> Block {
@@ -241,6 +257,34 @@ G abcdef 1 1
         assert_eq!(b.psi[&("cpu".into(), "some".into())], 5000);
         assert_eq!(b.disks.len(), 2);
         assert_eq!(b.cgroups.len(), 2);
+    }
+
+    #[test]
+    fn a_container_line_has_its_peak_kills_and_processes_own_memory() {
+        let b = parse(BLOCK_A);
+        let id = "0123456789012345678901234567890123456789012345678901234567890123";
+        assert_eq!(
+            b.cgroups[id],
+            Cgroup {
+                peak: Some(52_428_800),
+                oom_kills: Some(0),
+                own: Some(31_457_280)
+            }
+        );
+        assert_eq!(b.cgroups["abcdef"].own, None, "unreadable: -");
+    }
+
+    #[test]
+    fn a_container_line_from_an_older_probe_has_no_own_memory() {
+        let b = parse("G abcdef 4096 2\n.");
+        assert_eq!(
+            b.cgroups["abcdef"],
+            Cgroup {
+                peak: Some(4096),
+                oom_kills: Some(2),
+                own: None
+            }
+        );
     }
 
     #[test]

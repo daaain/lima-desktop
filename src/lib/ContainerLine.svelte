@@ -3,6 +3,8 @@
   // how long it has been up, and what can be done to it. Used by the Containers view and a VM's page.
   // Both bars are measured against what the container may use (its memory limit, else its VM's
   // memory; its VM's cores), never against the other lines, so a line reads the same in any list.
+  // The memory bar's strongest part is the processes' own memory, said in its tooltip: the figure beside
+  // it is podman's, and the line has no room for a second one.
   import type { ContainerLive, Series } from './api';
   import { band, rowMemory, share, sketch } from './almanac';
   import { bytes, cores, rate, uptime } from './format';
@@ -40,7 +42,7 @@
   {#if running}
     <div class="drawn">
       <MemoryShare me={band(history, 'mem')} vm={band(vmHistory, 'mem_used')} ts={history?.ts ?? vmHistory?.ts} {vmMemory} hot={memory.hot} />
-      <Bar pct={memory.pct} behind={memory.behind} tick={memory.tick} hot={memory.hot} label={memory.label} />
+      <Bar pct={memory.pct} behind={memory.behind} own={memory.own} tick={memory.tick} hot={memory.hot} label={memory.label} />
     </div>
     <div class="said">
       <strong class="of" class:hot={memory.hot}><span>{bytes(l.mem)}</span> <span class="label">{memory.of}</span></strong>

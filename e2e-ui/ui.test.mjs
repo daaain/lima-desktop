@@ -68,6 +68,13 @@ for (const dark of [false, true]) {
 
   test(`VM overview${suffix}`, async () => {
     const { page, errors, close } = await open('/', { dark });
+    // A restart nudged only where a VM holds far more than its guest needs: lantern, mostly idle in 16 GiB.
+    await page.locator('p.restart').first().waitFor();
+    assert.deepEqual(
+      await page.locator('p.restart').evaluateAll((els) => els.map((e) => e.closest('article').querySelector('a.name').textContent)),
+      ['lantern'],
+    );
+    assert.match(await page.locator('p.restart').first().textContent(), /^[\d.]+ GiB more than it needs: restart to free it$/);
     await page.getByRole('heading', { level: 1 }).waitFor();
     // ember has stopped answering, which outranks the two VMs past three quarters.
     assert.equal(await page.getByRole('heading', { level: 1 }).innerText(), "ember isn't answering.");
@@ -109,6 +116,11 @@ for (const dark of [false, true]) {
     // Two hours ago it also stalled, with memory nearly full and nothing killed: that, not the
     // container's own limit, is why it needs more memory.
     await page.getByRole('heading', { level: 1, name: 'harbor needs more memory and CPU, judging by the last 6 h.' }).waitFor();
+    // On vz, what it costs the computer, what its guest needs, and that a restart gives back most of the rest.
+    assert.match(
+      await page.locator('figcaption.note', { hasText: 'On vz' }).innerText(),
+      /^On vz, guest memory is only backed as it's touched, and isn't given back when the guest frees it: right now this VM costs your computer [\d.]+ GiB of RAM, and its guest needs [\d.]+ GiB\. Restarting the VM gives back most of the rest\.$/,
+    );
     assert.match(
       await page.locator('figure', { hasText: 'Memory' }).first().innerText(),
       /The VM ran out of memory and stalled once in the last 6 h\. 1 OOM kill was a container hitting its own memory limit\./,
@@ -205,7 +217,7 @@ for (const dark of [false, true]) {
       /^of this computer's 128\.0 GiB in use: the VMs \d+\.\d GiB, wired \d+\.\d GiB, everything else \d+\.\d GiB$/,
     );
     // A row per running VM, the largest first, each with its peak over the range it opens on.
-    assert.deepEqual(await page.locator('.legend .row[data-vm] .name').allInnerTexts(), ['atlas', 'harbor', 'quill', 'lantern', 'ember']);
+    assert.deepEqual(await page.locator('.legend .row[data-vm] .name').allInnerTexts(), ['atlas', 'harbor', 'lantern', 'quill', 'ember']);
     await page.waitForFunction(() => /peak \d+\.\d GiB in 1 h/.test(document.querySelector('.legend').innerText));
     assert.equal(await page.getByRole('group', { name: 'Over the last' }).getByRole('button', { name: '1 h' }).getAttribute('aria-pressed'), 'true');
     // ember has stopped answering.
@@ -218,7 +230,7 @@ for (const dark of [false, true]) {
     // The busiest containers under the VM each runs in, and the busiest apps under everything else.
     await page.locator('.legend .row[data-app]').first().waitFor();
     assert.deepEqual(await page.locator('.legend .row .name').allInnerTexts(), [
-      'atlas', 'frontend', 'harbor', 'harbor-devbox', 'app', 'quill', 'quill-devbox', 'lantern', 'lantern-devbox', 'ember',
+      'atlas', 'frontend', 'harbor', 'harbor-devbox', 'app', 'lantern', 'lantern-devbox', 'quill', 'quill-devbox', 'ember',
       'wired', 'everything else', 'Google Chrome', 'Visual Studio Code', 'Slack', 'WindowServer', 'Mail', 'free',
     ]);
     assert.match(await page.locator('.row[data-container="harbor-devbox"] .part').innerText(), /^harbor-devbox\s+2\.\d GiB$/);
@@ -226,10 +238,22 @@ for (const dark of [false, true]) {
     // nothing listed under it (ember) stays one line, and says nothing of it.
     assert.deepEqual(await page.locator('[data-allocated]').evaluateAll((els) => els.map((e) => [e.dataset.allocated, e.closest('.row').dataset.container, e.textContent])), [
       ['atlas', 'frontend', '48.0 GiB allocated to VM'], ['harbor', 'harbor-devbox', '8.0 GiB allocated to VM'],
-      ['quill', 'quill-devbox', '8.0 GiB allocated to VM'], ['lantern', 'lantern-devbox', '16.0 GiB allocated to VM'],
+      ['lantern', 'lantern-devbox', '16.0 GiB allocated to VM'], ['quill', 'quill-devbox', '8.0 GiB allocated to VM'],
     ]);
     assert.equal(await page.locator('[data-allocated="harbor"]').getAttribute('title'), 'harbor is allocated 8.0 GiB of memory');
-    assert.equal(await page.locator('.row[data-container="app"] .aside').innerText(), '');
+    // Under the allocation, what the guest needs: on the line a second container leaves (harbor's app),
+    // or on one of its own under a lone one (atlas's frontend, quill's devbox, and so on).
+    assert.deepEqual(await page.locator('[data-inside]').evaluateAll((els) => els.map((e) => [e.dataset.inside, e.closest('.row').dataset.container ?? null])), [
+      ['atlas', null], ['harbor', 'app'], ['lantern', null], ['quill', null],
+    ]);
+    assert.match(await page.locator('[data-inside="harbor"]').innerText(), /^[\d.]+ GiB needed inside$/);
+    assert.match(await page.locator('[data-inside="harbor"]').getAttribute('title'), /^harbor's processes and kernel need [\d.]+ GiB\. The rest of the [\d.]+ GiB it holds/);
+    // Both lines over every VM's figure and peak too, ember's (nothing listed) among them.
+    for (const name of ['harbor', 'ember']) {
+      for (const part of ['.fig', '.aside']) {
+        assert.match(await page.locator(`.row[data-vm="${name}"] ${part}`).getAttribute('title'), /^[\d.]+ GiB allocated to VM\n[\d.]+ [MG]iB needed inside$/);
+      }
+    }
     // It takes no room of its own: a container's line is as tall with it as without.
     const tall = (sel) => page.locator(sel).evaluate((el) => el.getBoundingClientRect().height);
     assert.equal(await tall('.row[data-container="harbor-devbox"]'), await tall('.row[data-container="app"]'));
@@ -251,6 +275,8 @@ for (const dark of [false, true]) {
     assert.match(await page.locator('.row[data-container="harbor-devbox"] .part').innerText(), /^harbor-devbox\s+\d\.\d cores$/);
     assert.equal(await page.locator('[data-allocated="harbor"]').innerText(), '4 cores allocated to VM');
     assert.equal(await page.locator('[data-allocated="ember"]').count(), 0);
+    assert.equal(await page.locator('[data-inside]').count(), 0);
+    assert.equal(await page.locator('.row[data-vm="ember"] .fig').getAttribute('title'), '2 cores allocated to VM');
     assert.equal(await page.locator('.row[data-container="harbor-devbox"]').getAttribute('title'), 'harbor-devbox\nMeasured inside harbor: part of its CPU above, not more on top of it');
     assert.equal(await page.locator('.row.sub[data-app]').count(), 5);
     await shoot(page, `menubar-cpu${suffix}`);
@@ -713,7 +739,9 @@ test("Each VM's containers are split by compose project, each project's heading 
   const project = atlas.getByRole('group', { name: 'Compose project atlas' });
   assert.match(await project.innerText(), /^atlas\s+twelve running\b/);
   // What it uses between them is drawn against the VM's memory and cores, as the lines are.
-  await project.getByRole('img', { name: /^Memory .+ now; peak .+ in the last 24 h; full width is the VM's 48\.0 GiB$/ }).waitFor();
+  await project.getByRole('img', { name: /^Memory .+ now, .+ of it the processes' own memory, the rest .+; peak .+ in the last 24 h; full width is the VM's 48\.0 GiB$/ }).waitFor();
+  // Its bar's strongest part adds up its lines' processes' own memory.
+  assert.equal(await project.locator('.bar .own').count(), 1);
   assert.ok(await project.getByRole('img', { name: /^CPU .+ of the VM's 8 cores$/ }).isVisible());
   // Above them, the project over the range: its containers' histories added up, with its peak.
   await project.getByRole('img', { name: /this project's part of its VM's memory in use$/ }).waitFor();
@@ -1082,7 +1110,17 @@ test("A container's memory is drawn against its VM or its own limit, its peak fr
   await page.waitForFunction(() => /in 24 h/.test(document.body.innerText));
   assert.match(await memory('warehouse').innerText(), /^\d+\.\d MiB of VM\npeak 1[78]\.\d GiB in 24 h$/);
   const bar = await line('warehouse').locator('.bar').first().getAttribute('aria-label');
-  assert.match(bar, /^Memory \d+\.\d MiB now; peak 1[78]\.\d GiB in the last 24 h, 300\.0 MiB since it started 3 min ago; full width is the VM's 48\.0 GiB$/);
+  assert.match(bar, /^Memory \d+\.\d MiB now, \d+\.\d MiB of it the processes' own memory, the rest file cache and kernel memory, most of which the VM can reclaim; peak 1[78]\.\d GiB in the last 24 h, 300\.0 MiB since it started 3 min ago; full width is the VM's 48\.0 GiB$/);
+  // The figure is podman's; the bar's strongest part, inside it, is the processes' own memory.
+  const [fill, own] = await Promise.all(['.fill', '.own'].map((s) => line('warehouse').locator(`.bar ${s}`).first().evaluate((el) => el.getBoundingClientRect().width)));
+  assert.ok(own > 0 && own < fill, `the processes' own ${own}px inside the figure's ${fill}px`);
+  // Where it ends inside the figure, a notch like the quarters' parts it from the rest: in dark mode the
+  // two are close in lightness.
+  const [ownBox, cut] = await Promise.all(['.own', '.notch.cut'].map((s) => line('warehouse').locator(`.bar ${s}`).first().boundingBox()));
+  assert.ok(Math.abs(cut.x + cut.width / 2 - (ownBox.x + ownBox.width)) < 1, `the notch at ${cut.x}px, the processes' own ending at ${ownBox.x + ownBox.width}px`);
+  // It moves with the part it ends, as the bar's widths do, rather than jumping ahead of it.
+  const moves = await line('warehouse').locator('.bar .notch.cut').first().evaluate((el) => [getComputedStyle(el).transitionProperty, getComputedStyle(el).transitionDuration]);
+  assert.deepEqual(moves, ['left', '0.4s']);
   // harbor's app has a limit of its own: its bar is that wide, and it's past three quarters of it.
   assert.match(await memory('app').innerText(), /^\d+\.\d MiB of 1\.0 GiB limit\npeak \d+\.\d MiB in 24 h$/);
   assert.match(await line('app').locator('.bar').first().getAttribute('aria-label'), /full width is its 1\.0 GiB limit$/);
@@ -1097,7 +1135,7 @@ test("A container's memory is drawn against its VM or its own limit, its peak fr
   await line('warehouse').click();
   const self = page.locator('section.detail .self');
   await self.waitFor();
-  assert.match(await self.innerText(), /^It uses less than a quarter of its peak in the last 24 h\.\n+\d+\.\d MiB now · peak 1[78]\.\d GiB in the last 24 h, 300\.0 MiB since it started 3 min ago$/);
+  assert.match(await self.innerText(), /^It uses less than a quarter of its peak in the last 24 h\.\n+\d+\.\d MiB now · peak 1[78]\.\d GiB in the last 24 h, 300\.0 MiB since it started 3 min ago\n+\d+\.\d MiB of the \d+\.\d MiB is the processes' own memory; the rest is file cache and kernel memory, most of which the VM can reclaim\.$/);
   assert.deepEqual(errors, []);
   await close();
 });
@@ -1155,7 +1193,7 @@ test('One time range for the whole app, chosen in the masthead and kept for next
   await ranges.getByRole('button', { name: '6 h' }).click();
   assert.deepEqual(await chosen(), ['6 h']);
   await page.waitForFunction(() => /peak [^\n]+ in 6 h/.test(document.body.innerText) && !/ in 24 h/.test(document.body.innerText));
-  assert.match(await page.locator('main > .note').last().innerText(), /the tick the peak in the last 6 h\./);
+  assert.match(await page.locator('main > .note').last().innerText(), /the tick is the peak in the last 6 h\./);
   // A VM's page follows it: its lines, charts and verdicts.
   await page.locator('header nav').getByRole('link', { name: 'VMs' }).click();
   await page.locator('article .name', { hasText: 'harbor' }).click();

@@ -19,7 +19,7 @@ use crate::journal::{self, JournalError};
 use crate::lima::{self, Instance};
 use crate::oom::{self, OomEvent};
 use crate::podman::{Container, Libpod, PodmanError, RawStat};
-use crate::probe::{self, Block};
+use crate::probe::{self, Block, Cgroup};
 use crate::stall::{self, Change, Watch};
 use crate::store::{ABSENT, CT_METRICS, HOST_METRICS, Kind, MINUTE, Store, VM_METRICS, add_sample};
 
@@ -176,8 +176,10 @@ struct PendingKill {
 
 struct VmState {
     live: VmLive,
-    /// container id → (memory.peak, oom_kill) from the probe's cgroup lines.
-    cgroups: HashMap<String, (Option<u64>, Option<u64>)>,
+    /// container id → its cgroup's readings, from the probe's `G` lines.
+    cgroups: HashMap<String, Cgroup>,
+    /// When the probe's last block came, with `cgroups`: past `cgroups_fresh` they're not used.
+    cgroups_at: Option<Instant>,
     oom_pending: Vec<PendingKill>,
     oom_wake: Arc<Notify>,
     stall: Watch,
@@ -353,6 +355,7 @@ impl Collector {
                     containers: Vec::new(),
                 },
                 cgroups: HashMap::new(),
+                cgroups_at: None,
                 oom_pending: Vec::new(),
                 oom_wake: Arc::new(Notify::new()),
                 stall: Watch::default(),
@@ -532,6 +535,7 @@ impl Collector {
                     v.live.latest = named(VM_METRICS, &row);
                     v.live.probe_error = None;
                     v.cgroups = cgroups;
+                    v.cgroups_at = Some(Instant::now());
                     queue_kills(v, ts, kills);
                     let reading = reading(&v.live.latest);
                     let change = v.stall.block(Instant::now(), ts, uptime, reading);
@@ -691,7 +695,8 @@ impl Collector {
             }
             // Each compose project's running containers added up on this tick: its own series keeps
             // what they used at one moment, which their minute rollups can't (Store::compose_series).
-            let mut sums: HashMap<String, Vec<i64>> = HashMap::new();
+            let mut rows: Vec<(String, Vec<i64>)> = Vec::new();
+            let fresh = cgroups_fresh(vm.cgroups_at, now, secs);
             for s in &stats {
                 let Some(c) = vm
                     .live
@@ -701,21 +706,19 @@ impl Collector {
                 else {
                     continue;
                 };
-                let row = container_row(prev.get(&s.id), now, s, vm.cgroups.get(&s.id));
+                let cgroup = vm.cgroups.get(&s.id).filter(|_| fresh);
+                let row = container_row(prev.get(&s.id), now, s, cgroup);
                 if let Some(id) = c.entity {
                     self.store().ingest(id, ts, row.clone());
                 }
-                if let Some(project) = &c.container.compose_project {
-                    let sum = sums
-                        .entry(project.clone())
-                        .or_insert_with(|| vec![ABSENT; CT_METRICS.len()]);
-                    add_sample(sum, &row);
-                }
                 c.latest = named(CT_METRICS, &row);
+                if let Some(project) = &c.container.compose_project {
+                    rows.push((project.clone(), row));
+                }
                 prev.insert(s.id.clone(), (now, s.clone()));
             }
             prev.retain(|id, _| running.contains(id.as_str()));
-            self.ingest_projects(&name, ts, sums);
+            self.ingest_projects(&name, ts, project_sums(rows));
         }
     }
 
@@ -1010,7 +1013,7 @@ pub fn container_row(
     prev: Option<&(Instant, RawStat)>,
     now: Instant,
     s: &RawStat,
-    cgroup: Option<&(Option<u64>, Option<u64>)>,
+    cgroup: Option<&Cgroup>,
 ) -> Vec<i64> {
     let rate = |cur: u64, old: Option<u64>| -> i64 {
         match (prev, old) {
@@ -1030,7 +1033,8 @@ pub fn container_row(
         ABSENT => ABSENT,
         ns_per_s => ns_per_s / 1_000_000, // ns of CPU per s → millicores
     };
-    let (peak, oom) = cgroup.copied().unwrap_or((None, None));
+    let cg = cgroup.copied().unwrap_or_default();
+    let reading = |v: Option<u64>| v.map_or(ABSENT, |v| v as i64);
     // MemLimit reads as the VM's whole memory when unlimited; keep it — "limit = VM" is a fact.
     vec![
         cpu_mc,
@@ -1040,18 +1044,94 @@ pub fn container_row(
         } else {
             ABSENT
         },
-        peak.map_or(ABSENT, |p| p as i64),
-        oom.map_or(ABSENT, |o| o as i64),
+        reading(cg.peak),
+        reading(cg.oom_kills),
         s.pids as i64,
         s.net_in.map_or(ABSENT, |cur| rate(cur, old.and_then(|o| o.net_in))),
         s.net_out.map_or(ABSENT, |cur| rate(cur, old.and_then(|o| o.net_out))),
         rate(s.block_in, old.map(|o| o.block_in)),
         rate(s.block_out, old.map(|o| o.block_out)),
+        reading(cg.own),
     ]
+}
+
+/// Whether the probe's cgroup readings, from its block at `at`, still stand at `now`: within three
+/// of its intervals (at least 5 s). A probe that has stopped, or stalled, would otherwise have its
+/// last readings stored again with every stats tick, as if they were new.
+fn cgroups_fresh(at: Option<Instant>, now: Instant, interval_secs: u64) -> bool {
+    let within = Duration::from_secs((3 * interval_secs).max(5));
+    at.is_some_and(|at| now.saturating_duration_since(at) <= within)
+}
+
+/// Each compose project's containers' rows added up, column by column. The processes' own memory
+/// only where every one of them has it: a container recreated a moment ago has none until the probe
+/// finds its cgroup (up to ~5 s), and part of a sum would read as the project's dropping. The live
+/// heading keeps to the same rule (`containers.ts`).
+fn project_sums<P: Into<String>>(
+    rows: impl IntoIterator<Item = (P, Vec<i64>)>,
+) -> HashMap<String, Vec<i64>> {
+    let own = CT_METRICS
+        .iter()
+        .position(|m| *m == "mem_own")
+        .expect("known metric");
+    let mut sums: HashMap<String, Vec<i64>> = HashMap::new();
+    let mut partial: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for (project, row) in rows {
+        let project = project.into();
+        if row[own] == ABSENT {
+            partial.insert(project.clone());
+        }
+        let sum = sums
+            .entry(project)
+            .or_insert_with(|| vec![ABSENT; CT_METRICS.len()]);
+        add_sample(sum, &row);
+    }
+    for project in partial {
+        sums.get_mut(&project).expect("summed")[own] = ABSENT;
+    }
+    sums
 }
 
 #[cfg(test)]
 mod tests {
+    use super::{ABSENT, CT_METRICS, cgroups_fresh, project_sums};
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn a_probe_s_cgroup_readings_go_stale_when_its_blocks_stop() {
+        let at = Instant::now();
+        let s = Duration::from_secs;
+        // Every second: three missed blocks.
+        assert!(cgroups_fresh(Some(at), at + s(4), 1));
+        assert!(!cgroups_fresh(Some(at), at + s(6), 1));
+        // Every 10 s: three intervals.
+        assert!(cgroups_fresh(Some(at), at + s(29), 10));
+        assert!(!cgroups_fresh(Some(at), at + s(31), 10));
+        // None read yet.
+        assert!(!cgroups_fresh(None, at, 1));
+    }
+
+    #[test]
+    fn a_project_s_processes_own_memory_is_summed_only_when_every_container_has_it() {
+        let col = |n: &str| CT_METRICS.iter().position(|m| *m == n).unwrap();
+        let row = |mem: i64, own: i64| {
+            let mut r = vec![ABSENT; CT_METRICS.len()];
+            r[col("mem")] = mem;
+            r[col("mem_own")] = own;
+            r
+        };
+        let sums = project_sums([
+            ("web", row(100, 40)),
+            ("web", row(200, 70)),
+            // Recreated a moment ago: the probe hasn't found its cgroup yet.
+            ("db", row(300, 90)),
+            ("db", row(50, ABSENT)),
+        ]);
+        assert_eq!((sums["web"][col("mem")], sums["web"][col("mem_own")]), (300, 110));
+        // A part of a sum would read as the project's own memory dropping.
+        assert_eq!((sums["db"][col("mem")], sums["db"][col("mem_own")]), (350, ABSENT));
+    }
+
     #[test]
     fn a_stopped_vm_s_disk_image_is_saved_once_for_each_minute_it_was_stopped_throughout() {
         let (m, t) = (60_000, 600_000);
@@ -1178,13 +1258,29 @@ mod tests {
             Some(&(t0, stat(0, 0))),
             t1,
             &stat(1_000_000_000, 2000),
-            Some(&(Some(4096), Some(1))),
+            Some(&Cgroup {
+                peak: Some(4096),
+                oom_kills: Some(1),
+                own: Some(2048),
+            }),
         );
-        assert_eq!(row[0], 500);
-        assert_eq!(row[6], 1000);
-        assert_eq!(row[3], 4096);
-        assert_eq!(row[4], 1);
+        let col = |name: &str| row[CT_METRICS.iter().position(|m| *m == name).unwrap()];
+        assert_eq!(col("cpu_mc"), 500);
+        assert_eq!(col("net_rx_bps"), 1000);
+        assert_eq!(col("mem_peak"), 4096);
+        assert_eq!(col("oom_kills"), 1);
+        assert_eq!(col("mem_own"), 2048);
         assert_eq!(row.len(), CT_METRICS.len());
+    }
+
+    #[test]
+    fn without_a_cgroup_reading_its_counters_are_absent() {
+        let row = container_row(None, Instant::now(), &stat(0, 0), None);
+        let col = |name: &str| row[CT_METRICS.iter().position(|m| *m == name).unwrap()];
+        assert_eq!(
+            (col("mem_peak"), col("oom_kills"), col("mem_own")),
+            (ABSENT, ABSENT, ABSENT)
+        );
     }
 
     #[test]

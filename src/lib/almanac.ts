@@ -219,6 +219,11 @@ export function bandRise(band: Band | undefined): number | undefined {
 // against itself. The cgroup's own peak (`mem_peak`) starts again when the container does: a
 // container that filled the VM and was restarted would show only its new, small peak, so the peak
 // that matters here comes from the history.
+//
+// The figure is podman's: the cgroup's memory less its inactive file cache. That still counts
+// active file cache and reclaimable kernel memory (a devbox's 6.7 GiB was 2.0 GiB of its processes'
+// own), so where the probe read it, the bar draws the processes' own memory (`mem_own`: anon and
+// shmem, what only swap could take away) as the strongest part of the figure, and the label says so.
 
 /** A container's own memory limit: an unlimited one reports its VM's memory, or near it, as its limit. */
 export const ownLimit = (memLimit: number | undefined | null, vmMemory: number): number | undefined =>
@@ -226,6 +231,14 @@ export const ownLimit = (memLimit: number | undefined | null, vmMemory: number):
 
 const since = (startedAt: number | null, now: number | undefined) =>
   startedAt == null ? 'since it started' : `since it started ${uptime(startedAt, now)} ago`;
+
+/** Of `mem`, its processes' own memory; never more than `mem`, which is read a moment apart from it. */
+const ownOf = (mem: number, own: number | undefined) => (own == null ? undefined : Math.min(own, mem));
+
+/** "1.2 GiB now", and what of it is the processes' own where that is known. */
+const nowSaid = (mem: number, own: number | undefined) =>
+  own == null ? `${bytes(mem)} now` : `${bytes(mem)} now, ${bytes(own)} of it the processes' own memory`;
+const REST = 'file cache and kernel memory, most of which the VM can reclaim';
 
 export interface RowMemory {
   /** Bytes at full width: its limit, else the VM's memory. */
@@ -237,6 +250,8 @@ export interface RowMemory {
   pct: number;
   behind: number;
   tick: number;
+  /** In percent of the scale, the processes' own part of now; undefined without a reading of it. */
+  own?: number;
   /** Past three quarters of its own limit. */
   hot: boolean;
   /** What follows the figure: "of VM", "of 1.0 GiB limit". */
@@ -252,6 +267,7 @@ export function rowMemory(
   o: { vmMemory: number; over: RangeKey; history?: Band; startedAt: number | null; now?: number },
 ): RowMemory {
   const mem = l.mem ?? 0;
+  const own = ownOf(mem, l.mem_own);
   const limit = ownLimit(l.mem_limit, o.vmMemory);
   const scale = limit ?? o.vmMemory;
   const seen = bandPeak(o.history);
@@ -267,11 +283,12 @@ export function rowMemory(
     pct: share(mem, scale),
     behind: share(l.mem_peak, scale),
     tick: share(peak, scale),
+    own: own == null ? undefined : share(own, scale),
     hot: limit != null && isHot(share(mem, limit)),
     of: limit ? `of ${bytes(limit)} limit` : 'of VM',
     // "since start" wouldn't fit the column; the label says it.
     peakSaid: seen != null ? `peak ${bytes(peak)} ${inRange(o.over)}` : `peak ${bytes(peak)}`,
-    label: `Memory ${bytes(mem)} now; ${peaks}; full width is ${whole}`,
+    label: `Memory ${nowSaid(mem, own)}${own == null ? '' : `, the rest ${REST}`}; ${peaks}; full width is ${whole}`,
   };
 }
 
@@ -333,6 +350,9 @@ export interface SelfMemory {
   pct: number;
   behind: number;
   tick?: number;
+  /** In percent of the scale, the processes' own part of now, and a sentence on it; undefined without a reading of it. */
+  own?: number;
+  ownSaid?: string;
   hot: boolean;
   label: string;
 }
@@ -346,6 +366,7 @@ export function selfMemory(
 ): SelfMemory | null {
   if (l.mem == null) return null;
   const mem = l.mem;
+  const own = ownOf(mem, l.mem_own);
   const last = theLast(o.over);
   const seen = bandPeak(o.range);
   const peak = seen != null ? Math.max(seen, mem) : undefined;
@@ -355,6 +376,8 @@ export function selfMemory(
   const sinceStart = l.mem_peak == null ? '' : `${bytes(l.mem_peak)} ${since(o.startedAt, o.now)}`;
   const peaks = peak != null ? `peak ${bytes(peak)} in ${last}${sinceStart ? `, ${sinceStart}` : ''}` : sinceStart && `peak ${sinceStart}`;
   const figures = [`${bytes(mem)} now`, peaks].filter(Boolean).join(' · ');
+  // The bar's label has the processes' own part on its figure, as a line's does.
+  const labelled = [nowSaid(mem, own), peaks].filter(Boolean).join(' · ');
   const sentence = byLimit
     ? `It uses ${quarters(pct).toLowerCase()} of its ${bytes(o.limit)} limit.`
     : peak == null
@@ -367,8 +390,10 @@ export function selfMemory(
     sentence, figures, pct,
     behind: share(l.mem_peak, scale),
     tick: o.limit != null ? share(o.limit, scale) : undefined,
+    own: own == null ? undefined : share(own, scale),
+    ownSaid: own == null ? undefined : `${bytes(own)} of the ${bytes(mem)} is the processes' own memory; the rest is ${REST}.`,
     hot: o.limit != null && isHot(share(mem, o.limit)),
-    label: `${figures}; full width is ${whole}`,
+    label: `${labelled}; full width is ${whole}`,
   };
 }
 
@@ -510,4 +535,43 @@ export function unusedLede(o: { hot: string[]; dangling?: number; freeable?: num
     parts.push(`Removing the unused ones would free ${o.atLeast ? 'at least ' : ''}${bytes(o.freeable)}.`);
   }
   return parts.join(' ');
+}
+
+/** On vz, the start of what's said under a VM's memory chart. */
+const VZ_BACKED = "On vz, guest memory is only backed as it's touched, and isn't given back when the guest frees it";
+
+/**
+ * Below this much more than its guest needs, what a VM costs the computer is mostly the hypervisor's
+ * own and Lima's processes (both in `host_rss`), which a restart doesn't give back.
+ */
+const RESTART_FLOOR = 1024 ** 3;
+
+/**
+ * Under a vz VM's memory chart: what it costs the computer (`hostRss`, its footprint and Lima's
+ * processes') and, where its guest needs less (`needed`, its total less what it says is available),
+ * what that is; and where it's 1 GiB or more less, that a restart gives most of the rest back. Nothing
+ * else does: Lima never inflates the balloon, and Apple's offers no free page reporting.
+ */
+export function vzMemoryNote(hostRss: number, needed: number | undefined): string {
+  const costs = `${VZ_BACKED}: right now this VM costs your computer ${bytes(hostRss)} of RAM`;
+  if (needed == null || needed >= hostRss) return `${costs}.`;
+  const restart = hostRss - needed >= RESTART_FLOOR ? ' Restarting the VM gives back most of the rest.' : '';
+  return `${costs}, and its guest needs ${bytes(needed)}.${restart}`;
+}
+
+/** Below these, what a VM holds beyond its guest's need is its cache and a moment's growth: not worth a restart. */
+const RESTART_FACTOR = 2;
+const RESTART_SPARE = 4 * 1024 ** 3;
+
+/**
+ * On the overview, under what a vz VM costs the computer: how much more it holds than its guest needs,
+ * and that a restart frees it ("40.0 GiB more than it needs: restart to free it"), only where it holds
+ * at least twice its need and 4 GiB more; '' otherwise, without either reading, or on another VM type,
+ * where why only a restart frees it (vz's balloon, never inflated) isn't known to hold.
+ */
+export function restartNote(vmType: string | undefined, hostRss: number | undefined, needed: number | undefined): string {
+  if (vmType !== 'vz' || hostRss == null || needed == null) return '';
+  const spare = hostRss - needed;
+  if (hostRss < RESTART_FACTOR * needed || spare < RESTART_SPARE) return '';
+  return `${bytes(spare)} more than it needs: restart to free it`;
 }

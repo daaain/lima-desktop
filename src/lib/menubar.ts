@@ -85,6 +85,12 @@ export interface VmPart {
   stalled: boolean;
   /** What it's allocated, in the tab's unit: its memory, its cores (in millicores), its disk. */
   allocated: number | null;
+  /**
+   * Memory only: what the guest has in use and couldn't drop (its total less what it says is
+   * available), so less than `now` by its file cache and by what it has freed but this computer still
+   * holds; null on the other tabs or without the guest's reading.
+   */
+  inside: number | null;
 }
 
 /** The whole computer's use of one resource now, split into the VMs and everything else. */
@@ -134,6 +140,7 @@ export function shares(snap: Snapshot | null | undefined, tab: Tab, warn?: Warn 
       running: v.instance.status === 'Running',
       stalled: v.stalledSince != null,
       allocated: allocation(tab, v.instance),
+      inside: tab === 'mem' ? (v.latest.mem_used ?? null) : null,
     }))
     .sort(largestFirst);
   const sum = parts.reduce((s, p) => s + (p.now ?? 0), 0);
@@ -208,6 +215,8 @@ export interface Layer {
   stalled: boolean;
   /** What it's allocated, in the tab's unit; null for one only the range still holds. */
   allocated: number | null;
+  /** Memory only: what the guest has in use (`VmPart.inside`). */
+  inside: number | null;
   /** On the stack's buckets; null without a stack. */
   values: (number | null)[] | null;
   /** The most it reached in the range, as the backend says. */
@@ -231,7 +240,7 @@ export function layers(s: Shares | null, stack: Stack | null | undefined, tab: T
     return { ...p, values: h?.avg ?? null, peak: h?.peak ?? null, constant: false };
   });
   for (const h of history.values()) {
-    out.push({ name: h.name, now: null, reported: null, running: false, stalled: false, allocated: null, values: h.avg, peak: h.peak, constant: false });
+    out.push({ name: h.name, now: null, reported: null, running: false, stalled: false, allocated: null, inside: null, values: h.avg, peak: h.peak, constant: false });
   }
   for (const l of out) {
     if (!stack) continue;
@@ -294,13 +303,54 @@ export function layerAside(tab: Tab, l: Layer, over: AnyRangeKey): string {
  * usually idle, and stays one line.
  */
 export function allocatedAside(tab: Tab, l: Layer, listed: number): string {
-  if (!listsTop(tab) || listed === 0 || l.allocated == null) return '';
-  return `${whole(tab, l.allocated)} allocated to VM`;
+  return listed === 0 ? '' : allocatedLine(tab, l);
+}
+
+/** "16.0 GiB allocated to VM", for memory and CPU; '' for a disk, or without an allocation. */
+const allocatedLine = (tab: Tab, l: Layer) => (!listsTop(tab) || l.allocated == null ? '' : `${whole(tab, l.allocated)} allocated to VM`);
+
+/** "7.5 GiB needed inside", for memory; '' on the other tabs, or without the guest's reading. */
+const insideLine = (tab: Tab, l: Layer) => (tab !== 'mem' || l.inside == null ? '' : `${amount(tab, l.inside)} needed inside`);
+
+/**
+ * Over a VM's figure and peak, the lines under them (its allocation, what its guest needs), so they're
+ * there to point at for every VM, not only those with containers listed to leave them room.
+ */
+export function sizeTip(tab: Tab, l: Layer): string | undefined {
+  return [allocatedLine(tab, l), insideLine(tab, l)].filter(Boolean).join('\n') || undefined;
 }
 
 /** The allocation, pointed at: whose it is, as the line it's on is a container's. */
-export const allocatedTip = (tab: 'mem' | 'cpu', l: Layer) =>
+export const allocatedTip = (tab: Tab, l: Layer) =>
   `${l.name} is allocated ${whole(tab, l.allocated ?? 0)}${tab === 'mem' ? ' of memory' : ''}`;
+
+/**
+ * Under a memory row's allocation, what its guest needs ("7.5 GiB needed inside"): far less than what
+ * the VM holds, as a rule, and the gap is what a restart would give back. Only where containers are
+ * listed under it, as the allocation is; with just one, the page gives this a line of its own.
+ */
+export function insideAside(tab: Tab, l: Layer, listed: number): string {
+  return listed === 0 ? '' : insideLine(tab, l);
+}
+
+/**
+ * Why what the guest needs is less than what the VM holds, pointed at; or, where its share is the
+ * smaller, what the share counts, without saying which is the cause: compressed memory at its
+ * compressed size, or the share shrunk where the VMs were read as more than the computer's use.
+ */
+export function insideTip(l: Layer): string {
+  const need = `${l.name}'s processes and kernel need ${amount('mem', l.inside)}`;
+  if (l.now != null && l.inside != null && l.inside > l.now) {
+    return (
+      `${need}: more than its ${amount('mem', l.now)} share of this computer's memory in use, which counts what macOS has compressed at ` +
+      `the size it keeps it in, and is read a moment apart from the guest.`
+    );
+  }
+  return (
+    `${need}. The rest of the ${amount('mem', l.now)} it holds on this computer is the guest's file cache, and memory it has used and ` +
+    `freed: the guest could drop it, but this computer doesn't get it back while the VM runs. Restarting the VM does.`
+  );
+}
 
 /** The stacked chart's shapes: path data in a `width` × `height` box. */
 export interface StackChart {

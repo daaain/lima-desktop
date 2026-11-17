@@ -9,10 +9,10 @@
 | entity | metrics | series |
 | --- | --- | --- |
 | VM (×10) | 16 — guest CPU, memory used/available/total, swap, PSI memory some/full, PSI CPU, OOM kills, root and container-store disk used/size, and host-side memory footprint, CPU and allocated disk | 160 |
-| container (×100) | 10 — CPU, memory, limit, peak, OOM kills, pids, net rx/tx, block read/write | 1,000 |
-| compose project (×20) | 10 — the container metrics, its running containers added up at each stats round | 200 |
+| container (×100) | 11 — CPU, memory, limit, peak, OOM kills, pids, net rx/tx, block read/write, and its processes' own memory (anon + shmem) | 1,100 |
+| compose project (×20) | 11 — the container metrics, its running containers added up at each stats round | 220 |
 
-1,360 series × 604,800 s ≈ **820 M samples a week**. The layouts below were measured before compose projects had series of their own, on the first 1,160 (700 M samples): add about a sixth, ~0.8 GB a week for the real store.
+1,480 series × 604,800 s ≈ **895 M samples a week**. The layouts below were measured before compose projects had series of their own, or containers their processes' own memory, on the first 1,160 (700 M samples): add about a quarter, ~0.85 GB a week for the real store.
 
 ## Layouts measured
 

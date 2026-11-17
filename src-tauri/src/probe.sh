@@ -6,7 +6,10 @@
 #   M <MemTotal:|MemAvailable:|SwapTotal:|SwapFree:> <kB>
 #   P <memory|cpu> <some|full> total=<us>         O <oom_kill count>
 #   D <size kB> <used kB>   (first /, then the rootless container store)
-#   G <container id> <memory.peak|-> <oom_kill|->  (cgroup v2 only, per podman container)
+#   G <container id> <memory.peak|-> <oom_kill|-> <anon+shmem|->  (cgroup v2 only, per podman container)
+#     anon+shmem from memory.stat: its processes' own memory, which only swap could take away.
+#     podman's figure is memory.current less inactive_file, so it counts active file cache and
+#     reclaimable slab too. shmem is in because postgres' shared_buffers and tmpfs live there.
 #   .                                             (end of block)
 store="${XDG_DATA_HOME:-$HOME/.local/share}/containers/storage"
 [ -d "$store" ] || store="$HOME"
@@ -48,7 +51,22 @@ while :; do
         if [ "$k" = oom_kill ]; then ok=$v; fi
       done < "$s/memory.events"
     fi
-    echo "G $id $pk $ok"
+    own=-
+    if [ -r "$s/memory.stat" ]; then
+      # Both near the top (anon first, as a rule, but the kernel doesn't promise the order): stop
+      # once both are read, not at the end of the file.
+      an=
+      sh=
+      while read -r k v; do
+        case $k in
+          anon) an=$v ;;
+          shmem) sh=$v ;;
+          *) continue ;;
+        esac
+        if [ -n "$an" ] && [ -n "$sh" ]; then own=$((an + sh)); break; fi
+      done < "$s/memory.stat"
+    fi
+    echo "G $id $pk $ok $own"
   done
   echo "."
   i=$((i + 1))

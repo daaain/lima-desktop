@@ -257,8 +257,12 @@ pub fn counter_kills(prev: &Block, cur: &Block) -> Vec<Option<String>> {
     let mut ids: Vec<&String> = cur.cgroups.keys().collect();
     ids.sort();
     for id in ids {
-        let now = cur.cgroups[id].1.unwrap_or(0);
-        let before = prev.cgroups.get(id).map_or(Some(0), |c| c.1).unwrap_or(0);
+        let now = cur.cgroups[id].oom_kills.unwrap_or(0);
+        let before = prev
+            .cgroups
+            .get(id)
+            .map_or(Some(0), |c| c.oom_kills)
+            .unwrap_or(0);
         let rise = now.saturating_sub(before);
         kills.extend((0..rise).map(|_| Some(id.clone())));
     }
@@ -292,6 +296,7 @@ pub fn counter_event(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::probe::Cgroup;
 
     const CT: &str = "4f1c0b6e8a9d2c7b3e5f6a1d0c9b8a7e6d5c4b3a2f1e0d9c8b7a6f5e4d3c2b1a";
     const CT2: &str = "9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a0b9c8d7e6f5a4b3c2d1e0f9a8b";
@@ -473,7 +478,14 @@ mod tests {
             oom_kills: vm,
             cgroups: cgroups
                 .iter()
-                .map(|(id, n)| (id.to_string(), (Some(1), Some(*n))))
+                .map(|(id, n)| {
+                    let cgroup = Cgroup {
+                        peak: Some(1),
+                        oom_kills: Some(*n),
+                        own: None,
+                    };
+                    (id.to_string(), cgroup)
+                })
                 .collect(),
             ..Block::default()
         }

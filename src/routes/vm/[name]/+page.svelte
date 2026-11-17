@@ -293,7 +293,7 @@
     {#if actionError}<p class="error">{actionError}</p>{/if}
     {#if vm.containers.length}
       <p class="note">
-        Memory: full width is the container's own limit, else this VM's {bytes(i.memory)}; dark is now, pale the peak since it started, the tick the peak in {theLast(range.key)}.
+        Memory: full width is the container's own limit, else this VM's {bytes(i.memory)}; the bar is what it uses now, its strongest part, where that's read, what its processes hold themselves (the rest is file cache and kernel memory, most of which the VM can reclaim), and faintest behind it the peak since it started; the tick is the peak in {theLast(range.key)}.
         Above it, the VM over {theLast(range.key)}: its memory in use, soft, and this container's part in front. CPU: full width is this VM's {i.cpus} cores, with {theLast(range.key)} above. Compose projects are read-only groups. <a href={`/containers?vm=${encodeURIComponent(name)}`}>Filter and search them in Containers.</a>
       </p>
       <div class="lines">
