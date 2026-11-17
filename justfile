@@ -119,10 +119,16 @@ readme-menubar:
 # Everything CI would run: type checks, all tests, clippy (the browser run is `just ui-e2e`)
 check:
     pnpm check
+    pnpm exec prettier --check .
     pnpm test
     node --test 'tools/*.test.mjs'
     cd src-tauri && cargo test
     cd src-tauri && cargo clippy --all-targets -- -D warnings
+
+# Format the Markdown: each paragraph and list item on one line, so an edit never rewraps the lines
+# around it (Prettier, Markdown only: .prettierrc.json, .prettierignore)
+format:
+    pnpm exec prettier --write .
 
 # The quick subset: the UI's and the tools' unit tests, and the backend's tests
 test:
@@ -130,12 +136,14 @@ test:
     node --test 'tools/*.test.mjs'
     cd src-tauri && cargo test
 
-# Releasing (docs/development.md): `just release patch` (or minor, major, or 0.2.0) bumps the version in
-# tauri.conf.json, Cargo.toml (and Cargo.lock) and package.json, commits and tags v<version>, all
-# local — `git tag -d v<version> && git reset --hard HEAD~1` undoes it. `just release-push` then
-# starts the Release workflow, which builds the .dmg, .deb and AppImage and publishes them as a GitHub Release.
-# A pre-push hook (.githooks/pre-push) refuses any v* tag whose commit says another version.
-# Bump the version, commit and tag it - e.g. `just release patch` or `just release 0.2.0`
+# Releasing (docs/development.md): `just release patch` (or minor, major, or 0.2.0) folds .changes/
+# into CHANGELOG.md as the new version's section, bumps the version in tauri.conf.json, Cargo.toml
+# (and Cargo.lock) and package.json (tools/changes.mjs), commits and tags v<version>, all local —
+# `git tag -d v<version> && git reset --hard HEAD~1` undoes it. `just release-push` then starts the
+# Release workflow, which builds the .dmg, .deb and AppImage and publishes them as a GitHub Release
+# with the version's CHANGELOG section as its notes. A pre-push hook (.githooks/pre-push) refuses
+# any v* tag whose commit says another version or has no CHANGELOG section for it.
+# Fold .changes/ into CHANGELOG.md, bump the version, commit and tag it - e.g. `just release patch` or `just release 0.2.0`
 release version_or_bump:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -148,33 +156,16 @@ release version_or_bump:
     git fetch -q origin main
     [ "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)" ] \
       || { echo "main isn't origin/main: git pull --ff-only (or push) first." >&2; exit 1; }
-    current=$(node -p 'require("./src-tauri/tauri.conf.json").version')
-    IFS=. read -r major minor patch <<< "$current"
-    case "{{version_or_bump}}" in
-      major) version="$((major + 1)).0.0" ;;
-      minor) version="$major.$((minor + 1)).0" ;;
-      patch) version="$major.$minor.$((patch + 1))" ;;
-      *) version="{{version_or_bump}}" ;;
-    esac
-    [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "'$version' isn't major, minor, patch or X.Y.Z." >&2; exit 1; }
-    ! git rev-parse -q --verify "refs/tags/v$version" >/dev/null || { echo "v$version is already tagged." >&2; exit 1; }
-    if [ "$version" != "$current" ]; then
-      echo "$current → $version"
-      # JSON through node (the files are as JSON.stringify writes them, so only the version changes).
-      for f in package.json src-tauri/tauri.conf.json; do
-        node -e 'const fs = require("fs"); const [f, v] = process.argv.slice(1); const j = JSON.parse(fs.readFileSync(f, "utf8")); j.version = v; fs.writeFileSync(f, JSON.stringify(j, null, 2) + "\n");' "$f" "$version"
-      done
-      # The package's own version: the first `version =` in Cargo.toml, and its entry in Cargo.lock.
-      sed -i.bak "1,/^version = /s/^version = \".*\"/version = \"$version\"/" src-tauri/Cargo.toml
-      sed -i.bak "/^name = \"lima-desktop\"$/{n;s/^version = \".*\"/version = \"$version\"/;}" src-tauri/Cargo.lock
-      rm src-tauri/Cargo.toml.bak src-tauri/Cargo.lock.bak
-      git diff --stat
-      git commit -qam "Release v$version"
-    else
-      echo "$current is already the version everywhere: tagging it as it is."
+    # Checks everything before writing anything; given the version the files already say (with its
+    # CHANGELOG section and nothing in .changes/), it changes nothing, and this only tags.
+    version=$(node tools/changes.mjs prepare "{{version_or_bump}}" "$(date +%F)")
+    if [ -n "$(git status --porcelain)" ]; then
+      git add -A -- package.json src-tauri/tauri.conf.json src-tauri/Cargo.toml src-tauri/Cargo.lock CHANGELOG.md .changes
+      git diff --cached --stat
+      git commit -qm "Release v$version"
     fi
     git tag -a "v$version" -m "Release v$version"
-    echo "Tagged v$version. Look it over (git show --stat), then: just release-push"
+    echo "Tagged v$version. Look it over (git show HEAD, the notes: node tools/changes.mjs notes $version), then: just release-push"
 
 # Push main and the latest tag together, starting the Release workflow (which publishes the GitHub Release)
 release-push:

@@ -8,29 +8,20 @@ pnpm tauri dev                 # the app, hot-reloading the UI
 pnpm check && pnpm test        # svelte-check + vitest (the UI's pure logic)
 cd src-tauri && cargo test && cargo clippy --all-targets
 just --list                    # the same and more as recipes; `just check` runs everything
+just format                    # the Markdown, one line per paragraph and list item
 ```
 
-`LD_DATA_DIR=<dir>` makes the app keep its data (the metrics history, `metrics.db`) there instead of
-the platform's app data directory: anything run against fake or replayed VMs should set it, so the
-real history never mixes with theirs.
+Markdown is written one line per paragraph and list item, never wrapped by hand, so an edit changes only its own lines. `just format` (Prettier, Markdown only: `.prettierrc.json`, `.prettierignore`) makes it so, and `just check` fails on a file it would change.
 
-A debug build (`pnpm tauri dev`, `tauri build --debug`) is a different app to the system:
-`dev.limadesktop.app.dev` (`dev_apart` in `lib.rs`), so its history, settings and remembered window
-are its own, its title says "(dev)", and it can run beside the installed app without the two writing
-over each other's minutes of history.
+`LD_DATA_DIR=<dir>` makes the app keep its data (the metrics history, `metrics.db`) there instead of the platform's app data directory: anything run against fake or replayed VMs should set it, so the real history never mixes with theirs.
 
-The icon is drawn by `tools/app-icon.mjs` (the masthead's serif L on a white tile, in Playwright's
-Chromium); `just icon` draws it again and makes every size in `src-tauri/icons/`.
+A debug build (`pnpm tauri dev`, `tauri build --debug`) is a different app to the system: `dev.limadesktop.app.dev` (`dev_apart` in `lib.rs`), so its history, settings and remembered window are its own, its title says "(dev)", and it can run beside the installed app without the two writing over each other's minutes of history.
 
-The README's menu bar pictures (`docs/img/menubar*.webp`) are the one set of screenshots committed,
-as only macOS can draw the items (CoreText sets their text) and CI draws the rest on Linux.
-`just readme-menubar` redraws them on a Mac when the items or the popover change: the items from
-`cargo test menubar_readme -- --ignored` (Settings' default items, on a light and a dark menu bar),
-set by `tools/menubar-readme.mjs` with the popover under memory as the browser tests draw it, as
-lossless WebP (cwebp).
+The icon is drawn by `tools/app-icon.mjs` (the masthead's serif L on a white tile, in Playwright's Chromium); `just icon` draws it again and makes every size in `src-tauri/icons/`.
 
-Linux needs WebKitGTK to build: `libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev` (see Tauri's
-prerequisites). macOS needs Xcode's command-line tools.
+The README's menu bar pictures (`docs/img/menubar*.webp`) are the one set of screenshots committed, as only macOS can draw the items (CoreText sets their text) and CI draws the rest on Linux. `just readme-menubar` redraws them on a Mac when the items or the popover change: the items from `cargo test menubar_readme -- --ignored` (Settings' default items, on a light and a dark menu bar), set by `tools/menubar-readme.mjs` with the popover under memory as the browser tests draw it, as lossless WebP (cwebp).
+
+Linux needs WebKitGTK to build: `libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev` (see Tauri's prerequisites). macOS needs Xcode's command-line tools.
 
 ## Backend map (`src-tauri/src/`)
 
@@ -56,9 +47,7 @@ prerequisites). macOS needs Xcode's command-line tools.
 
 ## Frontend map (`src/`)
 
-Two levels, kept apart in the masthead (`lib/Masthead.svelte`): **VMs** (`routes/+page.svelte`,
-`routes/vm/[name]`), and the podman things in every running VM that forwards a podman socket:
-Containers, Images, Volumes; and after them **Settings**. How it looks and reads is in [design/ui.md](./design/ui.md).
+Two levels, kept apart in the masthead (`lib/Masthead.svelte`): **VMs** (`routes/+page.svelte`, `routes/vm/[name]`), and the podman things in every running VM that forwards a podman socket: Containers, Images, Volumes; and after them **Settings**. How it looks and reads is in [design/ui.md](./design/ui.md).
 
 | where | what |
 | --- | --- |
@@ -86,43 +75,19 @@ Containers, Images, Volumes; and after them **Settings**. How it looks and reads
 | `routes/settings` | the measuring interval |
 | `routes/containers`, `routes/images`, `routes/volumes` | the views; `?vm=` (and `&running=1` for containers) in the URL is the filter, so other pages can link to it |
 
-The pure modules have `.test.ts` files next to them (`pnpm test`); `lib/testing.ts` builds snapshots
-for them.
+The pure modules have `.test.ts` files next to them (`pnpm test`); `lib/testing.ts` builds snapshots for them.
 
 ## The UI in a browser, on fake data: `just ui-e2e`
 
-`e2e-ui/ui.test.mjs` (node:test + Playwright's Chromium) serves the built UI with `vite preview`
-and loads `e2e-ui/fake-backend.js` into the page before the app: it stands in for Tauri's `invoke`
-and answers every command in `lib/api.ts` with an invented fleet, made to exercise the UI — a VM
-whose memory leaks past three quarters, a CPU-bound one with an OOM kill at a container's own
-limit and a stall, one with a nearly full disk and a managed-by marker, one whose podman is too old
-and that has stopped responding, an idle one, and stopped and broken ones. Every value is a function of the entity and the time, and the
-test fixes the time, so two runs draw the same picture. The test checks what each page says, in
-light and dark, and that the overview doesn't scroll sideways on a narrow window.
+`e2e-ui/ui.test.mjs` (node:test + Playwright's Chromium) serves the built UI with `vite preview` and loads `e2e-ui/fake-backend.js` into the page before the app: it stands in for Tauri's `invoke` and answers every command in `lib/api.ts` with an invented fleet, made to exercise the UI — a VM whose memory leaks past three quarters, a CPU-bound one with an OOM kill at a container's own limit and a stall, one with a nearly full disk and a managed-by marker, one whose podman is too old and that has stopped responding, an idle one, and stopped and broken ones. Every value is a function of the entity and the time, and the test fixes the time, so two runs draw the same picture. The test checks what each page says, in light and dark, and that the overview doesn't scroll sideways on a narrow window.
 
-Its screenshots go to `.snapshots/ui/` (`LD_SCREENSHOT_DIR` puts them elsewhere). The
-**Screenshots** workflow runs the same test after each merge to main that touches the UI and
-publishes the pictures, with a page to look at them on (`e2e-ui/gallery.mjs`), to GitHub Pages:
-<https://daaain.github.io/lima-desktop/>. The README and [design/ui.md](./design/ui.md) link to
-them there, so nothing is committed. Run by hand for another branch (Actions → Screenshots → Run
-workflow), it publishes nothing: that branch's pictures are the run's `screenshots` artifact, as a
-pull request's are CI's `ui-screenshots`. It needs Pages switched on once (Settings → Pages →
-Source: GitHub Actions), and a workflow can only be run by hand once its file is on the default
-branch.
+Its screenshots go to `.snapshots/ui/` (`LD_SCREENSHOT_DIR` puts them elsewhere). The **Screenshots** workflow runs the same test after each merge to main that touches the UI and publishes the pictures, with a page to look at them on (`e2e-ui/gallery.mjs`), to GitHub Pages: <https://daaain.github.io/lima-desktop/>. The README and [design/ui.md](./design/ui.md) link to them there, so nothing is committed. Run by hand for another branch (Actions → Screenshots → Run workflow), it publishes nothing: that branch's pictures are the run's `screenshots` artifact, as a pull request's are CI's `ui-screenshots`. It needs Pages switched on once (Settings → Pages → Source: GitHub Actions), and a workflow can only be run by hand once its file is on the default branch.
 
-Add to the fleet when a page gains a state worth seeing; nothing in it is recorded from a real
-machine, so it needs no anonymising. For real data in the real app, replay a snapshot (below).
+Add to the fleet when a page gains a state worth seeing; nothing in it is recorded from a real machine, so it needs no anonymising. For real data in the real app, replay a snapshot (below).
 
 ## Does the UI hold on to memory? `just ui-leak`
 
-The app's window polls the backend once a second for as long as it's open, so anything a poll leaves
-behind adds up over hours. `e2e-ui/leak.mjs` shows it in about a minute. It loads the built UI with
-the fake backend into headless WebKit (Tauri's engine) and runs the page's clock forward a second at
-a time, one poll per tick, pausing for a frame after each so the result is laid out and painted. It
-weighs the page's process every so often: its footprint on macOS, the figure Activity Monitor
-shows, and its resident size elsewhere. The verdict is the growth through the second half of the
-run, in MB per 1000 ticks (about 17 minutes of the app open), so caches filling up and levelling off
-don't count. `just ui-leak` fails above 25. Pages level off at 0–3 MB.
+The app's window polls the backend once a second for as long as it's open, so anything a poll leaves behind adds up over hours. `e2e-ui/leak.mjs` shows it in about a minute. It loads the built UI with the fake backend into headless WebKit (Tauri's engine) and runs the page's clock forward a second at a time, one poll per tick, pausing for a frame after each so the result is laid out and painted. It weighs the page's process every so often: its footprint on macOS, the figure Activity Monitor shows, and its resident size elsewhere. The verdict is the growth through the second half of the run, in MB per 1000 ticks (about 17 minutes of the app open), so caches filling up and levelling off don't count. `just ui-leak` fails above 25. Pages level off at 0–3 MB.
 
     just ui-leak                   # the overview: 1500 ticks, about 75 s
     just ui-leak /containers       # another page
@@ -130,163 +95,61 @@ don't count. `just ui-leak` fails above 25. Pages level off at 0–3 MB.
     node e2e-ui/leak.mjs --browser chromium
     node e2e-ui/leak.mjs --max-growth 10 --csv leak.csv   # exit 1 above 10 MB per 1000 ticks
 
-A frame (40 ms, `--frame-ms`) is shorter than the bars' 0.4 s transition, so the rig cuts
-transitions short, which the app's polls, at least a second apart, never do. A rare "Page crashed"
-is WebKit itself; run it again.
+A frame (40 ms, `--frame-ms`) is shorter than the bars' 0.4 s transition, so the rig cuts transitions short, which the app's polls, at least a second apart, never do. A rare "Page crashed" is WebKit itself; run it again.
 
-It found one leak, now fixed. WebKit before October 2026 never frees a computed `calc()`, `min()`,
-`max()` or `clamp()` length ([bug 325845][wk-calc]), and the bars' widths were `max(2px, n%)`, which
-were computed again on every poll and on every frame of their transition. Left open, the window grew
-about 13 MB a minute. macOS 27.0.1 and most Linux distributions still ship that WebKit, so
-`styles.test.ts` keeps those functions out of inline styles. A plain length with a `min-width` in the
-stylesheet does the same job. Playwright's own WebKit has had the fix since 1.65, so the rig no
-longer shows this leak, only ones the app makes itself.
+It found one leak, now fixed. WebKit before October 2026 never frees a computed `calc()`, `min()`, `max()` or `clamp()` length ([bug 325845][wk-calc]), and the bars' widths were `max(2px, n%)`, which were computed again on every poll and on every frame of their transition. Left open, the window grew about 13 MB a minute. macOS 27.0.1 and most Linux distributions still ship that WebKit, so `styles.test.ts` keeps those functions out of inline styles. A plain length with a `min-width` in the stylesheet does the same job. Playwright's own WebKit has had the fix since 1.65, so the rig no longer shows this leak, only ones the app makes itself.
 
 [wk-calc]: https://bugs.webkit.org/show_bug.cgi?id=325845
 
 ## Releasing
 
-The **Release** workflow (`.github/workflows/release.yml`) runs on a `v*` tag. It builds the macOS
-app as a universal `.dmg` on `macos-15-intel` (the Apple silicon queue can wait for want of runners), and the Linux `.deb` and AppImage on `ubuntu-24.04`. Linux
-builds on 24.04, not CI's 26.04, because a binary needs the glibc it was built against or newer.
-The workflow then publishes a GitHub Release with the files attached and install notes above the
-generated changelog. It goes out as soon as the builds pass, with no draft to look over, so do a
-dry run (below) first when anything in the build has changed.
+The **Release** workflow (`.github/workflows/release.yml`) runs on a `v*` tag. It builds the macOS app as a universal `.dmg` on `macos-15-intel` (the Apple silicon queue can wait for want of runners), and the Linux `.deb` and AppImage on `ubuntu-24.04`. Linux builds on 24.04, not CI's 26.04, because a binary needs the glibc it was built against or newer. The workflow then publishes a GitHub Release with the files attached, its notes the version's section of [`CHANGELOG.md`](../CHANGELOG.md) followed by how to install. It goes out as soon as the builds pass, with no draft to look over, so do a dry run (below) first when anything in the build has changed.
 
-1. On an up-to-date, clean main: **`just release patch`** (or `minor`, `major`, or `0.2.0`). It
-   bumps the version in `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml` (and `Cargo.lock`) and
-   `package.json` — the workflow refuses a tag that doesn't match all three — commits that as
-   `Release v0.2.0` and tags it, all locally (`git tag -d v0.2.0 && git reset --hard HEAD~1` undoes
-   it). Given the version already in the files, it only tags. It fetches first and refuses unless
-   main is exactly `origin/main`.
-2. **`just release-push`**: pushes main and the tag together (`--atomic`), which starts the build
-   and the release.
-   main has to take a direct push for this; where it only takes pull requests, merge the bump
-   commit through one and push just the tag.
+Between releases the changelog waits in [`.changes/`](../.changes/README.md): every PR someone using the app would notice adds one file there, with its entry and the section it goes in (`Added`, `Fixed`, …). Separate files, so open PRs never conflict over a shared "Unreleased" section. `just check` validates them (`tools/changes.test.mjs`). To see what the next release would say: `node tools/changes.mjs pending`.
 
-Don't tag by hand: a tag on a commit that still says the old version fails the workflow's first
-job, after the tag is public. The pre-push hook (`.githooks/pre-push`, switched on by `pnpm install`
-setting `core.hooksPath`) runs the same check, `tools/check-release-version.sh`, on any `v*` tag
-before it leaves. To take back a bad tag: `git push origin :refs/tags/vX.Y.Z && git tag -d vX.Y.Z`.
+1. On an up-to-date, clean main: **`just release patch`** (or `minor`, `major`, or `0.2.0`). It folds `.changes/` into `CHANGELOG.md` as `## 0.2.0 — <date>` (any `Summary` prose first, then the sections in a fixed order, each section's entries in the order they were merged) and deletes the fragments; bumps the version in `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml` (and `Cargo.lock`) and `package.json`; commits that as `Release v0.2.0` and tags it, all locally (`git tag -d v0.2.0 && git reset --hard HEAD~1` undoes it). `tools/changes.mjs prepare` checks everything before writing anything: it refuses with nothing in `.changes/`, a version that's no step up or is tagged already, or files that disagree, and warns when you ask for a smaller step than a fragment's `bump:` says. Given the version already in the files and the changelog, it only tags. It fetches first and refuses unless main is exactly `origin/main`. A paragraph for the release as a whole is a `section: Summary` fragment, added before running it.
+2. **`just release-push`**: pushes main and the tag together (`--atomic`), which starts the build and the release. main has to take a direct push for this; where it only takes pull requests, merge the bump commit through one and push just the tag.
 
-Run by hand on a branch, it's a dry run: Actions → Release → Run workflow, or
-`gh workflow run release.yml --ref <branch>`. It checks the version, builds everything and keeps the
-files as the run's artifacts, and instead of publishing a release it puts the one it would publish
-(files, notes and changelog) in the run's summary. Use it to try a workflow change, or to time a
-build, before tagging.
+Don't tag by hand: a tag on a commit that still says the old version, or whose `CHANGELOG.md` has no section for it, fails the workflow's first job, after the tag is public. The pre-push hook (`.githooks/pre-push`, switched on by `pnpm install` setting `core.hooksPath`) runs the same check, `tools/check-release-version.sh`, on any `v*` tag before it leaves. To take back a bad tag: `git push origin :refs/tags/vX.Y.Z && git tag -d vX.Y.Z`.
 
-The macOS app is only ad-hoc signed (`bundle.macOS.signingIdentity: "-"` in `tauri.conf.json`), so a
-downloaded copy needs its quarantine removed (`xattr -dr com.apple.quarantine`, as the README
-says). Signing and notarising need an Apple Developer ID. Once there is one, set Tauri's `APPLE_*`
-variables from secrets on the macOS build step
-([Tauri's guide](https://v2.tauri.app/distribute/sign/macos/)); they override the ad-hoc identity.
+Run by hand on a branch, it's a dry run: Actions → Release → Run workflow, or `gh workflow run release.yml --ref <branch>`. It checks the version, builds everything and keeps the files as the run's artifacts, and instead of publishing a release it puts the one it would publish in the run's summary: the files, and as notes what `.changes/` holds (the next release's). Use it to try a workflow change, or to time a build, before tagging. To see only the next release's notes, skip the builds: `gh workflow run release.yml --ref <branch> -f builds=false` (or untick "Build the apps too"), done in a minute.
+
+The macOS app is only ad-hoc signed (`bundle.macOS.signingIdentity: "-"` in `tauri.conf.json`), so a downloaded copy needs its quarantine removed (`xattr -dr com.apple.quarantine`, as the README says). Signing and notarising need an Apple Developer ID. Once there is one, set Tauri's `APPLE_*` variables from secrets on the macOS build step ([Tauri's guide](https://v2.tauri.app/distribute/sign/macos/)); they override the ad-hoc identity.
 
 ## Tests that touch real things
 
-- `cargo test` runs the probe script under this machine's `sh` against its real `/proc`
-  (Linux only).
-- **A real podman API:** `podman system service --time=0 unix:///tmp/pd.sock &`, a container
-  labelled as a compose project
-  (`podman run -d --label com.docker.compose.project=shop --label com.docker.compose.service=web alpine sh -c 'while :; do echo tick; sleep 1; done'`),
-  and two things for the removal test to remove
-  (`podman tag alpine localhost/ld-test:gone && podman volume create ld-test-gone`),
-  then `LD_PODMAN_SOCKET=/tmp/pd.sock cargo test --test podman_live`. That run restarts the
-  container, removes those two and prunes dangling images: point it at a throwaway engine. Only
-  `lists_images_and_volumes_from_a_real_engine` is read-only, so safe against any engine, a Lima
-  VM's included:
-  `LD_PODMAN_SOCKET=~/.lima/<vm>/sock/podman.sock cargo test --test podman_live lists_images_and_volumes`.
-- **A real VM's kernel journal** (read-only, over Lima's ssh):
-  `LD_LIMA_VM=<running instance> cargo test journal_live -- --ignored`. OOM kills themselves are
-  covered by fixtures in `oom.rs`; to make one for real, give a container a small limit
-  (`podman run --rm -m 64m fedora python3 -c 'b = bytearray(1 << 30)'`) — in a VM you don't mind.
-- **The whole app without Lima, against a real engine:** `tools/fake-lima-host.sh /tmp/pd.sock`
-  prints a directory of test doubles (`limactl`, `ssh`); launch the built app with it first on
-  `PATH` (and `LD_DATA_DIR` set). Under Xvfb:
-  `Xvfb :99 & DISPLAY=:99 PATH=<dir>:$PATH WEBKIT_DISABLE_DMABUF_RENDERER=1 src-tauri/target/debug/lima-desktop`.
-  Use it for what a replay can't do: container actions, removals and prunes, against a throwaway
-  engine. For realistic data, replay a snapshot (below).
+- `cargo test` runs the probe script under this machine's `sh` against its real `/proc` (Linux only).
+- **A real podman API:** `podman system service --time=0 unix:///tmp/pd.sock &`, a container labelled as a compose project (`podman run -d --label com.docker.compose.project=shop --label com.docker.compose.service=web alpine sh -c 'while :; do echo tick; sleep 1; done'`), and two things for the removal test to remove (`podman tag alpine localhost/ld-test:gone && podman volume create ld-test-gone`), then `LD_PODMAN_SOCKET=/tmp/pd.sock cargo test --test podman_live`. That run restarts the container, removes those two and prunes dangling images: point it at a throwaway engine. Only `lists_images_and_volumes_from_a_real_engine` is read-only, so safe against any engine, a Lima VM's included: `LD_PODMAN_SOCKET=~/.lima/<vm>/sock/podman.sock cargo test --test podman_live lists_images_and_volumes`.
+- **A real VM's kernel journal** (read-only, over Lima's ssh): `LD_LIMA_VM=<running instance> cargo test journal_live -- --ignored`. OOM kills themselves are covered by fixtures in `oom.rs`; to make one for real, give a container a small limit (`podman run --rm -m 64m fedora python3 -c 'b = bytearray(1 << 30)'`) — in a VM you don't mind.
+- **The whole app without Lima, against a real engine:** `tools/fake-lima-host.sh /tmp/pd.sock` prints a directory of test doubles (`limactl`, `ssh`); launch the built app with it first on `PATH` (and `LD_DATA_DIR` set). Under Xvfb: `Xvfb :99 & DISPLAY=:99 PATH=<dir>:$PATH WEBKIT_DISABLE_DMABUF_RENDERER=1 src-tauri/target/debug/lima-desktop`. Use it for what a replay can't do: container actions, removals and prunes, against a throwaway engine. For realistic data, replay a snapshot (below).
 
 ## Real data without access: snapshot → replay → fixture
 
-The dev box can't reach the Mac's Lima VMs on purpose (`limactl` or a VM's podman socket would be
-control of every VM, other projects' included). So real data is recorded on the Mac and replayed:
+The dev box can't reach the Mac's Lima VMs on purpose (`limactl` or a VM's podman socket would be control of every VM, other projects' included). So real data is recorded on the Mac and replayed:
 
-1. **`just snapshot [seconds]`** — on the Mac only (it refuses in a container). Records, read-only and
-   through the app's own code (`src-tauri/examples/snapshot.rs`), what the app reads: `limactl
-   list`'s rows cut to what the app reads (`tools/snapshot-row.json`: no provisioning, env, mounts or
-   messages), the instances' marker files, and per running VM `seconds` blocks of the probe, the
-   OOM reader's output, and libpod's list GETs (stats once a second). Never inspect, logs,
-   containers' commands and mounts, or images' labels. Into `.snapshots/<UTC time>/` (gitignored;
-   `.snapshots/latest` points at it), which the box sees through its mount — so it's kept only if
-   no line looks like a credential (`password`, `secret`, `token`, a private key); otherwise it's
-   deleted and the files and lines named. It is **not anonymised**: real VM, container and image
-   names and ids.
-2. **`just replay [snapshot]`** (the Mac) or **`just replay-headless [snapshot]`** (the box: Xvfb,
-   a screenshot into `.snapshots/screens/`) — `tools/replay-lima-host.mjs` builds a fake Lima home
-   with a fake `limactl` and `ssh` and serves each VM's libpod on its socket, then runs the app
-   against it with `LD_DATA_DIR` in the workdir. The probe replays at one block a second and stats
-   one sample per request, both looping: cumulative counters (uptime, CPU, PSI, container CPU, net,
-   block) carry on rising by one mean step per sample, OOM counters hold at their last value so no
-   kill is recorded twice. Anything that would change something is refused (`limactl` fails, libpod
-   answers 409); anything not recorded (inspect, logs) answers 404 and is logged to
-   `<workdir>/replay.log`. Host-side columns (hypervisor RSS/CPU, disk-image allocation) read as
-   absent.
-3. **`just fixture [snapshot] [name] [seconds]`** — `tools/anonymise-snapshot.mjs` keeps only what the
-   app reads, maps names, users, homes, image repositories (official `docker.io/library/*` ones
-   kept) and ports to neutral ones, hashes ids with a throwaway salt, keeps every number, and then
-   scans its output for every original it knew of: one survivor and nothing is written. Into
-   `src-tauri/tests/fixtures/<name>/`, which `tests/snapshot_fixtures.rs` puts through the real
-   parsers. A fixture replays like a snapshot: `just replay src-tauri/tests/fixtures/snapshot-1`.
+1. **`just snapshot [seconds]`** — on the Mac only (it refuses in a container). Records, read-only and through the app's own code (`src-tauri/examples/snapshot.rs`), what the app reads: `limactl list`'s rows cut to what the app reads (`tools/snapshot-row.json`: no provisioning, env, mounts or messages), the instances' marker files, and per running VM `seconds` blocks of the probe, the OOM reader's output, and libpod's list GETs (stats once a second). Never inspect, logs, containers' commands and mounts, or images' labels. Into `.snapshots/<UTC time>/` (gitignored; `.snapshots/latest` points at it), which the box sees through its mount — so it's kept only if no line looks like a credential (`password`, `secret`, `token`, a private key); otherwise it's deleted and the files and lines named. It is **not anonymised**: real VM, container and image names and ids.
+2. **`just replay [snapshot]`** (the Mac) or **`just replay-headless [snapshot]`** (the box: Xvfb, a screenshot into `.snapshots/screens/`) — `tools/replay-lima-host.mjs` builds a fake Lima home with a fake `limactl` and `ssh` and serves each VM's libpod on its socket, then runs the app against it with `LD_DATA_DIR` in the workdir. The probe replays at one block a second and stats one sample per request, both looping: cumulative counters (uptime, CPU, PSI, container CPU, net, block) carry on rising by one mean step per sample, OOM counters hold at their last value so no kill is recorded twice. Anything that would change something is refused (`limactl` fails, libpod answers 409); anything not recorded (inspect, logs) answers 404 and is logged to `<workdir>/replay.log`. Host-side columns (hypervisor RSS/CPU, disk-image allocation) read as absent.
+3. **`just fixture [snapshot] [name] [seconds]`** — `tools/anonymise-snapshot.mjs` keeps only what the app reads, maps names, users, homes, image repositories (official `docker.io/library/*` ones kept) and ports to neutral ones, hashes ids with a throwaway salt, keeps every number, and then scans its output for every original it knew of: one survivor and nothing is written. Into `src-tauri/tests/fixtures/<name>/`, which `tests/snapshot_fixtures.rs` puts through the real parsers. A fixture replays like a snapshot: `just replay src-tauri/tests/fixtures/snapshot-1`.
 
 The tools are Node with no dependencies; their tests: `node --test 'tools/*.test.mjs'`.
 
-Exercised against real Lima 2.1 VMs (by recording `snapshot-1`): the probe over Lima's own ssh,
-cgroup v2 `memory.peak`, PSI, the OOM reader. Lifecycle verbs and `limactl edit`: by `just e2e`
-(below).
+Exercised against real Lima 2.1 VMs (by recording `snapshot-1`): the probe over Lima's own ssh, cgroup v2 `memory.peak`, PSI, the OOM reader. Lifecycle verbs and `limactl edit`: by `just e2e` (below).
 
 ## End to end against a real Lima: `just e2e`
 
 Four layers, each catching what the one before can't:
 
-| | what it runs against | catches |
+|  | what it runs against | catches |
 | --- | --- | --- |
 | unit and fixture tests (`cargo test`, `pnpm test`) | canned strings, anonymised snapshots | parser and logic regressions, anywhere |
 | the UI in a browser (`just ui-e2e`) | the built UI on a fake backend | what each page says and draws, in light and dark |
 | replay (`just replay*`) | a recorded snapshot behind a fake `limactl`/`ssh`/libpod | the whole app on real data, without access to the VMs |
 | **e2e** (`just e2e`) | live Lima VMs on this host | behaviour: what Lima, ssh, podman and the kernel actually do |
 
-`just e2e` (`src-tauri/examples/e2e.rs`) drives the crate's own modules as the app does. It creates
-two small VMs (2 CPUs, 2 GiB, 10 GiB, nothing mounted), `ld-e2e-p5` from Lima's `template:podman`
-(Fedora, podman 5) and `ld-e2e-p4` from `src-tauri/tests/e2e/podman4.yaml` (Debian 12, podman 4.3,
-its socket forwarded the same way), and checks, one line each: `lima::list` sees both with a podman
-socket; a socket path over `sun_path`'s limit is reached through the short link; libpod lists two
-compose-labelled containers with real start and created times, and stats show their traffic (one
-asks the other over a podman network: no internet needed past the image pull); the probe over
-Lima's ssh (memory, CPU, PSI, cgroup `G` lines); a real OOM kill (`tail /dev/zero` under a 32 MiB
-limit) read back from the kernel journal as that container's own limit; the real `Collector` for a
-few seconds (p5 with its containers and the kill stored; p4 with VM metrics, no containers, and
-"podman 4.3.1 in this VM is too old: Lima Desktop needs podman 5 or newer"); the commands' podman
-gate on p4; resize refused while running; then on p5 stop, resize (+1 GiB), start and restart via
-`lima::act`/`lima::resize`, each followed by the probe and podman coming back; and delete (stop,
-then delete, as the UI does). About 2 minutes on an M-series Mac once the images are cached.
+`just e2e` (`src-tauri/examples/e2e.rs`) drives the crate's own modules as the app does. It creates two small VMs (2 CPUs, 2 GiB, 10 GiB, nothing mounted), `ld-e2e-p5` from Lima's `template:podman` (Fedora, podman 5) and `ld-e2e-p4` from `src-tauri/tests/e2e/podman4.yaml` (Debian 12, podman 4.3, its socket forwarded the same way), and checks, one line each: `lima::list` sees both with a podman socket; a socket path over `sun_path`'s limit is reached through the short link; libpod lists two compose-labelled containers with real start and created times, and stats show their traffic (one asks the other over a podman network: no internet needed past the image pull); the probe over Lima's ssh (memory, CPU, PSI, cgroup `G` lines); a real OOM kill (`tail /dev/zero` under a 32 MiB limit) read back from the kernel journal as that container's own limit; the real `Collector` for a few seconds (p5 with its containers and the kill stored; p4 with VM metrics, no containers, and "podman 4.3.1 in this VM is too old: Lima Desktop needs podman 5 or newer"); the commands' podman gate on p4; resize refused while running; then on p5 stop, resize (+1 GiB), start and restart via `lima::act`/`lima::resize`, each followed by the probe and podman coming back; and delete (stop, then delete, as the UI does). About 2 minutes on an M-series Mac once the images are cached.
 
-- **Host only.** It refuses inside a container or dev box, like `just snapshot`: the box has no Lima
-  on purpose.
-- **Isolated.** Its own `LIMA_HOME`: `~/.lima-desktop-e2e`, or `LD_E2E_HOME` (keep it short: unix
-  socket paths are limited to ~104 bytes). It's set before anything runs `limactl`, and the runner
-  refuses a home that is, or overlaps, `~/.lima` (symlinks resolved, before anything is created) or
-  holds an instance not named `ld-e2e-*`. Only Lima's image download cache is shared.
-- **Cleans up** at the end, on failure and on Ctrl-C; `just e2e --keep` leaves the VMs for a look
-  (`LIMA_HOME=~/.lima-desktop-e2e limactl shell ld-e2e-p5`), and `just e2e-clean` removes them.
-  A run also replaces any `ld-e2e-*` left from before.
-- **Made to paste.** stdout is a header, one line per check (✓ ✗ –), at most five indented lines of
-  evidence under a failure, and a summary naming the log; colour only on a terminal (and not with
-  `NO_COLOR`). limactl's output and whole errors go to `.e2e/<UTC time>.log` (gitignored). It exits
-  non-zero on any failure. `LD_E2E_IMAGE` overrides the test image (`docker.io/library/alpine:3`).
-- **The same runner on Linux.** VMs are vz on macOS and QEMU on Linux, nothing else differs. CI is
-  to run it on GitHub's `ubuntu-26.04` runner, pinned by name (not `ubuntu-latest`, mid-migration
-  until 19 Nov 2026), which has KVM; it needs Lima 2 and `qemu-system-*` installed, `/dev/kvm`
-  usable by the runner user, and ideally Lima's download cache (`~/.cache/lima`) cached between runs
-  — the Fedora and Debian images are a few hundred MiB each. Docker Hub's anonymous pull limit can
-  bite on shared runner IPs: point `LD_E2E_IMAGE` at a mirror if it does. (Ubuntu 26.04's own
-  podman, 5.7.0, would pass the app's podman ≥ 5 gate too, but the e2e uses the VMs' engines.)
+- **Host only.** It refuses inside a container or dev box, like `just snapshot`: the box has no Lima on purpose.
+- **Isolated.** Its own `LIMA_HOME`: `~/.lima-desktop-e2e`, or `LD_E2E_HOME` (keep it short: unix socket paths are limited to ~104 bytes). It's set before anything runs `limactl`, and the runner refuses a home that is, or overlaps, `~/.lima` (symlinks resolved, before anything is created) or holds an instance not named `ld-e2e-*`. Only Lima's image download cache is shared.
+- **Cleans up** at the end, on failure and on Ctrl-C; `just e2e --keep` leaves the VMs for a look (`LIMA_HOME=~/.lima-desktop-e2e limactl shell ld-e2e-p5`), and `just e2e-clean` removes them. A run also replaces any `ld-e2e-*` left from before.
+- **Made to paste.** stdout is a header, one line per check (✓ ✗ –), at most five indented lines of evidence under a failure, and a summary naming the log; colour only on a terminal (and not with `NO_COLOR`). limactl's output and whole errors go to `.e2e/<UTC time>.log` (gitignored). It exits non-zero on any failure. `LD_E2E_IMAGE` overrides the test image (`docker.io/library/alpine:3`).
+- **The same runner on Linux.** VMs are vz on macOS and QEMU on Linux, nothing else differs. CI is to run it on GitHub's `ubuntu-26.04` runner, pinned by name (not `ubuntu-latest`, mid-migration until 19 Nov 2026), which has KVM; it needs Lima 2 and `qemu-system-*` installed, `/dev/kvm` usable by the runner user, and ideally Lima's download cache (`~/.cache/lima`) cached between runs — the Fedora and Debian images are a few hundred MiB each. Docker Hub's anonymous pull limit can bite on shared runner IPs: point `LD_E2E_IMAGE` at a mirror if it does. (Ubuntu 26.04's own podman, 5.7.0, would pass the app's podman ≥ 5 gate too, but the e2e uses the VMs' engines.)
