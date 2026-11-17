@@ -2,6 +2,18 @@
 
 Notable changes, per release. Follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow [SemVer](https://semver.org/). What's merged but not yet released waits in [`.changes/`](./.changes/README.md), one file per change, until a release folds it in here. How a release is cut: [docs/development.md](./docs/development.md#releasing).
 
+## 0.6.0 — 2026-11-17
+
+### Changed
+
+- **A compose project's heading stands out from its containers.** It now sits on a faint band of diagonal lines, the menu bar's "everything else" texture toned down, with its charts on the plain background. On a VM running several projects, each one is easy to find as you scroll.
+
+### Added
+
+- **A container's memory bar shows how much is its processes' own memory.** The figure stays podman's, which also counts file cache and kernel memory, most of which the VM can reclaim (a devbox's 6.7 GiB can be only 2.0 GiB of its processes' own). Inside it, the bar now draws the part only swap could take away (the cgroup's anon and shmem memory) in the strongest shade, and its tooltip says how much that is. A compose project's heading draws its containers' sum the same way, and a container's detail says it in words and charts it over time. Where it can't be read (a VM without cgroup v2), the bar looks as it did; the history has it from this update on.
+- **The menu bar says what each VM's guest needs, beside what it holds.** Under a VM's allocation, "7.5 GiB needed inside" is the memory its processes and kernel can't drop; the rest of what the VM holds on your computer is the guest's file cache and memory it has freed, which macOS doesn't get back until the VM restarts. A large gap between the two is memory a restart would return. Both lines are also in a tooltip over every VM's figure and peak, including VMs with no containers listed under them.
+- **The app says when restarting a VM would give memory back.** On vz, a VM keeps every page its guest has used, even after the guest frees it, and nothing short of a restart returns it to macOS. A VM's page now says what its guest needs beside what it costs your computer, and that restarting gives back most of the rest. On the VMs overview, a vz VM holding at least twice what it needs, and 4 GiB more, says how much more and that a restart frees it.
+
 ## 0.5.0 — 2026-11-17
 
 ### Changed
