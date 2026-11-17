@@ -691,7 +691,7 @@ impl Collector {
             }
             // Each compose project's running containers added up on this tick: its own series keeps
             // what they used at one moment, which their minute rollups can't (Store::compose_series).
-            let mut sums: HashMap<String, Vec<i64>> = HashMap::new();
+            let mut rows: Vec<(String, Vec<i64>)> = Vec::new();
             for s in &stats {
                 let Some(c) = vm
                     .live
@@ -705,17 +705,14 @@ impl Collector {
                 if let Some(id) = c.entity {
                     self.store().ingest(id, ts, row.clone());
                 }
-                if let Some(project) = &c.container.compose_project {
-                    let sum = sums
-                        .entry(project.clone())
-                        .or_insert_with(|| vec![ABSENT; CT_METRICS.len()]);
-                    add_sample(sum, &row);
-                }
                 c.latest = named(CT_METRICS, &row);
+                if let Some(project) = &c.container.compose_project {
+                    rows.push((project.clone(), row));
+                }
                 prev.insert(s.id.clone(), (now, s.clone()));
             }
             prev.retain(|id, _| running.contains(id.as_str()));
-            self.ingest_projects(&name, ts, sums);
+            self.ingest_projects(&name, ts, project_sums(rows));
         }
     }
 
@@ -1052,8 +1049,60 @@ pub fn container_row(
     ]
 }
 
+/// Each compose project's containers' rows added up, column by column. The processes' own memory
+/// only where every one of them has it: a container recreated a moment ago has none until the probe
+/// finds its cgroup (up to ~5 s), and part of a sum would read as the project's dropping. The live
+/// heading keeps to the same rule (`containers.ts`).
+fn project_sums<P: Into<String>>(
+    rows: impl IntoIterator<Item = (P, Vec<i64>)>,
+) -> HashMap<String, Vec<i64>> {
+    let own = CT_METRICS
+        .iter()
+        .position(|m| *m == "mem_own")
+        .expect("known metric");
+    let mut sums: HashMap<String, Vec<i64>> = HashMap::new();
+    let mut partial: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for (project, row) in rows {
+        let project = project.into();
+        if row[own] == ABSENT {
+            partial.insert(project.clone());
+        }
+        let sum = sums
+            .entry(project)
+            .or_insert_with(|| vec![ABSENT; CT_METRICS.len()]);
+        add_sample(sum, &row);
+    }
+    for project in partial {
+        sums.get_mut(&project).expect("summed")[own] = ABSENT;
+    }
+    sums
+}
+
 #[cfg(test)]
 mod tests {
+    use super::{ABSENT, CT_METRICS, project_sums};
+
+    #[test]
+    fn a_project_s_processes_own_memory_is_summed_only_when_every_container_has_it() {
+        let col = |n: &str| CT_METRICS.iter().position(|m| *m == n).unwrap();
+        let row = |mem: i64, own: i64| {
+            let mut r = vec![ABSENT; CT_METRICS.len()];
+            r[col("mem")] = mem;
+            r[col("mem_own")] = own;
+            r
+        };
+        let sums = project_sums([
+            ("web", row(100, 40)),
+            ("web", row(200, 70)),
+            // Recreated a moment ago: the probe hasn't found its cgroup yet.
+            ("db", row(300, 90)),
+            ("db", row(50, ABSENT)),
+        ]);
+        assert_eq!((sums["web"][col("mem")], sums["web"][col("mem_own")]), (300, 110));
+        // A part of a sum would read as the project's own memory dropping.
+        assert_eq!((sums["db"][col("mem")], sums["db"][col("mem_own")]), (350, ABSENT));
+    }
+
     #[test]
     fn a_stopped_vm_s_disk_image_is_saved_once_for_each_minute_it_was_stopped_throughout() {
         let (m, t) = (60_000, 600_000);
