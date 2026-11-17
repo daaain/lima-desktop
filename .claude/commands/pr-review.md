@@ -76,6 +76,14 @@ command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1 && echo "gh: rea
     checked-out branch). A non-zero exit / empty output means there's simply no PR for this branch —
     treat that as "no PR" and fall back to the local-diff review below; don't surface the raw `gh`
     error to the user as if something went wrong.
+  - **Pin the head you review** before reading the diff: in CI it is the `HEAD SHA` the workflow
+    gave you; locally, `gh pr view <number> --json headRefOid`. The footer (Step 3) names this
+    SHA, never one read later, so a push during the review is left for the next run.
+  - **Locally, check the checkout is that PR's code**: compare the pinned SHA with
+    `git rev-parse HEAD`. `Read`, `Grep` and `Glob` see the working tree, not the PR, so if they
+    differ, tell the user and suggest `gh pr checkout <number>` before reviewing. If they'd rather
+    not, review from the diff alone and say in the review that the surrounding code wasn't the PR's.
+    (In CI the PR's merge commit is checked out, so skip this.)
   - Get the diff to review with `gh pr diff <number>` when a PR exists.
   - **Read existing comments before reviewing** — see Step 1b.
 - If `gh` is **unavailable** (not installed, or not logged in):
@@ -334,9 +342,9 @@ there's nothing material to flag, say so plainly rather than inventing nits.
   new breakdown — so the thread reads as a continuation, not a fresh dump. Pass the body via
   `--body-file -` (stdin) if it's long or has tricky shell characters.
 
-  End the comment with this footer line, using the full head SHA you reviewed
-  (`gh pr view <number> --json headRefOid`). The next run reads it to find where to continue (Step
-  1b.4):
+  End the comment with this footer line, using the full head SHA you pinned in Step 1 (never the
+  live head: the PR may have moved on while you reviewed). The next run reads it to find where to
+  continue (Step 1b.4):
 
   ```markdown
   <sub>Claude PR review · reviewed up to `<40-char head sha>`</sub>
@@ -352,16 +360,10 @@ there's nothing material to flag, say so plainly rather than inventing nits.
 - **Printing locally** (auto-mode without a PR/`gh`, or `--no-post`, or `gh` unavailable): output
   the review directly in this session as markdown.
 
-**Disclosure.** A posted review is public. A flaw the PR introduces, a regression included, is a
-normal finding, since it isn't released yet. A **security** flaw that is already on `main` or in a
-release, in code the PR doesn't fix, is not described publicly: no detail in the summary or inline.
-
-- **In CI**, add one line to the summary: "Something outside this PR's changes is worth a private
-  look: run `/pr-review <number>` locally." Nothing about where or what.
-- **Running locally**, describe it in full in the session, never post it, and suggest the user fix
-  it in a separate PR or open a private security advisory.
-
-Any other pre-existing bug (not a security one) may go in the summary, marked as already on `main`.
+**Flaws already on `main`.** Something you find in code the PR touches or reads but doesn't
+introduce, a security flaw included, goes in the summary under its own short heading, marked as
+already on `main` (or in a release), so it can be fixed separately. Don't inline it, and don't let
+it crowd out the PR's own findings.
 
 If `--post` was requested but posting isn't possible (no PR, or `gh` unavailable), don't silently
 swallow it — print the review here and tell the user why it couldn't be posted.
