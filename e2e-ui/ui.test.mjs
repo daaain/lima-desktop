@@ -205,7 +205,7 @@ for (const dark of [false, true]) {
       /^of this computer's 128\.0 GiB in use: the VMs \d+\.\d GiB, wired \d+\.\d GiB, everything else \d+\.\d GiB$/,
     );
     // A row per running VM, the largest first, each with its peak over the range it opens on.
-    assert.deepEqual(await page.locator('.legend .row[data-vm] .name').allInnerTexts(), ['atlas', 'harbor', 'quill', 'lantern', 'ember']);
+    assert.deepEqual(await page.locator('.legend .row[data-vm] .name').allInnerTexts(), ['atlas', 'harbor', 'lantern', 'quill', 'ember']);
     await page.waitForFunction(() => /peak \d+\.\d GiB in 1 h/.test(document.querySelector('.legend').innerText));
     assert.equal(await page.getByRole('group', { name: 'Over the last' }).getByRole('button', { name: '1 h' }).getAttribute('aria-pressed'), 'true');
     // ember has stopped answering.
@@ -218,7 +218,7 @@ for (const dark of [false, true]) {
     // The busiest containers under the VM each runs in, and the busiest apps under everything else.
     await page.locator('.legend .row[data-app]').first().waitFor();
     assert.deepEqual(await page.locator('.legend .row .name').allInnerTexts(), [
-      'atlas', 'frontend', 'harbor', 'harbor-devbox', 'app', 'quill', 'quill-devbox', 'lantern', 'lantern-devbox', 'ember',
+      'atlas', 'frontend', 'harbor', 'harbor-devbox', 'app', 'lantern', 'lantern-devbox', 'quill', 'quill-devbox', 'ember',
       'wired', 'everything else', 'Google Chrome', 'Visual Studio Code', 'Slack', 'WindowServer', 'Mail', 'free',
     ]);
     assert.match(await page.locator('.row[data-container="harbor-devbox"] .part').innerText(), /^harbor-devbox\s+2\.\d GiB$/);
@@ -226,13 +226,13 @@ for (const dark of [false, true]) {
     // nothing listed under it (ember) stays one line, and says nothing of it.
     assert.deepEqual(await page.locator('[data-allocated]').evaluateAll((els) => els.map((e) => [e.dataset.allocated, e.closest('.row').dataset.container, e.textContent])), [
       ['atlas', 'frontend', '48.0 GiB allocated to VM'], ['harbor', 'harbor-devbox', '8.0 GiB allocated to VM'],
-      ['quill', 'quill-devbox', '8.0 GiB allocated to VM'], ['lantern', 'lantern-devbox', '16.0 GiB allocated to VM'],
+      ['lantern', 'lantern-devbox', '16.0 GiB allocated to VM'], ['quill', 'quill-devbox', '8.0 GiB allocated to VM'],
     ]);
     assert.equal(await page.locator('[data-allocated="harbor"]').getAttribute('title'), 'harbor is allocated 8.0 GiB of memory');
     // Under the allocation, what the guest needs: on the line a second container leaves (harbor's app),
     // or on one of its own under a lone one (atlas's frontend, quill's devbox, and so on).
     assert.deepEqual(await page.locator('[data-inside]').evaluateAll((els) => els.map((e) => [e.dataset.inside, e.closest('.row').dataset.container ?? null])), [
-      ['atlas', null], ['harbor', 'app'], ['quill', null], ['lantern', null],
+      ['atlas', null], ['harbor', 'app'], ['lantern', null], ['quill', null],
     ]);
     assert.match(await page.locator('[data-inside="harbor"]').innerText(), /^[\d.]+ GiB needed inside$/);
     assert.match(await page.locator('[data-inside="harbor"]').getAttribute('title'), /^harbor's processes and kernel need [\d.]+ GiB\. The rest of the [\d.]+ GiB it holds/);

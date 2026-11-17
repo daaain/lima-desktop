@@ -134,10 +134,14 @@
     // Stopped, a VM still has its disk image: the one reading the backend gives for it.
     if (inst.status !== 'Running') return { instance: inst, latest: o.imageGiB ? { host_disk_alloc: o.imageGiB * GiB } : {}, containers: [] };
     const mem = inst.memory - 0.25 * GiB;
+    const needed = scaled(shape.mem, mem);
+    // On vz the host holds what the guest needs and part of the rest: the guest's file cache, and
+    // what it has used and freed, which the host never gets back. `share` of the rest.
+    const holds = (share) => (t, e) => needed(t, e) + share * (mem - needed(t, e));
     const id = entity({
       cpu_mc: scaled(shape.cpu, inst.cpus * 1000),
-      mem_used: scaled(shape.mem, mem),
-      mem_avail: (t, e) => mem - scaled(shape.mem, mem)(t, e),
+      mem_used: needed,
+      mem_avail: (t, e) => mem - needed(t, e),
       mem_total: mem,
       swap_used: 0,
       psi_mem_some: scaled(shape.psiMem ?? shapes.flat(0, 0), 1000),
@@ -148,9 +152,9 @@
       disk_size: inst.disk - 0.1 * GiB,
       store_used: scaled(shape.disk, inst.disk),
       store_size: inst.disk - 0.1 * GiB,
-      host_rss: scaled(shape.hostRss ?? shape.mem, mem * 0.9),
+      host_rss: holds(0.4),
       // Its share of the memory in use: its compressed memory at the size the compressor keeps it in.
-      host_mem: scaled(shape.hostRss ?? shape.mem, mem * 0.9 * 0.8),
+      host_mem: holds(0.25),
       host_cpu_mc: scaled(shape.cpu, inst.cpus * 1100),
       host_disk_alloc: scaled(shape.disk, inst.disk * 1.05),
     }, o.silent);
@@ -212,10 +216,10 @@
         marker: marker({ state: 'active', manager: 'foldyard', group: 'quill', hint: 'Use `fy` to stop or delete it.', locked: ['stop', 'delete', 'resize'], source: 'file' }),
       }),
       // On this computer, a little more than its guest uses: its devbox, measured inside, is part of it.
-      { cpu: shapes.bursty(0.01, 0.2, 0.08), mem: shapes.flat(0.3, 0.02), hostRss: shapes.flat(0.36, 0.02), disk: shapes.filling(0.48, 0.83, NOW) },
+      { cpu: shapes.bursty(0.01, 0.2, 0.08), mem: shapes.flat(0.3, 0.02), disk: shapes.filling(0.48, 0.83, NOW) },
       [container('quill-devbox', local('quill-devbox-packages'), { memMiB: 2300, own: 0.3, upHours: 15, cpu: shapes.flat(0.002, 0.001) }), container('wasm-build', local('wasm-builder'), { state: 'exited' })],
     ),
-    vm(instance('lantern', 'Running', 8, 16, 60), { cpu: shapes.flat(0.006, 0.004), mem: shapes.flat(0.06, 0.004), hostRss: shapes.flat(0.085, 0.004), disk: shapes.flat(0.14, 0) }, [
+    vm(instance('lantern', 'Running', 8, 16, 60), { cpu: shapes.flat(0.006, 0.004), mem: shapes.flat(0.06, 0.004), disk: shapes.flat(0.14, 0) }, [
       // Idle as its VM is: a container never uses more than the VM it's in.
       container('lantern-devbox', local('lantern-devbox-packages'), { memMiB: 895, own: 0.3, upHours: 15, cpu: shapes.flat(0.002, 0.001) }),
     ]),

@@ -148,7 +148,7 @@
     {/each}
   </div>
   <p class="note">
-    Memory: full width is the container's own limit, else its VM's memory; dark is now, pale the peak since it started, the tick the peak in {theLast(range.key)}.
+    Memory: full width is the container's own limit, else its VM's memory; dark is now, darkest the part its processes hold themselves (the rest is cache the VM can reclaim), pale the peak since it started, the tick the peak in {theLast(range.key)}.
     Above it, its VM over {theLast(range.key)}: the VM's memory in use, soft, and this container's part of it in front; hover to read a moment.
     CPU bars are scaled to the cores of the container's VM, with {theLast(range.key)} above; hover for how long was spent at each level.
   </p>
