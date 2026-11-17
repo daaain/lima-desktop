@@ -67,12 +67,17 @@
         <div class="self num">
           <p class="serif">{self.sentence}</p>
           <p class="muted">{self.figures}</p>
-          <Bar pct={self.pct} behind={self.behind} tick={self.tick} hot={self.hot} label={self.label} />
+          {#if self.ownSaid}<p class="muted">{self.ownSaid}</p>{/if}
+          <Bar pct={self.pct} behind={self.behind} own={self.own} tick={self.tick} hot={self.hot} label={self.label} />
         </div>
       {/if}
       <div class="charts">
         <Chart title="Memory" data={series} format={(v) => bytes(v)} ceiling={limit} markers={oomMarkers}
-          lines={[{ key: 'mem', label: 'used', color: '--series-1' }, { key: 'mem_peak', label: 'peak (cgroup)', color: '--series-2' }]} />
+          lines={[
+            { key: 'mem', label: 'used', color: '--series-1' },
+            { key: 'mem_own', label: "processes' own", color: '--series-3' },
+            { key: 'mem_peak', label: 'peak (cgroup)', color: '--series-2' },
+          ]} />
         <Chart title="CPU" data={series} format={cpuLabel}
           lines={[{ key: 'cpu_mc', label: 'cpu', color: '--series-3' }]} />
         <Chart title="Network" data={series} format={(v) => `${bytes(v)}/s`}

@@ -23,7 +23,8 @@
 
   const t = $derived(projectTotals(containers));
   // No limit of its own, so measured against the VM, its peak the sum's in the range.
-  const memory = $derived(rowMemory({ mem: t.mem }, { vmMemory, over: range.key, history: band(history, 'mem'), startedAt: null }));
+  // The processes' own memory too, where every running line has it, so its darker part adds up theirs.
+  const memory = $derived(rowMemory({ mem: t.mem, ...(t.own == null ? {} : { mem_own: t.own }) }, { vmMemory, over: range.key, history: band(history, 'mem'), startedAt: null }));
 </script>
 
 <div class="project num" role="group" aria-label={`Compose project ${project}`}>
@@ -33,7 +34,7 @@
   </div>
   <div class="drawn">
     <MemoryShare me={band(history, 'mem')} vm={band(vmHistory, 'mem_used')} ts={history?.ts ?? vmHistory?.ts} {vmMemory} who="this project" />
-    <Bar pct={memory.pct} tick={memory.tick} label={memory.label} />
+    <Bar pct={memory.pct} own={memory.own} tick={memory.tick} label={memory.label} />
   </div>
   <div class="said">
     <strong>{bytes(t.mem)} <span class="label">of VM</span></strong>
