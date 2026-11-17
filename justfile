@@ -156,11 +156,21 @@ release version_or_bump:
     git fetch -q origin main
     [ "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)" ] \
       || { echo "main isn't origin/main: git pull --ff-only (or push) first." >&2; exit 1; }
+    # The README's menu bar pictures are committed, and only a Mac can draw them (CoreText): redrawn
+    # here so a release never ships with last release's popover. The page screenshots need nothing:
+    # CI redraws them after each merge (screenshots.yml). A redraw of an unchanged popover is
+    # byte-identical, so it adds nothing to the commit.
+    if [ "$(uname)" = Darwin ]; then
+      just readme-menubar
+    else
+      echo "Not on a Mac: the README's menu bar pictures (docs/img) aren't redrawn. Run just readme-menubar on one if the popover changed." >&2
+    fi
     # Checks everything before writing anything; given the version the files already say (with its
-    # CHANGELOG section and nothing in .changes/), it changes nothing, and this only tags.
-    version=$(node tools/changes.mjs prepare "{{version_or_bump}}" "$(date +%F)")
+    # CHANGELOG section and nothing in .changes/), it changes nothing, and this only tags. Refused,
+    # it leaves the pictures as they were, so the tree is as clean as it was found.
+    version=$(node tools/changes.mjs prepare "{{version_or_bump}}" "$(date +%F)") || { git checkout -q -- docs/img; exit 1; }
     if [ -n "$(git status --porcelain)" ]; then
-      git add -A -- package.json src-tauri/tauri.conf.json src-tauri/Cargo.toml src-tauri/Cargo.lock CHANGELOG.md .changes
+      git add -A -- package.json src-tauri/tauri.conf.json src-tauri/Cargo.toml src-tauri/Cargo.lock CHANGELOG.md .changes docs/img
       git diff --cached --stat
       git commit -qm "Release v$version"
     fi
