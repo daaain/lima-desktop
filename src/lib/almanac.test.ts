@@ -339,11 +339,11 @@ describe("a container's memory", () => {
     it('leaves out when it started if that is unknown', () => {
       expect(rowMemory(restarted, { vmMemory: VM, over: '24h', history: b([GiB]), startedAt: null, now: NOW }).label).toMatch(/300\.5 MiB since it started;/);
     });
-    it("draws the processes' own memory inside it, and says the rest is what the VM can reclaim", () => {
+    it("draws the processes' own memory inside it, and says what the rest is", () => {
       const m = rowMemory({ mem: 6.7 * GiB, mem_own: 2 * GiB }, { vmMemory: VM, over: '30d', history: b([16 * GiB]), startedAt: started, now: NOW });
       expect(m.own).toBeCloseTo(4.26, 2);
       expect(m.label).toBe(
-        "Memory 6.7 GiB now, 2.0 GiB of it the processes' own memory, the rest file cache and kernel memory the VM can reclaim; peak 16.0 GiB in the last 30 days; full width is the VM's 46.9 GiB",
+        "Memory 6.7 GiB now, 2.0 GiB of it the processes' own memory, the rest file cache and kernel memory, most of which the VM can reclaim; peak 16.0 GiB in the last 30 days; full width is the VM's 46.9 GiB",
       );
     });
     it("is drawn and said as before without a reading of the processes' own memory", () => {
@@ -420,7 +420,7 @@ describe("a container's memory", () => {
     });
     it("says what of it is the processes' own memory, and draws it inside the bar", () => {
       const m = selfMemory({ ...now, mem_own: 100 * MiB }, { over: '24h', range: b([300 * MiB]), startedAt: started, now: NOW })!;
-      expect(m.ownSaid).toBe("100.0 MiB of the 242.2 MiB is the processes' own memory; the rest is file cache and kernel memory the VM can reclaim.");
+      expect(m.ownSaid).toBe("100.0 MiB of the 242.2 MiB is the processes' own memory; the rest is file cache and kernel memory, most of which the VM can reclaim.");
       expect(m.own).toBeCloseTo(33.3, 1);
       expect(m.label).toBe(
         "242.2 MiB now, 100.0 MiB of it the processes' own memory · peak 300.0 MiB in the last 24 h, 300.5 MiB since it started 3 min ago; full width is its peak in the last 24 h",

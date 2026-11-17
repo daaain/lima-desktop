@@ -88,8 +88,11 @@ export function projectTotals(cs: readonly ContainerLive[]) {
   const up = cs.filter((c) => c.state === 'running');
   const sum = (key: (c: ContainerLive) => number | undefined) => up.reduce((n, c) => n + (key(c) ?? 0), 0);
   // The processes' own memory only where every running line has it: a sum missing some would
-  // understate it, and with none running there is nothing to say it of.
-  const own = up.length > 0 && up.every((c) => c.latest.mem_own != null) ? sum((c) => c.latest.mem_own) : undefined;
+  // understate it, and with none running there is nothing to say it of. Each line's part no more
+  // than its own figure, as its row draws it (the two are read a moment apart), so the heading's
+  // adds up its rows'.
+  const own =
+    up.length > 0 && up.every((c) => c.latest.mem_own != null) ? sum((c) => Math.min(c.latest.mem_own!, mem(c) ?? 0)) : undefined;
   return { mem: sum(mem), cpu: sum(cpu), own, running: up.length, exited: cs.length - up.length };
 }
 

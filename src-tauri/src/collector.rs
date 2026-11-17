@@ -178,6 +178,8 @@ struct VmState {
     live: VmLive,
     /// container id → its cgroup's readings, from the probe's `G` lines.
     cgroups: HashMap<String, Cgroup>,
+    /// When the probe's last block came, with `cgroups`: past `cgroups_fresh` they're not used.
+    cgroups_at: Option<Instant>,
     oom_pending: Vec<PendingKill>,
     oom_wake: Arc<Notify>,
     stall: Watch,
@@ -353,6 +355,7 @@ impl Collector {
                     containers: Vec::new(),
                 },
                 cgroups: HashMap::new(),
+                cgroups_at: None,
                 oom_pending: Vec::new(),
                 oom_wake: Arc::new(Notify::new()),
                 stall: Watch::default(),
@@ -532,6 +535,7 @@ impl Collector {
                     v.live.latest = named(VM_METRICS, &row);
                     v.live.probe_error = None;
                     v.cgroups = cgroups;
+                    v.cgroups_at = Some(Instant::now());
                     queue_kills(v, ts, kills);
                     let reading = reading(&v.live.latest);
                     let change = v.stall.block(Instant::now(), ts, uptime, reading);
@@ -692,6 +696,7 @@ impl Collector {
             // Each compose project's running containers added up on this tick: its own series keeps
             // what they used at one moment, which their minute rollups can't (Store::compose_series).
             let mut rows: Vec<(String, Vec<i64>)> = Vec::new();
+            let fresh = cgroups_fresh(vm.cgroups_at, now, secs);
             for s in &stats {
                 let Some(c) = vm
                     .live
@@ -701,7 +706,8 @@ impl Collector {
                 else {
                     continue;
                 };
-                let row = container_row(prev.get(&s.id), now, s, vm.cgroups.get(&s.id));
+                let cgroup = vm.cgroups.get(&s.id).filter(|_| fresh);
+                let row = container_row(prev.get(&s.id), now, s, cgroup);
                 if let Some(id) = c.entity {
                     self.store().ingest(id, ts, row.clone());
                 }
@@ -1049,6 +1055,14 @@ pub fn container_row(
     ]
 }
 
+/// Whether the probe's cgroup readings, from its block at `at`, still stand at `now`: within three
+/// of its intervals (at least 5 s). A probe that has stopped, or stalled, would otherwise have its
+/// last readings stored again with every stats tick, as if they were new.
+fn cgroups_fresh(at: Option<Instant>, now: Instant, interval_secs: u64) -> bool {
+    let within = Duration::from_secs((3 * interval_secs).max(5));
+    at.is_some_and(|at| now.saturating_duration_since(at) <= within)
+}
+
 /// Each compose project's containers' rows added up, column by column. The processes' own memory
 /// only where every one of them has it: a container recreated a moment ago has none until the probe
 /// finds its cgroup (up to ~5 s), and part of a sum would read as the project's dropping. The live
@@ -1080,7 +1094,22 @@ fn project_sums<P: Into<String>>(
 
 #[cfg(test)]
 mod tests {
-    use super::{ABSENT, CT_METRICS, project_sums};
+    use super::{ABSENT, CT_METRICS, cgroups_fresh, project_sums};
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn a_probe_s_cgroup_readings_go_stale_when_its_blocks_stop() {
+        let at = Instant::now();
+        let s = Duration::from_secs;
+        // Every second: three missed blocks.
+        assert!(cgroups_fresh(Some(at), at + s(4), 1));
+        assert!(!cgroups_fresh(Some(at), at + s(6), 1));
+        // Every 10 s: three intervals.
+        assert!(cgroups_fresh(Some(at), at + s(29), 10));
+        assert!(!cgroups_fresh(Some(at), at + s(31), 10));
+        // None read yet.
+        assert!(!cgroups_fresh(None, at, 1));
+    }
 
     #[test]
     fn a_project_s_processes_own_memory_is_summed_only_when_every_container_has_it() {

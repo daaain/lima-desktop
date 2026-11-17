@@ -140,6 +140,10 @@ describe('projectTotals', () => {
     expect(projectTotals([own(40), own(20), container({ state: 'exited' })]).own).toBe(60);
     expect(projectTotals([own(40), own()]).own).toBeUndefined();
     expect(projectTotals([container({ state: 'exited' })]).own).toBeUndefined();
+    // Each line's part no more than its figure, as its row draws it (read a moment apart), so the
+    // heading's adds up its rows'.
+    const at = (mem: number, mem_own: number) => container({ latest: { mem, mem_own } });
+    expect(projectTotals([at(100, 200), at(100, 0)]).own).toBe(100);
   });
 });
 

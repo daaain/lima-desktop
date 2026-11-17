@@ -334,13 +334,17 @@ export function insideAside(tab: Tab, l: Layer, listed: number): string {
 }
 
 /**
- * Why what the guest needs is less than what the VM holds, pointed at; or, where macOS has compressed
- * enough of it that its share (which counts that at its compressed size) is the smaller, why it's more.
+ * Why what the guest needs is less than what the VM holds, pointed at; or, where its share is the
+ * smaller, what the share counts, without saying which is the cause: compressed memory at its
+ * compressed size, or the share shrunk where the VMs were read as more than the computer's use.
  */
 export function insideTip(l: Layer): string {
   const need = `${l.name}'s processes and kernel need ${amount('mem', l.inside)}`;
   if (l.now != null && l.inside != null && l.inside > l.now) {
-    return `${need}: more than its ${amount('mem', l.now)} share of this computer's memory in use, as macOS has compressed part of it.`;
+    return (
+      `${need}: more than its ${amount('mem', l.now)} share of this computer's memory in use, which counts what macOS has compressed at ` +
+      `the size it keeps it in, and is read a moment apart from the guest.`
+    );
   }
   return (
     `${need}. The rest of the ${amount('mem', l.now)} it holds on this computer is the guest's file cache, and memory it has used and ` +

@@ -238,7 +238,7 @@ const ownOf = (mem: number, own: number | undefined) => (own == null ? undefined
 /** "1.2 GiB now", and what of it is the processes' own where that is known. */
 const nowSaid = (mem: number, own: number | undefined) =>
   own == null ? `${bytes(mem)} now` : `${bytes(mem)} now, ${bytes(own)} of it the processes' own memory`;
-const REST = 'file cache and kernel memory the VM can reclaim';
+const REST = 'file cache and kernel memory, most of which the VM can reclaim';
 
 export interface RowMemory {
   /** Bytes at full width: its limit, else the VM's memory. */

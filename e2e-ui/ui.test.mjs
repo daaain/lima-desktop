@@ -1078,7 +1078,7 @@ test("A container's memory is drawn against its VM or its own limit, its peak fr
   await page.waitForFunction(() => /in 24 h/.test(document.body.innerText));
   assert.match(await memory('warehouse').innerText(), /^\d+\.\d MiB of VM\npeak 1[78]\.\d GiB in 24 h$/);
   const bar = await line('warehouse').locator('.bar').first().getAttribute('aria-label');
-  assert.match(bar, /^Memory \d+\.\d MiB now, \d+\.\d MiB of it the processes' own memory, the rest file cache and kernel memory the VM can reclaim; peak 1[78]\.\d GiB in the last 24 h, 300\.0 MiB since it started 3 min ago; full width is the VM's 48\.0 GiB$/);
+  assert.match(bar, /^Memory \d+\.\d MiB now, \d+\.\d MiB of it the processes' own memory, the rest file cache and kernel memory, most of which the VM can reclaim; peak 1[78]\.\d GiB in the last 24 h, 300\.0 MiB since it started 3 min ago; full width is the VM's 48\.0 GiB$/);
   // The figure is podman's; the bar's strongest part, inside it, is the processes' own memory.
   const [fill, own] = await Promise.all(['.fill', '.own'].map((s) => line('warehouse').locator(`.bar ${s}`).first().evaluate((el) => el.getBoundingClientRect().width)));
   assert.ok(own > 0 && own < fill, `the processes' own ${own}px inside the figure's ${fill}px`);
@@ -1096,7 +1096,7 @@ test("A container's memory is drawn against its VM or its own limit, its peak fr
   await line('warehouse').click();
   const self = page.locator('section.detail .self');
   await self.waitFor();
-  assert.match(await self.innerText(), /^It uses less than a quarter of its peak in the last 24 h\.\n+\d+\.\d MiB now · peak 1[78]\.\d GiB in the last 24 h, 300\.0 MiB since it started 3 min ago\n+\d+\.\d MiB of the \d+\.\d MiB is the processes' own memory; the rest is file cache and kernel memory the VM can reclaim\.$/);
+  assert.match(await self.innerText(), /^It uses less than a quarter of its peak in the last 24 h\.\n+\d+\.\d MiB now · peak 1[78]\.\d GiB in the last 24 h, 300\.0 MiB since it started 3 min ago\n+\d+\.\d MiB of the \d+\.\d MiB is the processes' own memory; the rest is file cache and kernel memory, most of which the VM can reclaim\.$/);
   assert.deepEqual(errors, []);
   await close();
 });

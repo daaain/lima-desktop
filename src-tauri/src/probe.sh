@@ -53,13 +53,17 @@ while :; do
     fi
     own=-
     if [ -r "$s/memory.stat" ]; then
-      # anon is its first line, shmem a few after it: stop at shmem, not at the end of the file.
+      # Both near the top (anon first, as a rule, but the kernel doesn't promise the order): stop
+      # once both are read, not at the end of the file.
       an=
+      sh=
       while read -r k v; do
         case $k in
           anon) an=$v ;;
-          shmem) [ -n "$an" ] && own=$((an + v)); break ;;
+          shmem) sh=$v ;;
+          *) continue ;;
         esac
+        if [ -n "$an" ] && [ -n "$sh" ]; then own=$((an + sh)); break; fi
       done < "$s/memory.stat"
     fi
     echo "G $id $pk $ok $own"

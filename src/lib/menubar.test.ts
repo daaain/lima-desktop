@@ -297,10 +297,15 @@ describe("the legend's figures", () => {
       "harbor's processes and kernel need 7.5 GiB. The rest of the 40.9 GiB it holds on this computer is the guest's file cache, and memory " +
         "it has used and freed: the guest could drop it, but this computer doesn't get it back while the VM runs. Restarting the VM does.",
     );
-    // Its share counts what macOS has compressed at its compressed size, so it can be the smaller.
-    expect(insideTip(layer({ name: 'atlas', now: 28.9 * GiB, inside: 40.1 * GiB }))).toBe(
-      "atlas's processes and kernel need 40.1 GiB: more than its 28.9 GiB share of this computer's memory in use, as macOS has compressed part of it.",
-    );
+    // Its share can be the smaller: it counts compressed memory at its compressed size, and it's shrunk
+    // where the VMs are read as more than the computer's use. Neither is said to be the cause.
+    const smaller =
+      "atlas's processes and kernel need 40.1 GiB: more than its 28.9 GiB share of this computer's memory in use, which counts what " +
+      'macOS has compressed at the size it keeps it in, and is read a moment apart from the guest.';
+    expect(insideTip(layer({ name: 'atlas', now: 28.9 * GiB, inside: 40.1 * GiB }))).toBe(smaller);
+    // Shrunk to fit the computer's use, read a moment before them.
+    const shrunk = shares(snap([running('atlas', { host_mem: 43 * GiB, mem_used: 40.1 * GiB })], { mem_used: 28.9 * GiB, mem_total: 64 * GiB }), 'mem');
+    expect(insideTip(layers(shrunk, null, 'mem')[0])).toBe(smaller);
   });
   it('says whose allocation it is, pointed at', () => {
     expect(allocatedTip('mem', layer({ name: 'harbor', allocated: 8 * GiB }))).toBe('harbor is allocated 8.0 GiB of memory');
