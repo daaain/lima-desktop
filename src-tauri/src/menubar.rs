@@ -1,7 +1,8 @@
 //! The menu bar: up to three items (memory, CPU, disk), each the whole computer's use as a figure,
-//! drawn — a trace of the last few measurements, or an upright bar — with the VMs' part solid on
-//! top of everything else, pale. Clicking one opens the popover (the UI's `/menubar` page, in a small
-//! borderless window under it) on that resource; its menu (right click) opens the app or quits.
+//! drawn — a trace of the last few measurements, or an upright bar — with the VMs' part pale at
+//! the bottom and everything else solid above it, its top edge the whole. Clicking one opens the
+//! popover (the UI's `/menubar` page, in a small borderless window under it) on that resource; its
+//! menu (right click) opens the app or quits.
 //! With all three off the app's own icon stays, as the way back in when the window is closed.
 //!
 //! On macOS each item is one image, its figure and name set in it beside the drawing (`typeset`),
@@ -279,16 +280,15 @@ impl Mask {
         self.fill(x0, x0 + FRAME, 0, h, SOLID);
         self.fill(x1 - FRAME, x1, 0, h, SOLID);
     }
-    /// A column inside the frame, from the bottom: everything else pale, the VMs solid on top, so
-    /// the solid's top edge is the whole.
+    /// A column inside the frame, from the bottom: the VMs pale, the rest of the whole solid above
+    /// them, so its top edge (the whole) stands out, VMs or none.
     fn column(&mut self, x0: u32, x1: u32, s: Share) {
         let inside = self.height - 2 * FRAME;
         let bottom = self.height - FRAME;
         let px = |f: f32| (f.clamp(0.0, 1.0) * inside as f32).round() as u32;
         let (whole, vms) = (px(s.whole), px(s.vms).min(px(s.whole)));
-        let rest = whole - vms;
-        self.fill(x0, x1, bottom - rest, bottom, PALE);
-        self.fill(x0, x1, bottom - whole, bottom - rest, SOLID);
+        self.fill(x0, x1, bottom - whole, bottom - vms, SOLID);
+        self.fill(x0, x1, bottom - vms, bottom, PALE);
     }
     /// The last [`COLUMNS`] measurements from `x`, oldest first, the newest at the right; columns
     /// touch.
@@ -1303,21 +1303,30 @@ mod tests {
     }
 
     #[test]
-    fn a_trace_draws_the_vms_solid_over_everything_else_pale_newest_at_the_right() {
-        let i = trace(&[used(0.5, 0.25)]);
+    fn a_trace_draws_the_vms_pale_under_everything_else_solid_newest_at_the_right() {
+        // Inside, 32 px: the whole 16, the VMs 4 of them.
+        let i = trace(&[used(0.5, 0.125)]);
         assert_eq!((i.width, i.height, i.rgba.len()), (48, 36, 48 * 36 * 4));
         let x = i.width - FRAME - 1; // the newest column
-        let top = H - FRAME - (H - 2 * FRAME) / 2; // the whole, half the inside
-        assert_eq!(px(&i, x, H - FRAME - 1), [0, 0, 0, PALE]); // everything else, at the bottom
-        assert_eq!(px(&i, x, top), [0, 0, 0, SOLID]); // VMs, above it, up to the whole
-        assert_eq!(px(&i, x, top - 1), [0, 0, 0, 0]); // free
-        assert_eq!(px(&i, FRAME, H - FRAME - 1), [0, 0, 0, 0]); // no older measurement yet
+        let bottom = H - FRAME;
+        assert_eq!(px(&i, x, bottom - 1), [0, 0, 0, PALE]); // VMs, at the bottom
+        assert_eq!(px(&i, x, bottom - 5), [0, 0, 0, SOLID]); // everything else, above them
+        assert_eq!(px(&i, x, bottom - 16), [0, 0, 0, SOLID]); // up to the whole
+        assert_eq!(px(&i, x, bottom - 17), [0, 0, 0, 0]); // free
+        assert_eq!(px(&i, FRAME, bottom - 1), [0, 0, 0, 0]); // no older measurement yet
         assert_eq!(px(&i, 0, 0)[3], SOLID); // the frame
     }
 
     #[test]
+    fn with_no_vms_running_the_whole_is_solid() {
+        let i = trace(&[used(0.5, 0.0)]);
+        let x = i.width - FRAME - 1;
+        assert_eq!(px(&i, x, H - FRAME - 1)[3], SOLID);
+    }
+
+    #[test]
     fn columns_touch_with_no_gap() {
-        let full = used(1.0, 1.0);
+        let full = used(1.0, 0.0);
         let i = trace(&[full; COLUMNS]);
         let y = H / 2;
         assert!((FRAME..i.width - FRAME).all(|x| px(&i, x, y)[3] == SOLID));
@@ -1378,7 +1387,7 @@ mod tests {
 
     #[test]
     fn a_bar_is_notched_at_quarters() {
-        let i = bar(used(1.0, 1.0));
+        let i = bar(used(1.0, 0.0));
         assert_eq!(i.width, BAR_WIDTH);
         let inside = H - 2 * FRAME;
         let notch = H - FRAME - inside / 2;

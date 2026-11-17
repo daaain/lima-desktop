@@ -181,8 +181,9 @@ export interface MenuBarItem {
 
 /**
  * The menu bar's items (settings::MenuBar): one per resource, each the whole computer's use as a figure,
- * the VMs' part drawn solid and everything else pale. With all three off, the app's own icon stays as the
- * way back in. `names` puts "mem", "cpu", "disk" small under each figure, or on its side beside a drawing alone.
+ * the VMs' part drawn pale at the bottom and everything else solid above it. With all three off, the app's
+ * own icon stays as the way back in. `names` puts "mem", "cpu", "disk" small under each figure, or on its
+ * side beside a drawing alone.
  */
 export interface MenuBar {
   memory: MenuBarItem;
