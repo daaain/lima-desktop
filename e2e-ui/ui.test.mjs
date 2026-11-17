@@ -1082,6 +1082,10 @@ test("A container's memory is drawn against its VM or its own limit, its peak fr
   // The figure is podman's; the bar's strongest part, inside it, is the processes' own memory.
   const [fill, own] = await Promise.all(['.fill', '.own'].map((s) => line('warehouse').locator(`.bar ${s}`).first().evaluate((el) => el.getBoundingClientRect().width)));
   assert.ok(own > 0 && own < fill, `the processes' own ${own}px inside the figure's ${fill}px`);
+  // Where it ends inside the figure, a notch like the quarters' parts it from the rest: in dark mode the
+  // two are close in lightness.
+  const [ownBox, cut] = await Promise.all(['.own', '.notch.cut'].map((s) => line('warehouse').locator(`.bar ${s}`).first().boundingBox()));
+  assert.ok(Math.abs(cut.x + cut.width / 2 - (ownBox.x + ownBox.width)) < 1, `the notch at ${cut.x}px, the processes' own ending at ${ownBox.x + ownBox.width}px`);
   // harbor's app has a limit of its own: its bar is that wide, and it's past three quarters of it.
   assert.match(await memory('app').innerText(), /^\d+\.\d MiB of 1\.0 GiB limit\npeak \d+\.\d MiB in 24 h$/);
   assert.match(await line('app').locator('.bar').first().getAttribute('aria-label'), /full width is its 1\.0 GiB limit$/);

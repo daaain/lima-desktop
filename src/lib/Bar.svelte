@@ -20,6 +20,9 @@
   <span class="fill" class:some={pct > 0} class:split={own != null} style:width={`${clamp(pct)}%`}></span>
   {#if own != null}<span class="own" style:width={`${clamp(Math.min(own, pct))}%`}></span>{/if}
   <span class="notch" style:left="25%"></span><span class="notch" style:left="50%"></span><span class="notch" style:left="75%"></span>
+  <!-- Where the strongest part ends inside the fill, a notch like the quarters' parts it from the rest:
+       in dark mode the two are close in lightness (near-white on light grey). -->
+  {#if own != null && own > 0 && own < pct}<span class="notch cut" style:left={`${clamp(own)}%`}></span>{/if}
   {#if tick != null}<span class="tick" style:left={`${clamp(tick)}%`}></span>{/if}
 </div>
 
