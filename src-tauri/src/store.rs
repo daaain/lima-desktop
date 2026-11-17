@@ -285,6 +285,8 @@ pub struct Store {
     rollup: HashMap<(i64, i64), Chunk>,
     dirty_raw: HashSet<(i64, i64)>,
     seen: HashMap<i64, i64>,
+    /// A sighting with no row to write it with: see [`Store::saw`].
+    seen_pending: bool,
 }
 
 /// A series answer shaped for a chart: one timestamp axis, per metric min/max/avg arrays.
@@ -330,7 +332,8 @@ pub struct StackColumns {
     pub wired: Option<&'static str>,
     pub part: &'static str,
     pub before: Option<&'static str>,
-    /// A VM's part holds its nearest reading through its gaps: a disk image stays while its VM is
+    /// A VM's part holds its nearest reading through its gaps while the VM was there (from when it
+    /// was first seen to [`HELD_PAST`] after it was last): a disk image stays while its VM is
     /// stopped, and a stopped one's is saved once a minute, not at every tick.
     pub holds: bool,
 }
@@ -360,13 +363,19 @@ fn unmeasured_vms(vms: &[StackVm], n: usize) -> Vec<usize> {
     (0..n).filter(|&j| gap[j]).collect()
 }
 
-/// Each gap holds the reading before it, the first ones the first reading.
-fn hold(values: &mut [Option<i64>]) {
+/// How long after a VM was last seen its held part goes on: past the minute its newest saved
+/// reading stands for, and the moments before that's written.
+const HELD_PAST: i64 = MINUTE;
+
+/// Each gap holds the reading before it, the first ones the first reading, in the buckets (each
+/// starting at its `ts`, `width` wide) that overlap [`from`, `to`]; the rest are left empty.
+fn hold(values: &mut [Option<i64>], ts: &[i64], width: i64, from: i64, to: i64) {
     let mut last = values.iter().flatten().next().copied();
-    for v in values.iter_mut() {
+    for (v, &t) in values.iter_mut().zip(ts) {
         match v {
             Some(x) => last = Some(*x),
-            None => *v = last,
+            None if t + width > from && t <= to => *v = last,
+            None => {}
         }
     }
 }
@@ -496,6 +505,7 @@ impl Store {
             rollup: HashMap::new(),
             dirty_raw: HashSet::new(),
             seen: HashMap::new(),
+            seen_pending: false,
         })
     }
 
@@ -581,6 +591,14 @@ impl Store {
         self.seen.insert(entity, ts);
     }
 
+    /// `entity` was there at `ts`, though nothing was measured of it (a stopped VM between its
+    /// saved minutes): its `last_seen`, written with the next flush.
+    pub fn saw(&mut self, entity: i64, ts: i64) {
+        let last = self.seen.entry(entity).or_insert(ts);
+        *last = (*last).max(ts);
+        self.seen_pending = true;
+    }
+
     fn load(
         db: &Connection,
         table: &str,
@@ -614,7 +632,7 @@ impl Store {
 
     /// Write every touched chunk without evicting anything from memory.
     fn write_dirty(&mut self) -> rusqlite::Result<()> {
-        if self.dirty_raw.is_empty() {
+        if self.dirty_raw.is_empty() && !self.seen_pending {
             return Ok(());
         }
         let dirty: Vec<(i64, i64)> = self.dirty_raw.drain().collect();
@@ -668,6 +686,7 @@ impl Store {
             )?;
         }
         tx.commit()?;
+        self.seen_pending = false;
         Ok(())
     }
 
@@ -744,15 +763,16 @@ impl Store {
         let (mut used, mut total) = (band(&mut h, cols.used).avg, band(&mut h, cols.total).avg);
         let mut wired = cols.wired.map(|c| band(&mut h, c).avg);
         let at: HashMap<i64, usize> = h.ts.iter().enumerate().map(|(i, &t)| (t, i)).collect();
-        let vms: Vec<(i64, String)> = {
+        let vms: Vec<(i64, String, i64, i64)> = {
             let mut st = self.db.prepare(
-                "SELECT id, name FROM entity WHERE kind='vm' AND last_seen >= ?1 ORDER BY name",
+                "SELECT id, name, first_seen, last_seen FROM entity WHERE kind='vm' AND last_seen >= ?1
+                 ORDER BY name",
             )?;
-            st.query_map(params![from], |r| Ok((r.get(0)?, r.get(1)?)))?
+            st.query_map(params![from], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
                 .collect::<Result<_, _>>()?
         };
         let mut out = Vec::new();
-        for (id, name) in vms {
+        for (id, name, first_seen, last_seen) in vms {
             // On the computer's buckets, not ones of its own: each VM is measured at its own
             // moment, with ssh's jitter, so its own would be wider and skip some of the computer's.
             let (mut s, _) = self.bucketed(id, from, to, points, Some(width))?;
@@ -773,17 +793,17 @@ impl Store {
                     avg[j] = Some(v);
                 }
             }
+            if cols.holds {
+                hold(&mut avg, &h.ts, width, first_seen, last_seen + HELD_PAST);
+            }
             if avg.iter().any(Option::is_some) {
                 let peak = b.max.iter().flatten().copied().max();
                 out.push(StackVm { name, avg, peak });
             }
         }
-        if cols.holds {
-            for v in out.iter_mut() {
-                hold(&mut v.avg);
-            }
-        }
-        for j in unmeasured_vms(&out, h.ts.len()) {
+        // Where a part is held, a missing reading is filled, not a gap.
+        let unmeasured = if cols.holds { vec![] } else { unmeasured_vms(&out, h.ts.len()) };
+        for j in unmeasured {
             used[j] = None;
             total[j] = None;
             if let Some(w) = wired.as_mut() {
@@ -1882,6 +1902,48 @@ mod tests {
         assert!(st.vms[1].avg.iter().all(|v| v.is_some_and(|v| (20..=22).contains(&v))));
         assert_eq!(st.vms[1].peak, Some(22));
         assert!(s.stack("swap", t, t + MINUTE, 6).unwrap().ts.is_empty());
+    }
+
+    #[test]
+    fn a_disk_stack_holds_a_vm_only_while_it_was_there() {
+        let mut s = Store::in_memory().unwrap();
+        let t = 10 * MINUTE;
+        let host = s.entity(Kind::Host, "", "host", "this computer", 0).unwrap();
+        // Made a minute in; its image saved at the end of the next two; then deleted.
+        let vm = s.entity(Kind::Vm, "a", "a", "a", t + MINUTE).unwrap();
+        let col = |m: &str| HOST_METRICS.iter().position(|c| *c == m).unwrap();
+        let alloc = VM_METRICS.iter().position(|c| *c == "host_disk_alloc").unwrap();
+        for i in 0..300 {
+            let mut h = vec![ABSENT; HOST_METRICS.len()];
+            (h[col("disk_used")], h[col("disk_total")]) = (50, 100);
+            s.ingest(host, t + i * 1000, h);
+        }
+        for m in 1..3 {
+            let mut v = vec![ABSENT; VM_METRICS.len()];
+            v[alloc] = 19 + m;
+            s.ingest(vm, t + m * MINUTE + MINUTE - 1, v);
+        }
+        let st = s.stack("disk", t, t + 5 * MINUTE, 300).unwrap();
+        assert!(st.used.iter().all(Option::is_some));
+        let at = |ts: i64| st.ts.iter().rposition(|&b| b <= ts).unwrap();
+        let a = &st.vms[0].avg;
+        assert_eq!(a[at(t + 30_000)], None); // before it was there
+        assert_eq!(a[at(t + MINUTE + 10_000)], Some(20)); // there, its first reading still to come
+        assert_eq!(a[at(t + 3 * MINUTE + 30_000)], Some(21)); // just after it was last seen
+        assert_eq!(a[at(t + 4 * MINUTE + 30_000)], None); // long gone
+    }
+
+    #[test]
+    fn a_vm_seen_without_a_reading_is_seen_then() {
+        let mut s = Store::in_memory().unwrap();
+        let vm = s.entity(Kind::Vm, "a", "a", "a", 1_000).unwrap();
+        s.saw(vm, 5 * MINUTE);
+        s.flush(5 * MINUTE).unwrap();
+        let e = Store::entities(&s, None).unwrap();
+        assert_eq!(e[0].last_seen, 5 * MINUTE);
+        // Written, not only kept in memory.
+        let on_disk: i64 = s.db.query_row("SELECT last_seen FROM entity WHERE id=?1", [vm], |r| r.get(0)).unwrap();
+        assert_eq!(on_disk, 5 * MINUTE);
     }
 
     #[test]

@@ -219,8 +219,8 @@ export interface Layer {
 /**
  * The VMs in the order they're stacked (the largest now at the bottom, then those without a reading
  * now by their peak): the snapshot's, and any the range still holds (one stopped since, say).
- * A disk image stays while its VM is stopped, and older versions didn't save it, so on the disk tab a
- * VM's gaps hold its nearest reading, and one with no history at all is drawn at its size now.
+ * On the disk tab, the backend holds each VM's nearest reading through its gaps while it was there,
+ * and one with no history at all (saved before a stopped VM's image was) is drawn at its size now.
  */
 export function layers(s: Shares | null, stack: Stack | null | undefined, tab: Tab): Layer[] {
   const n = stack?.ts.length ?? 0;
@@ -239,18 +239,9 @@ export function layers(s: Shares | null, stack: Stack | null | undefined, tab: T
     if (!known) {
       l.values = tab === 'disk' && l.now != null ? new Array(n).fill(l.now) : new Array(n).fill(null);
       l.constant = tab === 'disk' && l.now != null;
-    } else if (tab === 'disk') {
-      l.values = held(l.values!);
     }
   }
   return out.sort((a, b) => largestFirst(a, b) || (b.peak ?? 0) - (a.peak ?? 0));
-}
-
-/** Each gap holds the reading before it, the first ones the first reading. */
-function held(values: (number | null)[]): (number | null)[] {
-  const first = values.find((v) => v != null) ?? null;
-  let last = first;
-  return values.map((v) => (v == null ? last : (last = v)));
 }
 
 /** The first and last readings of a layer's range. */

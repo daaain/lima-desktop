@@ -331,7 +331,16 @@ impl Collector {
         for inst in instances {
             let name = inst.name.clone();
             let running = inst.running();
-            let entity = self.store().entity(Kind::Vm, &name, &name, &name, now).ok();
+            // Seen now, measured or not: a stopped VM's disk image is saved only once a minute, and
+            // a chart holds it only while the VM was there.
+            let entity = {
+                let mut store = self.store();
+                let entity = store.entity(Kind::Vm, &name, &name, &name, now).ok();
+                if let Some(id) = entity {
+                    store.saw(id, now);
+                }
+                entity
+            };
             let state = vms.entry(name.clone()).or_insert_with(|| VmState {
                 live: VmLive {
                     instance: inst.clone(),
