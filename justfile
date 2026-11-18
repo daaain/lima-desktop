@@ -116,19 +116,22 @@ readme-menubar:
     pnpm build
     node tools/menubar-readme.mjs "$items" docs/img
 
-# Everything CI would run: type checks, all tests, clippy (the browser run is `just ui-e2e`)
+# Everything CI would run: type checks, formatting, all tests, clippy (the browser run is `just ui-e2e`)
 check:
     pnpm check
     pnpm exec prettier --check .
+    cd src-tauri && cargo fmt --check
     pnpm test
     node --test 'tools/*.test.mjs'
     cd src-tauri && cargo test
     cd src-tauri && cargo clippy --all-targets -- -D warnings
 
 # Format the Markdown: each paragraph and list item on one line, so an edit never rewraps the lines
-# around it (Prettier, Markdown only: .prettierrc.json, .prettierignore)
+# around it (Prettier, Markdown only: .prettierrc.json, .prettierignore); and the Rust (rustfmt:
+# src-tauri/rustfmt.toml)
 format:
     pnpm exec prettier --write .
+    cd src-tauri && cargo fmt
 
 # The quick subset: the UI's and the tools' unit tests, and the backend's tests
 test:
