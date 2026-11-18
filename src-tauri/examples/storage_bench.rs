@@ -17,10 +17,7 @@ impl Rng {
 }
 
 fn main() {
-    let minutes: i64 = std::env::args()
-        .nth(1)
-        .and_then(|a| a.parse().ok())
-        .unwrap_or(30);
+    let minutes: i64 = std::env::args().nth(1).and_then(|a| a.parse().ok()).unwrap_or(30);
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("bench.db");
     let mut s = Store::open(&path).unwrap();
@@ -28,22 +25,12 @@ fn main() {
     let t0 = 1_800_000_000_000i64;
     let mut vms = Vec::new();
     for i in 0..10 {
-        let id = s
-            .entity(Kind::Vm, &format!("vm{i}"), &format!("vm{i}"), "vm", t0)
-            .unwrap();
+        let id = s.entity(Kind::Vm, &format!("vm{i}"), &format!("vm{i}"), "vm", t0).unwrap();
         vms.push((id, rng.range(1, 6) << 30, rng.range(5, 40) << 30, [0i64; 3]));
     }
     let mut cts = Vec::new();
     for i in 0..100 {
-        let id = s
-            .entity(
-                Kind::Container,
-                &format!("vm{}", i % 10),
-                &format!("c{i}"),
-                "c",
-                t0,
-            )
-            .unwrap();
+        let id = s.entity(Kind::Container, &format!("vm{}", i % 10), &format!("c{i}"), "c", t0).unwrap();
         cts.push((id, rng.range(0, 9) < 6, rng.range(5, 800) << 20, 0i64));
     }
     let seconds = minutes * 60;
@@ -58,11 +45,7 @@ fn main() {
                 psi[k] = if busy { rng.range(0, lim) } else { 0 };
             }
             let mut v = vec![0i64; VM_METRICS.len()];
-            v[0] = if busy {
-                rng.range(200, 1800)
-            } else {
-                rng.range(0, 40)
-            };
+            v[0] = if busy { rng.range(200, 1800) } else { rng.range(0, 40) };
             v[1] = *mem;
             v[2] = (8 << 30) - *mem;
             v[3] = 8 << 30;
@@ -90,16 +73,8 @@ fn main() {
                 *mem = (*mem + rng.range(-200, 200) * 4096).max(1 << 20);
                 v[6] = rng.range(0, 200_000);
                 v[7] = rng.range(0, 50_000);
-                v[8] = if rng.range(0, 2) == 0 {
-                    4096 * rng.range(1, 64)
-                } else {
-                    0
-                };
-                v[9] = if rng.range(0, 1) == 0 {
-                    4096 * rng.range(1, 32)
-                } else {
-                    0
-                };
+                v[8] = if rng.range(0, 2) == 0 { 4096 * rng.range(1, 64) } else { 0 };
+                v[9] = if rng.range(0, 1) == 0 { 4096 * rng.range(1, 32) } else { 0 };
             }
             *peak = (*peak).max(*mem);
             v[1] = *mem;
@@ -125,8 +100,5 @@ fn main() {
     println!("→ a week at 1 Hz: {:.2} GB", week / 1e9);
     let t = std::time::Instant::now();
     let _ = s.series(vms[0].0, t0, t0 + seconds * 1000, 600).unwrap();
-    println!(
-        "series query over the whole span for one VM: {:.1?}",
-        t.elapsed()
-    );
+    println!("series query over the whole span for one VM: {:.1?}", t.elapsed());
 }

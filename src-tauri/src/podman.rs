@@ -130,11 +130,7 @@ impl From<RawContainer> for Container {
         Container {
             // podman sends Go's zero time (year 1, so negative) for a container never started.
             started_at: r.started_at.filter(|&t| t > 0),
-            name: r
-                .names
-                .first()
-                .cloned()
-                .unwrap_or_else(|| r.id.chars().take(12).collect()),
+            name: r.names.first().cloned().unwrap_or_else(|| r.id.chars().take(12).collect()),
             compose_project: compose_label(&labels, "project"),
             compose_service: compose_label(&labels, "service"),
             pod_name: Some(r.pod_name).filter(|p| !p.is_empty()),
@@ -207,7 +203,9 @@ struct RawGraphDriver {
 /// first). These line up with the history's steps that have a size.
 pub fn parse_layer_dirs(body: &[u8]) -> Result<Vec<String>, PodmanError> {
     let raw: RawInspect = serde_json::from_slice(body)?;
-    let driver = raw.graph_driver.ok_or_else(|| PodmanError::Unsupported("podman doesn't say where this image's layers are kept".into()))?;
+    let driver = raw
+        .graph_driver
+        .ok_or_else(|| PodmanError::Unsupported("podman doesn't say where this image's layers are kept".into()))?;
     if driver.name != "overlay" {
         return Err(PodmanError::Unsupported(format!(
             "this VM's podman keeps images with the {} driver: only overlay's layers can be looked into",
@@ -280,20 +278,12 @@ struct RawImage {
 /// container can run an image that lost its tag to a newer pull and is also the base of a local
 /// build; `podman images` hides it, and with it what the container keeps on disk.
 fn classified(raw: Vec<RawImage>) -> Vec<Image> {
-    let parents: std::collections::HashSet<String> =
-        raw.iter().map(|r| r.parent_id.clone()).collect();
+    let parents: std::collections::HashSet<String> = raw.iter().map(|r| r.parent_id.clone()).collect();
     raw.into_iter()
         .map(|r| {
-            let tagged = r
-                .repo_tags
-                .as_ref()
-                .is_some_and(|t| t.iter().any(|t| t != "<none>:<none>"));
-            let intermediate =
-                !tagged && r.containers.unwrap_or(0) == 0 && parents.contains(&r.id);
-            Image {
-                intermediate,
-                ..Image::from(r)
-            }
+            let tagged = r.repo_tags.as_ref().is_some_and(|t| t.iter().any(|t| t != "<none>:<none>"));
+            let intermediate = !tagged && r.containers.unwrap_or(0) == 0 && parents.contains(&r.id);
+            Image { intermediate, ..Image::from(r) }
         })
         .collect()
 }
@@ -303,12 +293,7 @@ impl From<RawImage> for Image {
         Image {
             id: r.id,
             // The Docker-compatible API spells "no tag" `<none>:<none>`; libpod sends null.
-            tags: r
-                .repo_tags
-                .unwrap_or_default()
-                .into_iter()
-                .filter(|t| t != "<none>:<none>")
-                .collect(),
+            tags: r.repo_tags.unwrap_or_default().into_iter().filter(|t| t != "<none>:<none>").collect(),
             created: r.created.unwrap_or(0),
             size: r.size.unwrap_or(0),
             containers: r.containers.unwrap_or(0),
@@ -343,12 +328,7 @@ struct RawVolume {
 
 impl From<RawVolume> for Volume {
     fn from(r: RawVolume) -> Self {
-        Volume {
-            name: r.name,
-            driver: r.driver,
-            mountpoint: r.mountpoint,
-            created_at: r.created_at,
-        }
+        Volume { name: r.name, driver: r.driver, mountpoint: r.mountpoint, created_at: r.created_at }
     }
 }
 
@@ -596,9 +576,7 @@ fn connectable(socket: &Path) -> std::io::Result<PathBuf> {
 
 impl Libpod {
     pub fn new(socket: impl AsRef<Path>) -> Self {
-        Libpod {
-            socket: socket.as_ref().to_path_buf(),
-        }
+        Libpod { socket: socket.as_ref().to_path_buf() }
     }
 
     async fn request(&self, method: Method, path: &str) -> Result<Bytes, PodmanError> {
@@ -606,8 +584,7 @@ impl Libpod {
             let connect_err = |e| PodmanError::Connect(self.socket.display().to_string(), e);
             let sock = connectable(&self.socket).map_err(connect_err)?;
             let stream = UnixStream::connect(&sock).await.map_err(connect_err)?;
-            let (mut sender, conn) =
-                hyper::client::conn::http1::handshake(TokioIo::new(stream)).await?;
+            let (mut sender, conn) = hyper::client::conn::http1::handshake(TokioIo::new(stream)).await?;
             tokio::spawn(async move {
                 let _ = conn.await;
             });
@@ -629,9 +606,7 @@ impl Libpod {
             }
             Ok(body)
         };
-        tokio::time::timeout(TIMEOUT, fut)
-            .await
-            .map_err(|_| PodmanError::Timeout)?
+        tokio::time::timeout(TIMEOUT, fut).await.map_err(|_| PodmanError::Timeout)?
     }
 
     /// A GET's raw body (under the libpod prefix): what the typed calls below decode.
@@ -682,8 +657,7 @@ impl Libpod {
     }
 
     pub async fn inspect(&self, id: &str) -> Result<serde_json::Value, PodmanError> {
-        self.get_json(&format!("/containers/{}/json", encode_component(id)))
-            .await
+        self.get_json(&format!("/containers/{}/json", encode_component(id))).await
     }
 
     /// The last `tail` lines, each starting with the RFC 3339 time podman recorded it at and a
@@ -708,11 +682,7 @@ impl Libpod {
 
     /// The steps that built an image, newest first.
     pub async fn history(&self, id: &str) -> Result<Vec<Layer>, PodmanError> {
-        parse_history(
-            &self
-                .get(&format!("/images/{}/history", encode_component(id)))
-                .await?,
-        )
+        parse_history(&self.get(&format!("/images/{}/history", encode_component(id))).await?)
     }
 
     /// Remove by `repository:tag` (untags; the image goes with its last tag) or by id (a dangling
@@ -775,11 +745,7 @@ pub fn parse_images(body: &[u8]) -> Result<Vec<Image>, PodmanError> {
 /// The body of `VOLUMES`, decoded.
 pub fn parse_volumes(body: &[u8]) -> Result<Vec<Volume>, PodmanError> {
     let raw: Option<Vec<RawVolume>> = serde_json::from_slice(body)?;
-    Ok(raw
-        .unwrap_or_default()
-        .into_iter()
-        .map(Volume::from)
-        .collect())
+    Ok(raw.unwrap_or_default().into_iter().map(Volume::from).collect())
 }
 
 #[cfg(test)]
@@ -926,10 +892,7 @@ mod tests {
         });
         let i: Image = serde_json::from_value::<RawImage>(row).unwrap().into();
         assert_eq!(i.id, "98d186b0759c");
-        assert_eq!(
-            i.tags,
-            ["localhost/shop_web:latest", "localhost/shop_worker:latest"]
-        );
+        assert_eq!(i.tags, ["localhost/shop_web:latest", "localhost/shop_worker:latest"]);
         assert_eq!(i.created, 1787529600);
         assert_eq!(i.size, 286402757);
         assert_eq!(i.containers, 2);
@@ -938,10 +901,7 @@ mod tests {
     #[test]
     fn a_dangling_image_has_no_tags() {
         // libpod sends `null` for a dangling image; the Docker-compatible API `<none>:<none>`.
-        for tags in [
-            serde_json::Value::Null,
-            serde_json::json!(["<none>:<none>"]),
-        ] {
+        for tags in [serde_json::Value::Null, serde_json::json!(["<none>:<none>"])] {
             let row = serde_json::json!({"Id": "7c7a710f0394", "RepoTags": tags, "Dangling": true});
             let i: Image = serde_json::from_value::<RawImage>(row).unwrap().into();
             assert!(i.tags.is_empty(), "{:?}", i.tags);
@@ -961,10 +921,8 @@ mod tests {
             {"Id": "step-in-use", "RepoTags": null, "ParentId": "", "Containers": 1},
             {"Id": "child", "RepoTags": ["localhost/x:1"], "ParentId": "step-in-use"}
         ]);
-        let flags: Vec<(String, bool)> = classified(serde_json::from_value(rows).unwrap())
-            .into_iter()
-            .map(|i| (i.id, i.intermediate))
-            .collect();
+        let flags: Vec<(String, bool)> =
+            classified(serde_json::from_value(rows).unwrap()).into_iter().map(|i| (i.id, i.intermediate)).collect();
         let expected = [
             ("base", false),
             ("step", true),
@@ -984,11 +942,8 @@ mod tests {
             {"Id": "built", "RepoTags": ["localhost/app:latest"], "ParentId": "base"},
             {"Id": "pulled", "RepoTags": ["docker.io/library/alpine:latest"]}
         ]);
-        let parents: Vec<Option<String>> = parse_images(rows.to_string().as_bytes())
-            .unwrap()
-            .into_iter()
-            .map(|i| i.parent)
-            .collect();
+        let parents: Vec<Option<String>> =
+            parse_images(rows.to_string().as_bytes()).unwrap().into_iter().map(|i| i.parent).collect();
         assert_eq!(parents, [None, Some("base".to_string()), None]);
     }
 
@@ -1026,9 +981,7 @@ mod tests {
         assert_eq!(p.reclaimed, 1024);
         assert_eq!(p.errors, ["c: image is in use by a container"]);
         let empty = Pruned::from(
-            serde_json::from_value::<Option<Vec<RawPruneReport>>>(serde_json::Value::Null)
-                .unwrap()
-                .unwrap_or_default(),
+            serde_json::from_value::<Option<Vec<RawPruneReport>>>(serde_json::Value::Null).unwrap().unwrap_or_default(),
         );
         assert_eq!(empty.removed, 0);
     }
@@ -1065,10 +1018,12 @@ mod tests {
         let out = |line: &str| LogLine { stream: Some(LogStream::Stdout), line: line.into() };
         let err = |line: &str| LogLine { stream: Some(LogStream::Stderr), line: line.into() };
         // A line split over frames, with the other stream's between them, is one line.
-        let framed = [frame(1, b"hello\nhal"), frame(2, b"err\n"), frame(1, b"f a line\n"), frame(2, b"no newline")].concat();
+        let framed =
+            [frame(1, b"hello\nhal"), frame(2, b"err\n"), frame(1, b"f a line\n"), frame(2, b"no newline")].concat();
         assert_eq!(demux_logs(&framed), vec![out("hello"), err("err"), out("half a line"), err("no newline")]);
         // With timestamps, a line's later parts come stamped too: the line keeps its first time only.
-        let stamped = [frame(1, b"2026-11-16T10:00:00.5Z a long"), frame(1, b"2026-11-16T10:00:00.6Z  line\n")].concat();
+        let stamped =
+            [frame(1, b"2026-11-16T10:00:00.5Z a long"), frame(1, b"2026-11-16T10:00:00.6Z  line\n")].concat();
         assert_eq!(demux_logs(&stamped), vec![out("2026-11-16T10:00:00.5Z a long line")]);
         let tty = |line: &str| LogLine { stream: None, line: line.into() };
         assert_eq!(demux_logs(b"plain tty\noutput\n"), vec![tty("plain tty"), tty("output")]);
@@ -1091,11 +1046,7 @@ mod tests {
             .unwrap();
         let link = connectable(&sock).unwrap();
         assert!(link.as_os_str().len() <= MAX_SOCKET_PATH);
-        assert_eq!(
-            connectable(&link).unwrap(),
-            link,
-            "short paths are used as they are"
-        );
+        assert_eq!(connectable(&link).unwrap(), link, "short paths are used as they are");
     }
 
     #[test]

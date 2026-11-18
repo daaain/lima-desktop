@@ -82,11 +82,7 @@ pub fn parse_line(block: &mut Block, line: &str) -> bool {
         }
         Some("G") => {
             if let Some(id) = f.next() {
-                let cgroup = Cgroup {
-                    peak: num(f.next()),
-                    oom_kills: num(f.next()),
-                    own: num(f.next()),
-                };
+                let cgroup = Cgroup { peak: num(f.next()), oom_kills: num(f.next()), own: num(f.next()) };
                 block.cgroups.insert(id.to_string(), cgroup);
             }
         }
@@ -106,9 +102,7 @@ fn or_absent(v: Option<i64>) -> i64 {
 /// ABSENT for them.
 pub fn vm_row(prev: Option<&Block>, cur: &Block, ncpus: u32) -> Vec<i64> {
     let mem = |k: &str| cur.mem.get(k).map(|&v| v as i64 * KB);
-    let dt_us = prev
-        .map(|p| ((cur.uptime - p.uptime) * 1e6) as i64)
-        .filter(|&d| d > 0);
+    let dt_us = prev.map(|p| ((cur.uptime - p.uptime) * 1e6) as i64).filter(|&d| d > 0);
 
     let cpu_mc = prev.and_then(|p| {
         if p.cpu.len() < 4 || cur.cpu.len() < 4 {
@@ -126,11 +120,7 @@ pub fn vm_row(prev: Option<&Block>, cur: &Block, ncpus: u32) -> Vec<i64> {
         let d = c.checked_sub(*p)? as i64;
         Some(d * 1000 / dt_us?)
     };
-    let disk = |i: usize| {
-        cur.disks
-            .get(i)
-            .map(|&(size, used)| (size as i64 * KB, used as i64 * KB))
-    };
+    let disk = |i: usize| cur.disks.get(i).map(|&(size, used)| (size as i64 * KB, used as i64 * KB));
     let (root, store) = (disk(0), disk(1).or(disk(0)));
 
     vec![
@@ -188,11 +178,7 @@ pub async fn spawn(ssh_config: &str, instance: &str) -> std::io::Result<Child> {
 
 /// `ssh` into the instance with Lima's own config, running the probe at a block every
 /// `interval_secs`.
-pub async fn spawn_every(
-    ssh_config: &str,
-    instance: &str,
-    interval_secs: u64,
-) -> std::io::Result<Child> {
+pub async fn spawn_every(ssh_config: &str, instance: &str, interval_secs: u64) -> std::io::Result<Child> {
     let mut child = ssh(ssh_config, instance).spawn()?;
     let mut stdin = child.stdin.take().expect("piped stdin");
     stdin.write_all(script(interval_secs).as_bytes()).await?;
@@ -263,28 +249,14 @@ G abcdef 1 1 -
     fn a_container_line_has_its_peak_kills_and_processes_own_memory() {
         let b = parse(BLOCK_A);
         let id = "0123456789012345678901234567890123456789012345678901234567890123";
-        assert_eq!(
-            b.cgroups[id],
-            Cgroup {
-                peak: Some(52_428_800),
-                oom_kills: Some(0),
-                own: Some(31_457_280)
-            }
-        );
+        assert_eq!(b.cgroups[id], Cgroup { peak: Some(52_428_800), oom_kills: Some(0), own: Some(31_457_280) });
         assert_eq!(b.cgroups["abcdef"].own, None, "unreadable: -");
     }
 
     #[test]
     fn a_container_line_from_an_older_probe_has_no_own_memory() {
         let b = parse("G abcdef 4096 2\n.");
-        assert_eq!(
-            b.cgroups["abcdef"],
-            Cgroup {
-                peak: Some(4096),
-                oom_kills: Some(2),
-                own: None
-            }
-        );
+        assert_eq!(b.cgroups["abcdef"], Cgroup { peak: Some(4096), oom_kills: Some(2), own: None });
     }
 
     #[test]
@@ -315,11 +287,7 @@ G abcdef 1 1 -
 
     #[test]
     fn a_kernel_without_psi_reads_absent() {
-        let no_psi: String = BLOCK_A
-            .lines()
-            .filter(|l| !l.starts_with('P'))
-            .collect::<Vec<_>>()
-            .join("\n");
+        let no_psi: String = BLOCK_A.lines().filter(|l| !l.starts_with('P')).collect::<Vec<_>>().join("\n");
         let a = parse(&no_psi);
         let row = vm_row(Some(&a), &a, 2);
         assert_eq!(row[5], ABSENT);

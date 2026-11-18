@@ -97,14 +97,8 @@ async fn main() -> Res<()> {
 async fn record(out: &Path, seconds: u64) -> Res<()> {
     let recorded_at = now_ms();
     let list = lima::list_raw().await?;
-    std::fs::write(
-        out.join("limactl-list.jsonl"),
-        minimal_list(&list, &row_allow()),
-    )?;
-    let instances: Vec<Instance> = lima::parse_list(&list)
-        .into_iter()
-        .map(Instance::from_raw)
-        .collect();
+    std::fs::write(out.join("limactl-list.jsonl"), minimal_list(&list, &row_allow()))?;
+    let instances: Vec<Instance> = lima::parse_list(&list).into_iter().map(Instance::from_raw).collect();
     eprintln!(
         "recording {seconds} s from {} running VM(s), read-only…",
         instances.iter().filter(|i| i.running()).count()
@@ -132,10 +126,7 @@ async fn record(out: &Path, seconds: u64) -> Res<()> {
                         a replay leaves them absent",
         "vms": vms,
     });
-    std::fs::write(
-        out.join("manifest.json"),
-        serde_json::to_string_pretty(&manifest)?,
-    )?;
+    std::fs::write(out.join("manifest.json"), serde_json::to_string_pretty(&manifest)?)?;
     Ok(())
 }
 
@@ -151,10 +142,7 @@ fn row_allow() -> RowAllow {
 }
 
 fn pick(v: &Value, fields: &[String]) -> serde_json::Map<String, Value> {
-    fields
-        .iter()
-        .filter_map(|f| v.get(f).map(|x| (f.clone(), x.clone())))
-        .collect()
+    fields.iter().filter_map(|f| v.get(f).map(|x| (f.clone(), x.clone()))).collect()
 }
 
 /// The list's rows, each cut to what the app reads (a row that isn't JSON is left out: the app
@@ -202,11 +190,7 @@ fn looks_like_credential(line: &str) -> bool {
     CREDENTIAL_WORDS.iter().any(|w| lower.contains(w))
         || upper.match_indices("BEGIN ").any(|(i, _)| {
             let rest = &upper[i + "BEGIN ".len()..];
-            rest.find("PRIVATE KEY").is_some_and(|end| {
-                rest[..end]
-                    .chars()
-                    .all(|c| c.is_ascii_uppercase() || c == ' ')
-            })
+            rest.find("PRIVATE KEY").is_some_and(|end| rest[..end].chars().all(|c| c.is_ascii_uppercase() || c == ' '))
         })
 }
 
@@ -222,11 +206,7 @@ fn credential_lines(dir: &Path) -> Res<Vec<String>> {
                 continue;
             }
             let text = String::from_utf8_lossy(&std::fs::read(&path)?).into_owned();
-            let name = path
-                .strip_prefix(dir)
-                .unwrap_or(&path)
-                .display()
-                .to_string();
+            let name = path.strip_prefix(dir).unwrap_or(&path).display().to_string();
             hits.extend(
                 text.lines()
                     .enumerate()
@@ -398,18 +378,10 @@ async fn record_stats(pod: Option<&Libpod>, dir: &Path, seconds: u64) -> Res<u64
 /// Who and where, on the host and in the guests (the rows' `config.user`, which the recorded rows
 /// no longer carry), so the anonymiser knows what to look for.
 fn host_facts(list: &str) -> Value {
-    let rows: Vec<Value> = list
-        .split('\n')
-        .filter_map(|l| serde_json::from_str(l).ok())
-        .collect();
-    let lima_home = rows
-        .iter()
-        .find_map(|row| row["LimaHome"].as_str().map(str::to_string));
+    let rows: Vec<Value> = list.split('\n').filter_map(|l| serde_json::from_str(l).ok()).collect();
+    let lima_home = rows.iter().find_map(|row| row["LimaHome"].as_str().map(str::to_string));
     let mut guest_users: Vec<Value> = Vec::new();
-    for user in rows
-        .iter()
-        .map(|r| pick(&r["config"]["user"], &["name".into(), "home".into()]))
-    {
+    for user in rows.iter().map(|r| pick(&r["config"]["user"], &["name".into(), "home".into()])) {
         let user = Value::Object(user);
         if user.as_object().is_some_and(|u| !u.is_empty()) && !guest_users.contains(&user) {
             guest_users.push(user);
@@ -425,19 +397,13 @@ fn host_facts(list: &str) -> Value {
 
 async fn lima_version() -> Option<String> {
     let bin = lima::limactl().ok()?;
-    let out = tokio::process::Command::new(bin)
-        .arg("--version")
-        .output()
-        .await
-        .ok()?;
+    let out = tokio::process::Command::new(bin).arg("--version").output().await.ok()?;
     let text = String::from_utf8_lossy(&out.stdout);
     text.split_whitespace().last().map(str::to_string)
 }
 
 fn now_ms() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |d| d.as_millis() as i64)
+    SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_millis() as i64)
 }
 
 /// Unix ms as `YYYY-MM-DDTHH:MM:SSZ` (Howard Hinnant's days-to-civil).
@@ -517,43 +483,25 @@ mod tests {
         assert_eq!(rows.len(), 1);
         let cut = Instance::from_raw(rows.into_iter().next().unwrap());
         assert_eq!(cut.podman_socket, whole.podman_socket);
-        assert_eq!(
-            cut.podman_socket.as_deref(),
-            Some("/Users/me/.lima/acme/sock/podman.sock")
-        );
-        assert_eq!(
-            (cut.cpus, cut.memory, cut.dir),
-            (whole.cpus, whole.memory, whole.dir)
-        );
+        assert_eq!(cut.podman_socket.as_deref(), Some("/Users/me/.lima/acme/sock/podman.sock"));
+        assert_eq!((cut.cpus, cut.memory, cut.dir), (whole.cpus, whole.memory, whole.dir));
         assert_eq!(cut.marker.manager.as_deref(), Some("foldyard"));
     }
 
     #[test]
     fn the_manifest_names_the_guest_users_the_rows_no_longer_carry() {
         let facts = host_facts(&format!("{}\n{}\n", row(), row()));
-        assert_eq!(
-            facts["guestUsers"],
-            json!([{"name": "me", "home": "/home/me.guest"}])
-        );
+        assert_eq!(facts["guestUsers"], json!([{"name": "me", "home": "/home/me.guest"}]));
     }
 
     #[test]
     fn credential_looking_lines() {
-        for bad in [
-            "PassWord: x",
-            "x-secret-y",
-            "API_TOKEN=1",
-            "-----BEGIN OPENSSH PRIVATE KEY-----",
-            "begin rsa private key",
-        ] {
+        for bad in
+            ["PassWord: x", "x-secret-y", "API_TOKEN=1", "-----BEGIN OPENSSH PRIVATE KEY-----", "begin rsa private key"]
+        {
             assert!(looks_like_credential(bad), "{bad}");
         }
-        for fine in [
-            "U 45692.51",
-            "BEGIN 1 PRIVATE KEY",
-            "C cpu  246246 369",
-            "{\"Name\":\"web\"}",
-        ] {
+        for fine in ["U 45692.51", "BEGIN 1 PRIVATE KEY", "C cpu  246246 369", "{\"Name\":\"web\"}"] {
             assert!(!looks_like_credential(fine), "{fine}");
         }
     }
@@ -562,11 +510,7 @@ mod tests {
     fn the_check_names_files_and_lines_but_not_what_matched() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(dir.path().join("vms/a")).unwrap();
-        std::fs::write(
-            dir.path().join("vms/a/probe.txt"),
-            "U 1\nG x secret-sauce 0\n",
-        )
-        .unwrap();
+        std::fs::write(dir.path().join("vms/a/probe.txt"), "U 1\nG x secret-sauce 0\n").unwrap();
         std::fs::write(dir.path().join("manifest.json"), "{}\n").unwrap();
         let hits = credential_lines(dir.path()).unwrap();
         assert_eq!(hits, ["vms/a/probe.txt:2"]);
@@ -576,16 +520,11 @@ mod tests {
     fn images_lose_their_labels_and_containers_their_commands() {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("images.json");
-        let body =
-            br#"[{"Id":"x","Labels":{"org.opencontainers.image.description":"a secret store"}}]"#;
+        let body = br#"[{"Id":"x","Labels":{"org.opencontainers.image.description":"a secret store"}}]"#;
         write_body(&file, body, &["Labels"]).unwrap();
         assert_eq!(std::fs::read_to_string(&file).unwrap(), r#"[{"Id":"x"}]"#);
         let untouched = br#"[{"Name":"v"}]"#;
         write_body(&file, untouched, &["Labels"]).unwrap();
-        assert_eq!(
-            std::fs::read(&file).unwrap(),
-            untouched,
-            "as it came when nothing is stripped"
-        );
+        assert_eq!(std::fs::read(&file).unwrap(), untouched, "as it came when nothing is stripped");
     }
 }

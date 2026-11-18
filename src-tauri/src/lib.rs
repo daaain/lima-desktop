@@ -64,11 +64,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         // Remembers the window's size and place between runs (saved as it closes).
         // The popover opens under the menu bar item clicked, so it's never put back somewhere else.
-        .plugin(
-            tauri_plugin_window_state::Builder::default()
-                .with_denylist(&[menubar::POPOVER])
-                .build(),
-        )
+        .plugin(tauri_plugin_window_state::Builder::default().with_denylist(&[menubar::POPOVER]).build())
         .setup(|app| {
             let dir = data_dir(app)?;
             std::fs::create_dir_all(&dir)?;

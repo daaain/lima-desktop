@@ -21,11 +21,7 @@ fn fixtures() -> Vec<PathBuf> {
         .filter(|p| p.join("manifest.json").is_file())
         .collect();
     dirs.sort();
-    assert!(
-        !dirs.is_empty(),
-        "no snapshot fixtures in {}",
-        root.display()
-    );
+    assert!(!dirs.is_empty(), "no snapshot fixtures in {}", root.display());
     dirs
 }
 
@@ -34,10 +30,7 @@ fn read(path: &Path) -> String {
 }
 
 fn instances(fixture: &Path) -> Vec<Instance> {
-    lima::parse_list(&read(&fixture.join("limactl-list.jsonl")))
-        .into_iter()
-        .map(Instance::from_raw)
-        .collect()
+    lima::parse_list(&read(&fixture.join("limactl-list.jsonl"))).into_iter().map(Instance::from_raw).collect()
 }
 
 /// The VMs the snapshot recorded running, with their libpod directory.
@@ -59,9 +52,7 @@ fn col(names: &[&str], row: &[i64], name: &str) -> i64 {
 async fn blocks(file: &Path) -> Vec<Block> {
     let bytes = std::fs::read(file).unwrap();
     let mut out = Vec::new();
-    probe::read_blocks(&bytes[..], |b| out.push(b))
-        .await
-        .unwrap();
+    probe::read_blocks(&bytes[..], |b| out.push(b)).await.unwrap();
     out
 }
 
@@ -70,10 +61,7 @@ fn containers(dir: &Path) -> Vec<Container> {
 }
 
 fn stats(dir: &Path) -> Vec<Vec<RawStat>> {
-    read(&dir.join("libpod/stats.jsonl"))
-        .lines()
-        .map(|l| podman::parse_stats(l.as_bytes()).unwrap())
-        .collect()
+    read(&dir.join("libpod/stats.jsonl")).lines().map(|l| podman::parse_stats(l.as_bytes()).unwrap()).collect()
 }
 
 #[test]
@@ -106,11 +94,7 @@ async fn probe_blocks_make_vm_rows() {
                 assert!(metric("mem_used") > 0, "{}: memory {row:?}", inst.name);
                 assert!(metric("mem_total") > metric("mem_used"), "{row:?}");
                 assert!(metric("disk_used") > 0, "{}: disk {row:?}", inst.name);
-                assert_eq!(
-                    metric("host_rss"),
-                    ABSENT,
-                    "host-side columns aren't recorded"
-                );
+                assert_eq!(metric("host_rss"), ABSENT, "host-side columns aren't recorded");
             }
         }
     }
@@ -123,11 +107,7 @@ async fn the_probes_cgroup_lines_name_the_vms_own_containers() {
             let ids: HashSet<String> = containers(&dir).into_iter().map(|c| c.id).collect();
             for b in blocks(&dir.join("probe.txt")).await {
                 for id in b.cgroups.keys() {
-                    assert!(
-                        ids.contains(id),
-                        "{}: cgroup {id} isn't a listed container",
-                        inst.name
-                    );
+                    assert!(ids.contains(id), "{}: cgroup {id} isn't a listed container", inst.name);
                 }
             }
         }
@@ -139,8 +119,7 @@ fn the_journal_readers_output_parses() {
     for f in fixtures() {
         for (inst, dir) in recorded(&f) {
             let out = read(&dir.join("journal.out"));
-            let entries =
-                journal::parse_output(&out).unwrap_or_else(|e| panic!("{}: {e:?}", inst.name));
+            let entries = journal::parse_output(&out).unwrap_or_else(|e| panic!("{}: {e:?}", inst.name));
             for e in &entries {
                 assert!(e.ts_ms > 0 && !e.boot.is_empty(), "{e:?}");
             }
@@ -160,13 +139,8 @@ fn libpods_lists_deserialise() {
                 assert_eq!(c.id.len(), 64, "{c:?}");
                 assert!(!c.name.is_empty() && !c.state.is_empty(), "{c:?}");
             }
-            let imgs =
-                podman::parse_images(read(&dir.join("libpod/images.json")).as_bytes()).unwrap();
-            assert!(
-                imgs.iter().any(|i| !i.tags.is_empty()),
-                "{}: a tagged image",
-                inst.name
-            );
+            let imgs = podman::parse_images(read(&dir.join("libpod/images.json")).as_bytes()).unwrap();
+            assert!(imgs.iter().any(|i| !i.tags.is_empty()), "{}: a tagged image", inst.name);
             // The engine's own count of who uses an image: the UI's "in use" and its removals.
             for c in containers(&dir) {
                 assert!(
@@ -177,22 +151,14 @@ fn libpods_lists_deserialise() {
                 );
             }
             images += imgs.len();
-            let vols =
-                podman::parse_volumes(read(&dir.join("libpod/volumes.json")).as_bytes()).unwrap();
-            assert!(
-                vols.iter()
-                    .all(|v| !v.name.is_empty() && !v.mountpoint.is_empty())
-            );
+            let vols = podman::parse_volumes(read(&dir.join("libpod/volumes.json")).as_bytes()).unwrap();
+            assert!(vols.iter().all(|v| !v.name.is_empty() && !v.mountpoint.is_empty()));
             volumes += vols.len();
-            let df: serde_json::Value =
-                serde_json::from_str(&read(&dir.join("libpod/system-df.json"))).unwrap();
+            let df: serde_json::Value = serde_json::from_str(&read(&dir.join("libpod/system-df.json"))).unwrap();
             assert!(df["Images"].is_array(), "{}: {df}", inst.name);
         }
     }
-    assert!(
-        images > 0 && volumes > 0,
-        "{images} images, {volumes} volumes"
-    );
+    assert!(images > 0 && volumes > 0, "{images} images, {volumes} volumes");
 }
 
 #[test]
@@ -202,27 +168,16 @@ fn stats_samples_make_container_rows() {
         for (inst, dir) in recorded(&f) {
             let listed: HashSet<String> = containers(&dir).into_iter().map(|c| c.id).collect();
             let samples = stats(&dir);
-            assert!(
-                samples.len() >= 2,
-                "{}: {} samples",
-                inst.name,
-                samples.len()
-            );
+            assert!(samples.len() >= 2, "{}: {} samples", inst.name, samples.len());
             let t0 = Instant::now();
             for (prev, cur) in samples.iter().zip(&samples[1..]) {
                 for s in cur {
-                    assert!(
-                        listed.contains(&s.id),
-                        "{}: stats for an unlisted {}",
-                        inst.name,
-                        s.id
-                    );
+                    assert!(listed.contains(&s.id), "{}: stats for an unlisted {}", inst.name, s.id);
                     assert!(s.mem_usage > 0 && s.pids > 0, "{s:?}");
                     let Some(p) = prev.iter().find(|p| p.id == s.id) else {
                         continue;
                     };
-                    let row =
-                        container_row(Some(&(t0, p.clone())), t0 + Duration::from_secs(1), s, None);
+                    let row = container_row(Some(&(t0, p.clone())), t0 + Duration::from_secs(1), s, None);
                     let cpu = col(CT_METRICS, &row, "cpu_mc");
                     assert!(cpu >= 0, "{}: cpu {row:?}", inst.name);
                     assert!(

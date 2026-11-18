@@ -54,10 +54,9 @@ pub enum LimaProblemKind {
 impl LimaError {
     pub fn problem(&self) -> LimaProblem {
         let (kind, searched) = match self {
-            LimaError::NotFound(dirs) => (
-                LimaProblemKind::NotInstalled,
-                dirs.iter().map(|d| d.display().to_string()).collect(),
-            ),
+            LimaError::NotFound(dirs) => {
+                (LimaProblemKind::NotInstalled, dirs.iter().map(|d| d.display().to_string()).collect())
+            }
             LimaError::Failed(..) => (LimaProblemKind::Failed, vec![]),
             LimaError::TimedOut(..) => (LimaProblemKind::NotAnswering, vec![]),
             LimaError::Refused(_) | LimaError::Io(_) => (LimaProblemKind::Other, vec![]),
@@ -133,12 +132,7 @@ impl Instance {
 
     pub fn from_raw(raw: RawInstance) -> Self {
         let podman_socket = podman_socket(&raw);
-        let marker = marker::read(
-            Path::new(&raw.dir),
-            &raw.name,
-            raw.protected,
-            raw.config.as_ref(),
-        );
+        let marker = marker::read(Path::new(&raw.dir), &raw.name, raw.protected, raw.config.as_ref());
         Instance {
             podman_socket,
             marker,
@@ -163,31 +157,19 @@ impl Instance {
 /// is podman's (Lima's podman templates forward `/run/user/<uid>/podman/podman.sock` to
 /// `<dir>/sock/podman.sock`); else that conventional path if it exists.
 fn podman_socket(raw: &RawInstance) -> Option<String> {
-    let forwards = raw
-        .config
-        .as_ref()
-        .and_then(|c| c.get("portForwards"))
-        .and_then(|p| p.as_array());
+    let forwards = raw.config.as_ref().and_then(|c| c.get("portForwards")).and_then(|p| p.as_array());
     for fwd in forwards.into_iter().flatten() {
-        let guest = fwd
-            .get("guestSocket")
-            .and_then(|g| g.as_str())
-            .unwrap_or("");
+        let guest = fwd.get("guestSocket").and_then(|g| g.as_str()).unwrap_or("");
         let host = fwd.get("hostSocket").and_then(|h| h.as_str()).unwrap_or("");
         if guest.contains("podman") && guest.ends_with(".sock") && !host.is_empty() {
             let host = host.replace("{{.Dir}}", &raw.dir);
-            let path = if Path::new(&host).is_absolute() {
-                PathBuf::from(host)
-            } else {
-                Path::new(&raw.dir).join(host)
-            };
+            let path =
+                if Path::new(&host).is_absolute() { PathBuf::from(host) } else { Path::new(&raw.dir).join(host) };
             return Some(path.to_string_lossy().into_owned());
         }
     }
     let conventional = Path::new(&raw.dir).join("sock").join("podman.sock");
-    conventional
-        .exists()
-        .then(|| conventional.to_string_lossy().into_owned())
+    conventional.exists().then(|| conventional.to_string_lossy().into_owned())
 }
 
 /// Parse `limactl list --format '{{json .}}'`: one JSON object per `\n`-separated row (never split
@@ -208,17 +190,14 @@ pub fn parse_list(stdout: &str) -> Vec<RawInstance> {
 }
 
 fn home() -> PathBuf {
-    std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_default()
+    std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default()
 }
 
 /// Locate `limactl`: PATH first, then where Homebrew, MacPorts, the release tarball and
 /// `~/.local` put it (a GUI app's PATH is `/usr/bin:/bin:/usr/sbin:/sbin`).
 pub fn limactl() -> Result<PathBuf, LimaError> {
-    let mut dirs: Vec<PathBuf> = std::env::var_os("PATH")
-        .map(|p| std::env::split_paths(&p).collect())
-        .unwrap_or_default();
+    let mut dirs: Vec<PathBuf> =
+        std::env::var_os("PATH").map(|p| std::env::split_paths(&p).collect()).unwrap_or_default();
     for extra in ["/opt/homebrew/bin", "/usr/local/bin", "/opt/local/bin"] {
         dirs.push(PathBuf::from(extra));
     }
@@ -266,11 +245,7 @@ async fn run(args: &[&str]) -> Result<String, LimaError> {
 
 /// Run `cmd` (`limactl <args>`), giving up after `limit` if there is one: the child is killed
 /// with the future (`kill_on_drop`).
-async fn output_within(
-    mut cmd: Command,
-    args: &[&str],
-    limit: Option<Duration>,
-) -> Result<String, LimaError> {
+async fn output_within(mut cmd: Command, args: &[&str], limit: Option<Duration>) -> Result<String, LimaError> {
     let out = match limit {
         None => cmd.output().await?,
         Some(limit) => tokio::time::timeout(limit, cmd.output())
@@ -279,12 +254,7 @@ async fn output_within(
     };
     if !out.status.success() {
         let err = String::from_utf8_lossy(&out.stderr);
-        let last = err
-            .lines()
-            .rev()
-            .find(|l| !l.trim().is_empty())
-            .unwrap_or("")
-            .to_string();
+        let last = err.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("").to_string();
         return Err(LimaError::Failed(args.join(" "), last));
     }
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
@@ -298,10 +268,7 @@ pub async fn list_raw() -> Result<String, LimaError> {
 
 pub async fn list() -> Result<Vec<Instance>, LimaError> {
     let out = list_raw().await?;
-    Ok(parse_list(&out)
-        .into_iter()
-        .map(Instance::from_raw)
-        .collect())
+    Ok(parse_list(&out).into_iter().map(Instance::from_raw).collect())
 }
 
 pub async fn get(name: &str) -> Result<Instance, LimaError> {
@@ -336,10 +303,7 @@ impl Action {
 fn refuse_if_locked(inst: &Instance, actions: &[&str]) -> Result<(), LimaError> {
     if let Some(locked) = actions.iter().find(|a| inst.marker.locks(a)) {
         let who = inst.marker.manager.as_deref().unwrap_or("another tool");
-        let mut msg = format!(
-            "'{}' is managed by {who}: {locked} is left to it",
-            inst.name
-        );
+        let mut msg = format!("'{}' is managed by {who}: {locked} is left to it", inst.name);
         if let Some(hint) = &inst.marker.hint {
             msg.push_str(&format!(" — {hint}"));
         }
@@ -385,9 +349,7 @@ pub fn resize_expr(inst: &Instance, r: &Resize) -> Result<String, LimaError> {
     }
     if let Some(mem) = r.memory {
         if mem < 512 * MIB || mem % MIB != 0 {
-            return Err(LimaError::Refused(
-                "memory must be at least 512 MiB, in whole MiB".into(),
-            ));
+            return Err(LimaError::Refused("memory must be at least 512 MiB, in whole MiB".into()));
         }
         parts.push(format!(".memory = \"{}MiB\"", mem / MIB));
     }
@@ -396,9 +358,7 @@ pub fn resize_expr(inst: &Instance, r: &Resize) -> Result<String, LimaError> {
             return Err(LimaError::Refused("disk size must be in whole GiB".into()));
         }
         if disk < inst.disk {
-            return Err(LimaError::Refused(
-                "Lima can only grow a disk, never shrink it".into(),
-            ));
+            return Err(LimaError::Refused("Lima can only grow a disk, never shrink it".into()));
         }
         parts.push(format!(".disk = \"{}GiB\"", disk / GIB));
     }
@@ -418,9 +378,7 @@ pub async fn resize(name: &str, r: &Resize) -> Result<(), LimaError> {
         )));
     }
     let expr = resize_expr(&inst, r)?;
-    run(&["edit", "--tty=false", name, "--set", &expr])
-        .await
-        .map(drop)
+    run(&["edit", "--tty=false", name, "--set", &expr]).await.map(drop)
 }
 
 #[cfg(test)]
@@ -450,10 +408,16 @@ mod tests {
     #[test]
     fn each_error_is_a_kind_of_problem_with_its_message() {
         let failed = LimaError::Failed("list".into(), "permission denied".into()).problem();
-        assert_eq!((failed.kind, failed.message.as_str()), (LimaProblemKind::Failed, "`limactl list` failed: permission denied"));
+        assert_eq!(
+            (failed.kind, failed.message.as_str()),
+            (LimaProblemKind::Failed, "`limactl list` failed: permission denied")
+        );
         assert!(failed.searched.is_empty());
         let slow = LimaError::TimedOut("list".into(), 30).problem();
-        assert_eq!((slow.kind, slow.message.as_str()), (LimaProblemKind::NotAnswering, "`limactl list` didn't answer within 30 s"));
+        assert_eq!(
+            (slow.kind, slow.message.as_str()),
+            (LimaProblemKind::NotAnswering, "`limactl list` didn't answer within 30 s")
+        );
     }
 
     #[tokio::test]
@@ -487,10 +451,7 @@ mod tests {
     #[test]
     fn podman_socket_from_port_forwards() {
         let inst = Instance::from_raw(parse_list(ROW).remove(0));
-        assert_eq!(
-            inst.podman_socket.as_deref(),
-            Some("/Users/me/.lima/acme/sock/podman.sock")
-        );
+        assert_eq!(inst.podman_socket.as_deref(), Some("/Users/me/.lima/acme/sock/podman.sock"));
         assert!(inst.running());
     }
 
@@ -502,63 +463,16 @@ mod tests {
 
     #[test]
     fn resize_expression() {
-        let r = Resize {
-            cpus: Some(6),
-            memory: Some(12 * GIB),
-            disk: Some(120 * GIB),
-        };
-        assert_eq!(
-            resize_expr(&stopped(), &r).unwrap(),
-            r#".cpus = 6 | .memory = "12288MiB" | .disk = "120GiB""#
-        );
+        let r = Resize { cpus: Some(6), memory: Some(12 * GIB), disk: Some(120 * GIB) };
+        assert_eq!(resize_expr(&stopped(), &r).unwrap(), r#".cpus = 6 | .memory = "12288MiB" | .disk = "120GiB""#);
     }
 
     #[test]
     fn resize_refuses_a_disk_shrink_and_odd_sizes() {
         let inst = stopped();
-        assert!(
-            resize_expr(
-                &inst,
-                &Resize {
-                    cpus: None,
-                    memory: None,
-                    disk: Some(50 * GIB)
-                }
-            )
-            .is_err()
-        );
-        assert!(
-            resize_expr(
-                &inst,
-                &Resize {
-                    cpus: None,
-                    memory: Some(100 * MIB),
-                    disk: None
-                }
-            )
-            .is_err()
-        );
-        assert!(
-            resize_expr(
-                &inst,
-                &Resize {
-                    cpus: Some(0),
-                    memory: None,
-                    disk: None
-                }
-            )
-            .is_err()
-        );
-        assert!(
-            resize_expr(
-                &inst,
-                &Resize {
-                    cpus: None,
-                    memory: None,
-                    disk: None
-                }
-            )
-            .is_err()
-        );
+        assert!(resize_expr(&inst, &Resize { cpus: None, memory: None, disk: Some(50 * GIB) }).is_err());
+        assert!(resize_expr(&inst, &Resize { cpus: None, memory: Some(100 * MIB), disk: None }).is_err());
+        assert!(resize_expr(&inst, &Resize { cpus: Some(0), memory: None, disk: None }).is_err());
+        assert!(resize_expr(&inst, &Resize { cpus: None, memory: None, disk: None }).is_err());
     }
 }

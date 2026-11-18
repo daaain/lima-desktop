@@ -100,22 +100,10 @@ struct Sample {
 
 /// The `n` largest apps of `procs`, leaving out `exclude`; for CPU, measured since `prev`.
 /// Apps with none of the resource aren't listed.
-fn rank(
-    procs: &[Proc],
-    metric: Metric,
-    prev: Option<&Sample>,
-    now: Instant,
-    exclude: &HashSet<u32>,
-    n: usize,
-) -> Top {
-    let since = prev
-        .map(|p| now.saturating_duration_since(p.at))
-        .filter(|d| !d.is_zero() && *d <= FRESH);
+fn rank(procs: &[Proc], metric: Metric, prev: Option<&Sample>, now: Instant, exclude: &HashSet<u32>, n: usize) -> Top {
+    let since = prev.map(|p| now.saturating_duration_since(p.at)).filter(|d| !d.is_zero() && *d <= FRESH);
     if metric == Metric::Cpu && since.is_none() {
-        return Top {
-            apps: Vec::new(),
-            pending: true,
-        };
+        return Top { apps: Vec::new(), pending: true };
     }
     let mut apps: HashMap<String, App> = HashMap::new();
     for p in procs.iter().filter(|p| !exclude.contains(&p.pid)) {
@@ -125,21 +113,14 @@ fn rank(
             Metric::Cpu => p.cpu_ms.zip(since).map(|(now_ms, since)| {
                 // A process not in the last sample (or a pid since taken by another program)
                 // started after it, so all its CPU time is since then.
-                let before = prev
-                    .and_then(|s| s.cpu.get(&p.pid))
-                    .filter(|(app, _)| *app == name)
-                    .map_or(0, |(_, ms)| *ms);
+                let before =
+                    prev.and_then(|s| s.cpu.get(&p.pid)).filter(|(app, _)| *app == name).map_or(0, |(_, ms)| *ms);
                 let used = now_ms.saturating_sub(before);
                 (used as f64 * 1000.0 / since.as_millis().max(1) as f64).round() as u64
             }),
         };
         let Some(value) = value else { continue };
-        let app = apps.entry(name.clone()).or_insert(App {
-            name,
-            value: 0,
-            processes: 0,
-            reported: None,
-        });
+        let app = apps.entry(name.clone()).or_insert(App { name, value: 0, processes: 0, reported: None });
         app.value += value;
         app.processes += 1;
         if let (Metric::Mem, Some(r)) = (metric, p.reported) {
@@ -156,19 +137,13 @@ fn rank(
     let mut apps: Vec<App> = apps.into_values().filter(|a| a.value > 0).collect();
     apps.sort_by(|a, b| b.value.cmp(&a.value).then_with(|| a.name.cmp(&b.name)));
     apps.truncate(n);
-    Top {
-        apps,
-        pending: false,
-    }
+    Top { apps, pending: false }
 }
 
 fn sample_of(procs: &[Proc], at: Instant) -> Sample {
     Sample {
         at,
-        cpu: procs
-            .iter()
-            .filter_map(|p| Some((p.pid, (app_name(p.exe.as_deref(), &p.name), p.cpu_ms?))))
-            .collect(),
+        cpu: procs.iter().filter_map(|p| Some((p.pid, (app_name(p.exe.as_deref(), &p.name), p.cpu_ms?)))).collect(),
     }
 }
 
@@ -189,10 +164,7 @@ impl TopApps {
     /// The `n` largest apps by `metric` now, leaving out the processes in `exclude`; memory counted
     /// with the compressor's `squeeze` (`host_use::squeeze`).
     pub fn top(&self, metric: Metric, n: usize, exclude: &HashSet<u32>, squeeze: Option<f64>) -> Result<Top, String> {
-        let mut inner = self
-            .inner
-            .lock()
-            .map_err(|_| "the sampler failed earlier".to_string())?;
+        let mut inner = self.inner.lock().map_err(|_| "the sampler failed earlier".to_string())?;
         let procs = sys::processes(&mut inner, metric, squeeze)?;
         let now = Instant::now();
         let top = rank(&procs, metric, inner.prev.as_ref(), now, exclude, n);
@@ -258,10 +230,7 @@ mod sys {
             .output()
             .map_err(|e| format!("can't run ps: {e}"))?;
         if !out.status.success() {
-            return Err(format!(
-                "ps failed: {}",
-                String::from_utf8_lossy(&out.stderr).trim()
-            ));
+            return Err(format!("ps failed: {}", String::from_utf8_lossy(&out.stderr).trim()));
         }
         Ok(parse_ps(&String::from_utf8_lossy(&out.stdout))
             .into_iter()
@@ -272,14 +241,7 @@ mod sys {
                 // Read only when it's asked for: one more call per process.
                 let footprint = (metric == Metric::Mem).then(|| host_proc::footprint(pid)).flatten();
                 let mem = (metric == Metric::Mem).then(|| host_proc::in_use(footprint, rss, squeeze));
-                Some(Proc {
-                    pid,
-                    exe: Some(exe),
-                    name,
-                    mem,
-                    reported: footprint,
-                    cpu_ms: Some(cpu_ms),
-                })
+                Some(Proc { pid, exe: Some(exe), name, mem, reported: footprint, cpu_ms: Some(cpu_ms) })
             })
             .collect())
     }
@@ -293,16 +255,13 @@ mod sys {
     /// user's.
     pub fn processes(inner: &mut Inner, _: Metric, _: Option<f64>) -> Result<Vec<Proc>, String> {
         if inner.sys.is_none() {
-            inner.sys =
-                Some(sysinfo::System::new().map_err(|e| format!("can't list processes: {e}"))?);
+            inner.sys = Some(sysinfo::System::new().map_err(|e| format!("can't list processes: {e}"))?);
         }
         let sys = inner.sys.as_mut().expect("just made");
         sys.refresh_processes_specifics(
             sysinfo::ProcessesToUpdate::All,
             true,
-            sysinfo::ProcessRefreshKind::nothing()
-                .with_memory()
-                .with_cpu(),
+            sysinfo::ProcessRefreshKind::nothing().with_memory().with_cpu(),
         );
         Ok(sys
             .processes()
@@ -329,8 +288,7 @@ mod tests {
     const GPU: &str = "/Applications/Google Chrome.app/Contents/Frameworks/Google Chrome Framework.framework/Versions/142.0.7444.60/Helpers/Google Chrome Helper (GPU).app/Contents/MacOS/Google Chrome Helper (GPU)";
     const SLACK: &str = "/Applications/Slack.app/Contents/MacOS/Slack";
     const SLACK_HELPER: &str = "/Applications/Slack.app/Contents/Frameworks/Slack Helper (Renderer).app/Contents/MacOS/Slack Helper (Renderer)";
-    const WINDOWSERVER: &str =
-        "/System/Library/PrivateFrameworks/SkyLight.framework/Versions/A/Resources/WindowServer";
+    const WINDOWSERVER: &str = "/System/Library/PrivateFrameworks/SkyLight.framework/Versions/A/Resources/WindowServer";
     const FINDER: &str = "/System/Library/CoreServices/Finder.app/Contents/MacOS/Finder";
     const LIMACTL: &str = "/opt/homebrew/Cellar/lima/2.1.0/bin/limactl";
     const VZ: &str = "/System/Library/Frameworks/Virtualization.framework/Versions/A/XPCServices/com.apple.Virtualization.VirtualMachine.xpc/Contents/MacOS/com.apple.Virtualization.VirtualMachine";
@@ -348,15 +306,10 @@ mod tests {
         assert_eq!(app(SLACK_HELPER), "Slack");
         assert_eq!(app(FINDER), "Finder");
         assert_eq!(
-            app(
-                "/Applications/Xcode.app/Contents/Developer/Applications/Simulator.app/Contents/MacOS/Simulator"
-            ),
+            app("/Applications/Xcode.app/Contents/Developer/Applications/Simulator.app/Contents/MacOS/Simulator"),
             "Xcode"
         );
-        assert_eq!(
-            app("/Applications/Lima Desktop.app/Contents/MacOS/lima-desktop"),
-            "Lima Desktop"
-        );
+        assert_eq!(app("/Applications/Lima Desktop.app/Contents/MacOS/lima-desktop"), "Lima Desktop");
     }
 
     #[test]
@@ -406,10 +359,7 @@ mod tests {
     }
 
     fn names(t: &Top) -> Vec<(&str, u64, u32)> {
-        t.apps
-            .iter()
-            .map(|a| (a.name.as_str(), a.value, a.processes))
-            .collect()
+        t.apps.iter().map(|a| (a.name.as_str(), a.value, a.processes)).collect()
     }
 
     #[test]
@@ -465,13 +415,7 @@ mod tests {
         let t0 = Instant::now();
         let none = HashSet::new();
         let top = rank(&fleet(), Metric::Cpu, None, t0, &none, 5);
-        assert_eq!(
-            top,
-            Top {
-                apps: vec![],
-                pending: true
-            }
-        );
+        assert_eq!(top, Top { apps: vec![], pending: true });
     }
 
     #[test]
@@ -486,20 +430,10 @@ mod tests {
         later[6].cpu_ms = Some(900_800);
         later[7] = proc(104, RENDERER, 100 * MB, 200);
         let vm: HashSet<u32> = [600].into();
-        let top = rank(
-            &later,
-            Metric::Cpu,
-            Some(&before),
-            t0 + Duration::from_secs(2),
-            &vm,
-            5,
-        );
+        let top = rank(&later, Metric::Cpu, Some(&before), t0 + Duration::from_secs(2), &vm, 5);
         assert!(!top.pending);
         // Millicores: 2.2 s over 2 s is 1100.
-        assert_eq!(
-            names(&top),
-            [("Google Chrome", 1100, 5), ("WindowServer", 400, 1)]
-        );
+        assert_eq!(names(&top), [("Google Chrome", 1100, 5), ("WindowServer", 400, 1)]);
     }
 
     #[test]
@@ -507,14 +441,7 @@ mod tests {
         let t0 = Instant::now();
         let before = sample_of(&[proc(42, SLACK, MB, 50_000)], t0);
         let now = [proc(42, "/usr/bin/git", MB, 300)];
-        let top = rank(
-            &now,
-            Metric::Cpu,
-            Some(&before),
-            t0 + Duration::from_secs(1),
-            &HashSet::new(),
-            5,
-        );
+        let top = rank(&now, Metric::Cpu, Some(&before), t0 + Duration::from_secs(1), &HashSet::new(), 5);
         assert_eq!(names(&top), [("git", 300, 1)]);
     }
 
@@ -522,24 +449,10 @@ mod tests {
     fn a_sample_from_long_ago_is_no_measure_of_now() {
         let t0 = Instant::now();
         let before = sample_of(&fleet(), t0);
-        let top = rank(
-            &fleet(),
-            Metric::Cpu,
-            Some(&before),
-            t0 + FRESH + Duration::from_secs(1),
-            &HashSet::new(),
-            5,
-        );
+        let top = rank(&fleet(), Metric::Cpu, Some(&before), t0 + FRESH + Duration::from_secs(1), &HashSet::new(), 5);
         assert!(top.pending);
         // Memory needs no earlier sample.
-        let top = rank(
-            &fleet(),
-            Metric::Mem,
-            Some(&before),
-            t0 + FRESH * 10,
-            &HashSet::new(),
-            5,
-        );
+        let top = rank(&fleet(), Metric::Mem, Some(&before), t0 + FRESH * 10, &HashSet::new(), 5);
         assert!(!top.pending && top.apps.len() == 5);
     }
 
@@ -549,19 +462,13 @@ mod tests {
         assert_eq!(parse_cputime("0:02.38"), Some(2_380));
         assert_eq!(parse_cputime("918:51.66"), Some(918 * 60_000 + 51_660));
         assert_eq!(parse_cputime("1:02:03.45"), Some(3_723_450));
-        assert_eq!(
-            parse_cputime("2-01:00:00"),
-            Some(2 * 86_400_000 + 3_600_000)
-        );
+        assert_eq!(parse_cputime("2-01:00:00"), Some(2 * 86_400_000 + 3_600_000));
         assert_eq!(parse_cputime("x"), None);
         // Lines that don't read are skipped.
         let out = "    1  22752 158:45.08\n  411 196976 918:51.66\n  garbage\n  12 x 0:01.00\n";
         assert_eq!(
             parse_ps(out),
-            [
-                (1, 22752 * 1024, 158 * 60_000 + 45_080),
-                (411, 196976 * 1024, 918 * 60_000 + 51_660)
-            ]
+            [(1, 22752 * 1024, 158 * 60_000 + 45_080), (411, 196976 * 1024, 918 * 60_000 + 51_660)]
         );
     }
 
@@ -576,11 +483,7 @@ mod tests {
         let vms: HashSet<u32> = sys::processes(&mut Inner::default(), Metric::Cpu, None)
             .unwrap()
             .iter()
-            .filter(|p| {
-                p.exe
-                    .as_deref()
-                    .is_some_and(crate::host_proc::is_vm_process)
-            })
+            .filter(|p| p.exe.as_deref().is_some_and(crate::host_proc::is_vm_process))
             .map(|p| p.pid)
             .collect();
         let host = crate::host_use::Reader::new().read(None);

@@ -25,12 +25,12 @@ use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
 
 use lima_desktop_lib::collector::{Collector, Retention, now_ms};
+use lima_desktop_lib::journal;
 use lima_desktop_lib::lima::{self, Action, Instance, Resize};
 use lima_desktop_lib::oom::{self, CONSTRAINT_MEMCG};
 use lima_desktop_lib::podman::{Libpod, PodmanError};
 use lima_desktop_lib::probe::{self, Block};
 use lima_desktop_lib::store::{ABSENT, Store};
-use lima_desktop_lib::journal;
 
 const PREFIX: &str = "ld-e2e-";
 /// podman 5: Lima's own podman template (Fedora).
@@ -93,11 +93,7 @@ fn refuse_home(home: &Path, user_lima: &Path, instances: &[String]) -> Result<()
             home.display()
         ));
     }
-    let foreign: Vec<&str> = instances
-        .iter()
-        .map(String::as_str)
-        .filter(|n| !n.starts_with(PREFIX))
-        .collect();
+    let foreign: Vec<&str> = instances.iter().map(String::as_str).filter(|n| !n.starts_with(PREFIX)).collect();
     if !foreign.is_empty() {
         return Err(format!(
             "LIMA_HOME {} holds instances that aren't the e2e's ({}): point {HOME_ENV} elsewhere",
@@ -126,12 +122,10 @@ fn template(vm: &str) -> &'static str {
 /// `limactl create`'s arguments for an e2e VM: small (2 CPUs, 2 GiB, 10 GiB), nothing of the
 /// host mounted, no prompts.
 fn create_args(vm: &str, os: &str) -> Vec<String> {
-    let mut args: Vec<String> = [
-        "create", "--tty=false", "--name", vm, "--cpus", "2", "--memory", "2", "--disk", "10",
-        "--mount-none",
-    ]
-    .map(String::from)
-    .to_vec();
+    let mut args: Vec<String> =
+        ["create", "--tty=false", "--name", vm, "--cpus", "2", "--memory", "2", "--disk", "10", "--mount-none"]
+            .map(String::from)
+            .to_vec();
     if let Some(t) = vm_type(os) {
         args.extend(["--vm-type".to_string(), t.to_string()]);
     }
@@ -190,20 +184,13 @@ fn bytes(n: i64) -> String {
 }
 
 fn cut(s: &str, width: usize) -> String {
-    if s.chars().count() <= width {
-        s.to_string()
-    } else {
-        s.chars().take(width - 1).collect::<String>() + "…"
-    }
+    if s.chars().count() <= width { s.to_string() } else { s.chars().take(width - 1).collect::<String>() + "…" }
 }
 
 /// The last `n` non-empty lines of `text`, trimmed and cut to a pasteable width.
 fn last_lines(text: &str, n: usize) -> Vec<String> {
     let lines: Vec<&str> = text.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
-    lines[lines.len().saturating_sub(n)..]
-        .iter()
-        .map(|l| cut(l, EVIDENCE_WIDTH))
-        .collect()
+    lines[lines.len().saturating_sub(n)..].iter().map(|l| cut(l, EVIDENCE_WIDTH)).collect()
 }
 
 /// A check's line (and its evidence lines), with its duration in a column when it took a while.
@@ -362,9 +349,8 @@ where
 
 /// `n` blocks of the probe over Lima's ssh, as the collector runs it.
 async fn probe_blocks(inst: &Instance, n: usize, limit: Duration) -> Result<Vec<Block>, Vec<String>> {
-    let mut child = probe::spawn(&inst.ssh_config_file, &inst.name)
-        .await
-        .map_err(|e| vec![format!("can't run ssh: {e}")])?;
+    let mut child =
+        probe::spawn(&inst.ssh_config_file, &inst.name).await.map_err(|e| vec![format!("can't run ssh: {e}")])?;
     let stdout = child.stdout.take().expect("piped stdout");
     let mut stderr = child.stderr.take().expect("piped stderr");
     let mut blocks = Vec::new();
@@ -454,10 +440,7 @@ async fn bring_up(vm: &'static str) -> Result<(Instance, String), Vec<String>> {
         return Err(vec![format!("{vm}: Lima reports no podman socket")]);
     };
     let pod = Libpod::new(&sock);
-    let version = poll(Duration::from_secs(120), Duration::from_secs(2), || async {
-        pod.version().await.ok()
-    })
-    .await;
+    let version = poll(Duration::from_secs(120), Duration::from_secs(2), || async { pod.version().await.ok() }).await;
     match version {
         Some(v) => Ok((inst, v)),
         None => {
@@ -504,11 +487,8 @@ async fn check_create(ctx: &mut Ctx) -> Outcome {
             }
         }
     }
-    let replaced = if leftovers.is_empty() {
-        String::new()
-    } else {
-        format!(" (replaced {} left over)", leftovers.len())
-    };
+    let replaced =
+        if leftovers.is_empty() { String::new() } else { format!(" (replaced {} left over)", leftovers.len()) };
     if evidence.is_empty() {
         pass(format!("create + start {}{replaced}", made.join(", ")))
     } else {
@@ -658,9 +638,7 @@ async fn check_stats(ctx: &mut Ctx) -> Outcome {
         return skip("stats: no test containers");
     };
     let pod = Libpod::new(&sock);
-    let read = |pod: Libpod, id: String| async move {
-        pod.stats().await.ok()?.into_iter().find(|s| s.id == id)
-    };
+    let read = |pod: Libpod, id: String| async move { pod.stats().await.ok()?.into_iter().find(|s| s.id == id) };
     let Some(first) = read(pod.clone(), id.clone()).await else {
         let why = pod.stats().await.err().map_or("no row for it".into(), |e| e.to_string());
         return fail(format!("stats: nothing for {CLIENT}"), vec![why]);
@@ -712,7 +690,9 @@ async fn check_probe(ctx: &mut Ctx, vm: &'static str) -> Outcome {
         "PSI".to_string()
     } else {
         // The probe skips what isn't there; say why, and that the row reads absent, not zero.
-        let out = shell(vm, "ls /proc/pressure 2>&1; grep -o 'psi=[01]' /proc/cmdline || true", Duration::from_secs(30)).await;
+        let out =
+            shell(vm, "ls /proc/pressure 2>&1; grep -o 'psi=[01]' /proc/cmdline || true", Duration::from_secs(30))
+                .await;
         let why = last_lines(&out.stdout, 1).join("");
         if row[5] != ABSENT || row[7] != ABSENT {
             problems.push("PSI missing but its columns aren't ABSENT".into());
@@ -723,12 +703,18 @@ async fn check_probe(ctx: &mut Ctx, vm: &'static str) -> Outcome {
     if vm == P5 {
         let ids: Vec<&String> = [WEB, CLIENT].iter().filter_map(|c| ctx.containers.get(c)).collect();
         let seen = ids.iter().filter(|id| last.cgroups.contains_key(id.as_str())).count();
-        let read = |f: fn(&probe::Cgroup) -> Option<u64>| ids.iter().filter_map(|id| last.cgroups.get(id.as_str())).filter_map(f).max();
+        let read = |f: fn(&probe::Cgroup) -> Option<u64>| {
+            ids.iter().filter_map(|id| last.cgroups.get(id.as_str())).filter_map(f).max()
+        };
         let (peak, own) = (read(|c| c.peak), read(|c| c.own));
         if ids.is_empty() {
             cgroups = ", no test containers to look for".into();
         } else if seen < ids.len() || peak.is_none() || own.is_none() {
-            problems.push(format!("G lines for {seen} of {} test containers ({} in all)", ids.len(), last.cgroups.len()));
+            problems.push(format!(
+                "G lines for {seen} of {} test containers ({} in all)",
+                ids.len(),
+                last.cgroups.len()
+            ));
         } else {
             cgroups = format!(", {seen} container cgroups (G)");
         }
@@ -783,7 +769,8 @@ async fn check_oom(ctx: &mut Ctx) -> Outcome {
     .await;
     let last_err = last_err.lock().expect("lock").clone();
     let Some(e) = found else {
-        let why = if last_err.is_empty() { "the journal was readable".to_string() } else { format!("journal: {last_err}") };
+        let why =
+            if last_err.is_empty() { "the journal was readable".to_string() } else { format!("journal: {last_err}") };
         return fail(format!("oom: no kill of {OOM_CT} in the journal after 30 s (it exited {exit})"), vec![why]);
     };
     log(format!("oom event: {e:?}"));
@@ -810,7 +797,11 @@ async fn journal_access(vm: &str) -> String {
     let mut lines = out.stdout.lines();
     let user = lines.next().unwrap_or("?").trim().to_string();
     let in_group = lines.next().is_some_and(|g| g.split_whitespace().any(|g| g == "systemd-journal"));
-    if in_group { format!("as {user} (in systemd-journal)") } else { format!("with sudo -n ({user} isn't in systemd-journal)") }
+    if in_group {
+        format!("as {user} (in systemd-journal)")
+    } else {
+        format!("with sudo -n ({user} isn't in systemd-journal)")
+    }
 }
 
 /// A runtime that's shut down without blocking when dropped — even mid-check, on Ctrl-C, where
@@ -850,9 +841,10 @@ async fn check_collector(ctx: &mut Ctx) -> Vec<Outcome> {
                 && v.latest.contains_key("cpu_mc")
                 && v.containers.iter().any(|c| c.latest.contains_key("net_rx_bps"))
         });
-        let p4_ok = snap.vms.iter().any(|v| {
-            v.instance.name == P4 && v.latest.contains_key("cpu_mc") && v.podman_error.is_some()
-        });
+        let p4_ok = snap
+            .vms
+            .iter()
+            .any(|v| v.instance.name == P4 && v.latest.contains_key("cpu_mc") && v.podman_error.is_some());
         async move { (p5_ok && p4_ok).then_some(()) }
     })
     .await;
@@ -861,10 +853,7 @@ async fn check_collector(ctx: &mut Ctx) -> Vec<Outcome> {
     }
     let snap = collector.snapshot();
     log(format!("collector snapshot: {}", serde_json::to_string(&snap).unwrap_or_default()));
-    let oom = collector
-        .store()
-        .oom_events(Some(P5), ctx.oom_since, now_ms(), 10)
-        .unwrap_or_default();
+    let oom = collector.store().oom_events(Some(P5), ctx.oom_since, now_ms(), 10).unwrap_or_default();
     drop(rt);
 
     let mut out = Vec::new();
@@ -883,7 +872,8 @@ async fn check_collector(ctx: &mut Ctx) -> Vec<Outcome> {
             if let Some(e) = &v.probe_error {
                 problems.push(format!("probe error: {e}"));
             }
-            let ours = v.containers.iter().filter(|c| c.container.compose_project.as_deref() == Some(COMPOSE_PROJECT)).count();
+            let ours =
+                v.containers.iter().filter(|c| c.container.compose_project.as_deref() == Some(COMPOSE_PROJECT)).count();
             if ours < 2 {
                 problems.push(format!("{ours} of the test containers"));
             }
@@ -998,11 +988,9 @@ async fn check_resize(ctx: &mut Ctx) -> Outcome {
         return fail(format!("resize {P5}: lima::resize failed"), vec![e.to_string()]);
     }
     match lima::get(P5).await {
-        Ok(i) if i.memory == to => pass(format!(
-            "resize {P5} memory {} → {}: list shows it",
-            bytes(before.memory as i64),
-            bytes(to as i64)
-        )),
+        Ok(i) if i.memory == to => {
+            pass(format!("resize {P5} memory {} → {}: list shows it", bytes(before.memory as i64), bytes(to as i64)))
+        }
         Ok(i) => fail(format!("resize {P5}: list shows {}", bytes(i.memory as i64)), vec![]),
         Err(e) => fail(format!("resize {P5}: not listed"), vec![e.to_string()]),
     }
@@ -1078,19 +1066,16 @@ async fn check_delete(ctx: &mut Ctx) -> Outcome {
         return fail("delete: lima::act failed", errors);
     }
     match lima::list().await {
-        Ok(list) if list.iter().any(|i| i.name.starts_with(PREFIX)) => fail(
-            "delete: still listed",
-            vec![list.iter().map(|i| i.name.clone()).collect::<Vec<_>>().join(", ")],
-        ),
+        Ok(list) if list.iter().any(|i| i.name.starts_with(PREFIX)) => {
+            fail("delete: still listed", vec![list.iter().map(|i| i.name.clone()).collect::<Vec<_>>().join(", ")])
+        }
         Ok(_) => pass(format!("delete {} (stop → delete): none left", vms.join(", "))),
         Err(e) => fail("delete: limactl list failed", vec![e.to_string()]),
     }
 }
 
 /// Await futures concurrently, in order (no `futures` crate here).
-async fn futures_join<T: Send + 'static>(
-    futs: Vec<impl Future<Output = T> + Send + 'static>,
-) -> Vec<T> {
+async fn futures_join<T: Send + 'static>(futs: Vec<impl Future<Output = T> + Send + 'static>) -> Vec<T> {
     let handles: Vec<_> = futs.into_iter().map(tokio::spawn).collect();
     let mut out = Vec::new();
     for h in handles {
@@ -1282,7 +1267,11 @@ fn main() -> std::process::ExitCode {
         if args.keep {
             let left: Vec<String> = lima::list().await.unwrap_or_default().into_iter().map(|i| i.name).collect();
             if let Some(first) = left.iter().find(|n| *n == P5).or(left.first()) {
-                println!("  kept (--keep): {} · LIMA_HOME={} limactl shell {first}", left.join(", "), tilde(&home, &user_home));
+                println!(
+                    "  kept (--keep): {} · LIMA_HOME={} limactl shell {first}",
+                    left.join(", "),
+                    tilde(&home, &user_home)
+                );
             }
         } else {
             match delete_leftovers().await {
@@ -1420,11 +1409,8 @@ mod tests {
 
     #[test]
     fn the_summary_counts_and_points_at_the_log() {
-        let s = summary(
-            &[Status::Pass, Status::Pass, Status::Fail, Status::Skip],
-            Duration::from_secs(372),
-            ".e2e/x.log",
-        );
+        let s =
+            summary(&[Status::Pass, Status::Pass, Status::Fail, Status::Skip], Duration::from_secs(372), ".e2e/x.log");
         assert_eq!(s, "2 passed, 1 failed, 1 skipped · 6 min 12 s · full log: .e2e/x.log");
     }
 

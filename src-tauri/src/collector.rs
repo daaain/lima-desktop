@@ -44,18 +44,12 @@ pub struct Retention {
 
 impl Default for Retention {
     fn default() -> Self {
-        Retention {
-            raw_days: 7,
-            rollup_days: 365,
-        }
+        Retention { raw_days: 7, rollup_days: 365 }
     }
 }
 
 pub fn now_ms() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as i64)
-        .unwrap_or(0)
+    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0)
 }
 
 /// A tick every `secs`, the first at once; a late one is skipped rather than made up.
@@ -66,12 +60,7 @@ fn stats_interval(secs: u64) -> tokio::time::Interval {
 }
 
 fn named(names: &[&str], row: &[i64]) -> HashMap<String, i64> {
-    names
-        .iter()
-        .zip(row)
-        .filter(|(_, v)| **v != ABSENT)
-        .map(|(k, v)| (k.to_string(), *v))
-        .collect()
+    names.iter().zip(row).filter(|(_, v)| **v != ABSENT).map(|(k, v)| (k.to_string(), *v)).collect()
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -113,26 +102,16 @@ fn read_host(instances_at: Option<&Path>) -> Option<Host> {
     sys.refresh_memory();
     let cpus = std::thread::available_parallelism().map_or(0, |n| n.get() as u32);
     let disk = instances_at.and_then(filesystem_size).unwrap_or(0);
-    Some(Host {
-        cpus,
-        memory: sys.total_memory(),
-        disk,
-    })
+    Some(Host { cpus, memory: sys.total_memory(), disk })
 }
 
 fn filesystem_size(path: &Path) -> Option<u64> {
     let disks = sysinfo::Disks::new_with_refreshed_list().ok()?;
-    size_of_mount_above(
-        disks.iter().map(|d| (d.mount_point(), d.total_space())),
-        path,
-    )
+    size_of_mount_above(disks.iter().map(|d| (d.mount_point(), d.total_space())), path)
 }
 
 /// The size of the filesystem `path` is on: of the mount points above it, the deepest.
-fn size_of_mount_above<'a>(
-    mounts: impl Iterator<Item = (&'a Path, u64)>,
-    path: &Path,
-) -> Option<u64> {
+fn size_of_mount_above<'a>(mounts: impl Iterator<Item = (&'a Path, u64)>, path: &Path) -> Option<u64> {
     mounts
         .filter(|(mount, _)| path.starts_with(mount))
         .max_by_key(|(mount, _)| mount.components().count())
@@ -228,8 +207,7 @@ impl Collector {
     /// pace, and libpod's stats follow on their next tick.
     pub fn set_interval(&self, secs: u64) {
         let secs = secs.max(1);
-        self.interval
-            .send_if_modified(|s| std::mem::replace(s, secs) != secs);
+        self.interval.send_if_modified(|s| std::mem::replace(s, secs) != secs);
     }
 
     pub fn store(&self) -> std::sync::MutexGuard<'_, Store> {
@@ -396,21 +374,14 @@ impl Collector {
             if !running {
                 match disk_image_alloc(Path::new(&state.live.instance.dir)) {
                     0 => state.live.latest.remove("host_disk_alloc"),
-                    alloc => state
-                        .live
-                        .latest
-                        .insert("host_disk_alloc".into(), alloc as i64),
+                    alloc => state.live.latest.insert("host_disk_alloc".into(), alloc as i64),
                 };
             }
         }
     }
 
     fn instance(&self, name: &str) -> Option<Instance> {
-        self.vms
-            .lock()
-            .expect("vms lock")
-            .get(name)
-            .map(|v| v.live.instance.clone())
+        self.vms.lock().expect("vms lock").get(name).map(|v| v.live.instance.clone())
     }
 
     /// The host processes each running VM's own cost is measured from (`host_columns`): its guest's
@@ -488,9 +459,7 @@ impl Collector {
                 return;
             };
             if inst.ssh_config_file.is_empty() {
-                self.set_vm(&name, |v| {
-                    v.live.probe_error = Some("Lima reports no ssh config".into())
-                });
+                self.set_vm(&name, |v| v.live.probe_error = Some("Lima reports no ssh config".into()));
                 tokio::time::sleep(PROBE_RETRY).await;
                 continue;
             }
@@ -498,21 +467,14 @@ impl Collector {
             let mut child = match probe::spawn_every(&inst.ssh_config_file, &name, secs).await {
                 Ok(c) => c,
                 Err(e) => {
-                    self.set_vm(&name, |v| {
-                        v.live.probe_error = Some(format!("can't run ssh: {e}"))
-                    });
+                    self.set_vm(&name, |v| v.live.probe_error = Some(format!("can't run ssh: {e}")));
                     tokio::time::sleep(PROBE_RETRY).await;
                     continue;
                 }
             };
             let stdout = child.stdout.take().expect("piped stdout");
             let mut stderr = child.stderr.take().expect("piped stderr");
-            let entity = self
-                .vms
-                .lock()
-                .expect("lock")
-                .get(&name)
-                .and_then(|v| v.live.entity);
+            let entity = self.vms.lock().expect("lock").get(&name).and_then(|v| v.live.entity);
             let mut prev: Option<Block> = carried.take();
             let me = self.clone();
             let n = name.clone();
@@ -525,10 +487,7 @@ impl Collector {
                     me.store().ingest(id, ts, row.clone());
                 }
                 let cgroups = block.cgroups.clone();
-                let kills = prev
-                    .as_ref()
-                    .map(|p| oom::counter_kills(p, &block))
-                    .unwrap_or_default();
+                let kills = prev.as_ref().map(|p| oom::counter_kills(p, &block)).unwrap_or_default();
                 let uptime = block.uptime;
                 me.set_vm(&n, |v| {
                     v.guest_pid = vm_pid;
@@ -557,11 +516,7 @@ impl Collector {
             }
             let mut err = String::new();
             let _ = stderr.read_to_string(&mut err).await;
-            let last = err
-                .lines()
-                .rev()
-                .find(|l| !l.trim().is_empty())
-                .unwrap_or("probe ended");
+            let last = err.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("probe ended");
             let last = last.to_string();
             self.set_vm(&name, |v| v.live.probe_error = Some(last));
             tokio::time::sleep(PROBE_RETRY).await;
@@ -620,10 +575,7 @@ impl Collector {
                     store.ingest(vm, ts, vm_row);
                 }
             }
-            *self.host_use.lock().expect("lock") = Some(HostLive {
-                entity,
-                latest: named(HOST_METRICS, &row),
-            });
+            *self.host_use.lock().expect("lock") = Some(HostLive { entity, latest: named(HOST_METRICS, &row) });
         }
     }
 
@@ -646,9 +598,7 @@ impl Collector {
                 return;
             };
             let Some(sock) = inst.podman_socket.clone() else {
-                self.set_vm(&name, |v| {
-                    v.live.podman_error = Some("this instance forwards no podman socket".into())
-                });
+                self.set_vm(&name, |v| v.live.podman_error = Some("this instance forwards no podman socket".into()));
                 tokio::time::sleep(PROBE_RETRY).await;
                 continue;
             };
@@ -686,8 +636,7 @@ impl Collector {
             let mut vms = self.vms.lock().expect("vms lock");
             let Some(vm) = vms.get_mut(&name) else { return };
             vm.live.podman_error = None;
-            let running: std::collections::HashSet<&str> =
-                stats.iter().map(|s| s.id.as_str()).collect();
+            let running: std::collections::HashSet<&str> = stats.iter().map(|s| s.id.as_str()).collect();
             for c in vm.live.containers.iter_mut() {
                 if !running.contains(c.container.id.as_str()) {
                     c.latest.clear();
@@ -698,12 +647,7 @@ impl Collector {
             let mut rows: Vec<(String, Vec<i64>)> = Vec::new();
             let fresh = cgroups_fresh(vm.cgroups_at, now, secs);
             for s in &stats {
-                let Some(c) = vm
-                    .live
-                    .containers
-                    .iter_mut()
-                    .find(|c| c.container.id == s.id)
-                else {
+                let Some(c) = vm.live.containers.iter_mut().find(|c| c.container.id == s.id) else {
                     continue;
                 };
                 let cgroup = vm.cgroups.get(&s.id).filter(|_| fresh);
@@ -794,30 +738,19 @@ impl Collector {
         let now = now_ms();
         let mut vms = self.vms.lock().expect("vms lock");
         let Some(state) = vms.get_mut(vm) else { return };
-        let old: HashMap<String, ContainerLive> = state
-            .live
-            .containers
-            .drain(..)
-            .map(|c| (c.container.id.clone(), c))
-            .collect();
+        let old: HashMap<String, ContainerLive> =
+            state.live.containers.drain(..).map(|c| (c.container.id.clone(), c)).collect();
         let mut store = self.store();
         let mut fresh: Vec<ContainerLive> = list
             .into_iter()
             .map(|c| {
                 let prev = old.get(&c.id);
-                let entity = prev
-                    .and_then(|p| p.entity)
-                    .or_else(|| container_entity(&mut store, vm, &c, now));
-                ContainerLive {
-                    latest: prev.map(|p| p.latest.clone()).unwrap_or_default(),
-                    entity,
-                    container: c,
-                }
+                let entity = prev.and_then(|p| p.entity).or_else(|| container_entity(&mut store, vm, &c, now));
+                ContainerLive { latest: prev.map(|p| p.latest.clone()).unwrap_or_default(), entity, container: c }
             })
             .collect();
         fresh.sort_by(|a, b| {
-            (&a.container.compose_project, &a.container.name)
-                .cmp(&(&b.container.compose_project, &b.container.name))
+            (&a.container.compose_project, &a.container.name).cmp(&(&b.container.compose_project, &b.container.name))
         });
         state.live.containers = fresh;
     }
@@ -825,9 +758,7 @@ impl Collector {
 
 /// A container's entity id, created or found, with its compose labels kept for after it's gone.
 fn container_entity(store: &mut Store, vm: &str, c: &Container, now: i64) -> Option<i64> {
-    let id = store
-        .entity(Kind::Container, vm, &c.id, &c.name, now)
-        .ok()?;
+    let id = store.entity(Kind::Container, vm, &c.id, &c.name, now).ok()?;
     let (project, service) = (c.compose_project.as_deref(), c.compose_service.as_deref());
     if let Err(e) = store.label_entity(id, project, service) {
         log::warn!("labelling container {}: {e}", c.name);
@@ -847,21 +778,14 @@ fn queue_kills(v: &mut VmState, ts: i64, kills: Vec<Option<String>>) {
             .and_then(|id| v.live.containers.iter().find(|c| &c.container.id == id))
             .and_then(|c| c.latest.get("mem_limit").copied())
             .filter(|&limit| is_own_limit(limit, vm_memory));
-        v.oom_pending.push(PendingKill {
-            ts,
-            container_id,
-            mem_limit,
-        });
+        v.oom_pending.push(PendingKill { ts, container_id, mem_limit });
     }
     v.oom_wake.notify_one();
 }
 
 /// The container using the most memory, as last read, and how much.
 fn largest_container(containers: &[ContainerLive]) -> Option<(String, i64)> {
-    containers
-        .iter()
-        .filter_map(|c| Some((c.container.id.clone(), *c.latest.get("mem")?)))
-        .max_by_key(|(_, mem)| *mem)
+    containers.iter().filter_map(|c| Some((c.container.id.clone(), *c.latest.get("mem")?))).max_by_key(|(_, mem)| *mem)
 }
 
 /// What a VM's latest row says about memory, for a stall that may follow it.
@@ -951,12 +875,7 @@ fn host_columns(
     vm_pid: Option<u32>,
     squeeze: Option<f64>,
 ) {
-    let col = |name: &str| {
-        VM_METRICS
-            .iter()
-            .position(|m| *m == name)
-            .expect("known metric")
-    };
+    let col = |name: &str| VM_METRICS.iter().position(|m| *m == name).expect("known metric");
     if let Some(sys) = sys {
         let mut pids: Vec<sysinfo::Pid> = [inst.driver_pid, inst.host_agent_pid]
             .into_iter()
@@ -970,9 +889,7 @@ fn host_columns(
             sys.refresh_processes_specifics(
                 sysinfo::ProcessesToUpdate::Some(&pids),
                 true,
-                sysinfo::ProcessRefreshKind::nothing()
-                    .with_memory()
-                    .with_cpu(),
+                sysinfo::ProcessRefreshKind::nothing().with_memory().with_cpu(),
             );
             let (mut rss, mut mem, mut cpu, mut seen) = (0u64, 0u64, 0f32, false);
             for pid in &pids {
@@ -1019,11 +936,7 @@ pub fn container_row(
         match (prev, old) {
             (Some((then, _)), Some(old)) => {
                 let dt = now.duration_since(*then).as_secs_f64();
-                if dt <= 0.0 || cur < old {
-                    ABSENT
-                } else {
-                    ((cur - old) as f64 / dt).round() as i64
-                }
+                if dt <= 0.0 || cur < old { ABSENT } else { ((cur - old) as f64 / dt).round() as i64 }
             }
             _ => ABSENT,
         }
@@ -1039,11 +952,7 @@ pub fn container_row(
     vec![
         cpu_mc,
         s.mem_usage as i64,
-        if s.mem_limit > 0 {
-            s.mem_limit as i64
-        } else {
-            ABSENT
-        },
+        if s.mem_limit > 0 { s.mem_limit as i64 } else { ABSENT },
         reading(cg.peak),
         reading(cg.oom_kills),
         s.pids as i64,
@@ -1067,13 +976,8 @@ fn cgroups_fresh(at: Option<Instant>, now: Instant, interval_secs: u64) -> bool 
 /// only where every one of them has it: a container recreated a moment ago has none until the probe
 /// finds its cgroup (up to ~5 s), and part of a sum would read as the project's dropping. The live
 /// heading keeps to the same rule (`containers.ts`).
-fn project_sums<P: Into<String>>(
-    rows: impl IntoIterator<Item = (P, Vec<i64>)>,
-) -> HashMap<String, Vec<i64>> {
-    let own = CT_METRICS
-        .iter()
-        .position(|m| *m == "mem_own")
-        .expect("known metric");
+fn project_sums<P: Into<String>>(rows: impl IntoIterator<Item = (P, Vec<i64>)>) -> HashMap<String, Vec<i64>> {
+    let own = CT_METRICS.iter().position(|m| *m == "mem_own").expect("known metric");
     let mut sums: HashMap<String, Vec<i64>> = HashMap::new();
     let mut partial: std::collections::HashSet<String> = std::collections::HashSet::new();
     for (project, row) in rows {
@@ -1081,9 +985,7 @@ fn project_sums<P: Into<String>>(
         if row[own] == ABSENT {
             partial.insert(project.clone());
         }
-        let sum = sums
-            .entry(project)
-            .or_insert_with(|| vec![ABSENT; CT_METRICS.len()]);
+        let sum = sums.entry(project).or_insert_with(|| vec![ABSENT; CT_METRICS.len()]);
         add_sample(sum, &row);
     }
     for project in partial {
@@ -1217,10 +1119,7 @@ mod tests {
         assert_eq!(size("/home/ada/.lima/vm"), Some(200));
         assert_eq!(size("/home/ada/big/lima/vm"), Some(300));
         assert_eq!(size("/opt/lima"), Some(100));
-        assert_eq!(
-            size_of_mount_above(std::iter::empty(), Path::new("/x")),
-            None
-        );
+        assert_eq!(size_of_mount_above(std::iter::empty(), Path::new("/x")), None);
     }
 
     #[test]
@@ -1258,11 +1157,7 @@ mod tests {
             Some(&(t0, stat(0, 0))),
             t1,
             &stat(1_000_000_000, 2000),
-            Some(&Cgroup {
-                peak: Some(4096),
-                oom_kills: Some(1),
-                own: Some(2048),
-            }),
+            Some(&Cgroup { peak: Some(4096), oom_kills: Some(1), own: Some(2048) }),
         );
         let col = |name: &str| row[CT_METRICS.iter().position(|m| *m == name).unwrap()];
         assert_eq!(col("cpu_mc"), 500);
@@ -1277,10 +1172,7 @@ mod tests {
     fn without_a_cgroup_reading_its_counters_are_absent() {
         let row = container_row(None, Instant::now(), &stat(0, 0), None);
         let col = |name: &str| row[CT_METRICS.iter().position(|m| *m == name).unwrap()];
-        assert_eq!(
-            (col("mem_peak"), col("oom_kills"), col("mem_own")),
-            (ABSENT, ABSENT, ABSENT)
-        );
+        assert_eq!((col("mem_peak"), col("oom_kills"), col("mem_own")), (ABSENT, ABSENT, ABSENT));
     }
 
     #[test]
@@ -1295,31 +1187,16 @@ mod tests {
     fn only_a_limit_below_the_vms_memory_is_the_containers_own() {
         let gib = 1 << 30;
         assert!(is_own_limit(gib, 80 * gib));
-        assert!(
-            !is_own_limit(80 * gib - 4096, 80 * gib),
-            "unlimited reads as the VM's memory"
-        );
+        assert!(!is_own_limit(80 * gib - 4096, 80 * gib), "unlimited reads as the VM's memory");
         assert!(!is_own_limit(ABSENT, 80 * gib));
     }
 
     #[test]
     fn kills_without_kernel_detail_become_distinct_events() {
         let pending = vec![
-            PendingKill {
-                ts: 5_000,
-                container_id: Some("c1".into()),
-                mem_limit: Some(1 << 30),
-            },
-            PendingKill {
-                ts: 5_000,
-                container_id: None,
-                mem_limit: None,
-            },
-            PendingKill {
-                ts: 9_000,
-                container_id: None,
-                mem_limit: None,
-            },
+            PendingKill { ts: 5_000, container_id: Some("c1".into()), mem_limit: Some(1 << 30) },
+            PendingKill { ts: 5_000, container_id: None, mem_limit: None },
+            PendingKill { ts: 9_000, container_id: None, mem_limit: None },
         ];
         let events = counter_events("alp", pending, "there's no systemd journal in this VM");
         assert_eq!(events.len(), 3);
@@ -1327,10 +1204,7 @@ mod tests {
         assert_eq!(keys.len(), 3, "two kills in one second are still two");
         assert_eq!(events[0].container_id.as_deref(), Some("c1"));
         assert_eq!(events[0].mem_limit, Some(1 << 30));
-        assert_eq!(
-            events[2].detail.as_deref(),
-            Some("there's no systemd journal in this VM")
-        );
+        assert_eq!(events[2].detail.as_deref(), Some("there's no systemd journal in this VM"));
     }
 
     fn live(id: &str, mem: Option<i64>) -> ContainerLive {
@@ -1378,12 +1252,7 @@ mod tests {
     #[test]
     fn a_counter_reset_is_absent_not_negative() {
         let t0 = Instant::now();
-        let row = container_row(
-            Some(&(t0, stat(5_000, 0))),
-            t0 + Duration::from_secs(1),
-            &stat(10, 0),
-            None,
-        );
+        let row = container_row(Some(&(t0, stat(5_000, 0))), t0 + Duration::from_secs(1), &stat(10, 0), None);
         assert_eq!(row[0], ABSENT);
     }
 }

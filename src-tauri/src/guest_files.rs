@@ -188,15 +188,9 @@ pub fn parse_listing(path: &str, stdout: &[u8], folder: Folder) -> Result<Listin
     let truncated = entries.len() > MAX_ENTRIES;
     entries.truncate(MAX_ENTRIES);
     entries.sort_by(|a, b| {
-        (b.kind == "dir")
-            .cmp(&(a.kind == "dir"))
-            .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+        (b.kind == "dir").cmp(&(a.kind == "dir")).then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
     });
-    Ok(Listing {
-        path: path.to_string(),
-        entries,
-        truncated,
-    })
+    Ok(Listing { path: path.to_string(), entries, truncated })
 }
 
 /// Text: valid UTF-8 (a character cut at the end aside) without NULs.
@@ -206,33 +200,21 @@ fn as_text(bytes: &[u8]) -> Option<String> {
     }
     match std::str::from_utf8(bytes) {
         Ok(s) => Some(s.to_string()),
-        Err(e) if e.error_len().is_none() => {
-            Some(String::from_utf8_lossy(&bytes[..e.valid_up_to()]).into_owned())
-        }
+        Err(e) if e.error_len().is_none() => Some(String::from_utf8_lossy(&bytes[..e.valid_up_to()]).into_owned()),
         Err(_) => None,
     }
 }
 
 pub fn parse_peek(path: &str, stdout: &[u8]) -> Result<Peek, FilesError> {
     let (line, rest) = status(stdout)?;
-    let size = line
-        .strip_prefix("LD-OK ")
-        .and_then(|s| s.trim().parse().ok())
-        .unwrap_or(rest.len() as u64);
-    Ok(Peek {
-        path: path.to_string(),
-        size,
-        text: as_text(rest),
-        truncated: size > rest.len() as u64,
-    })
+    let size = line.strip_prefix("LD-OK ").and_then(|s| s.trim().parse().ok()).unwrap_or(rest.len() as u64);
+    Ok(Peek { path: path.to_string(), size, text: as_text(rest), truncated: size > rest.len() as u64 })
 }
 
 fn status(stdout: &[u8]) -> Result<(&str, &[u8]), FilesError> {
     match split_status(stdout) {
         Some((line, rest)) if line.starts_with("LD-OK") => Ok((line, rest)),
-        Some((line, _)) if line.starts_with("LD-E ") => {
-            Err(FilesError::Guest(line["LD-E ".len()..].to_string()))
-        }
+        Some((line, _)) if line.starts_with("LD-E ") => Err(FilesError::Guest(line["LD-E ".len()..].to_string())),
         _ => Err(FilesError::Guest("the guest gave no answer".into())),
     }
 }
@@ -275,17 +257,10 @@ pub async fn list(
     parse_listing(&rel, &out, folder)
 }
 
-pub async fn peek(
-    ssh_config: &str,
-    instance: &str,
-    mountpoint: &str,
-    rel: &str,
-) -> Result<Peek, FilesError> {
+pub async fn peek(ssh_config: &str, instance: &str, mountpoint: &str, rel: &str) -> Result<Peek, FilesError> {
     let rel = normalise(rel)?;
     if rel.is_empty() {
-        return Err(FilesError::Refused(
-            "that's the folder itself, not a file".into(),
-        ));
+        return Err(FilesError::Refused("that's the folder itself, not a file".into()));
     }
     let out = run(ssh_config, instance, script(mountpoint, &rel, Op::Peek)).await?;
     parse_peek(&rel, &out)
@@ -318,20 +293,8 @@ mod tests {
     fn a_listing_is_dirs_first_then_by_name() {
         let out = b"LD-OK\nf\t12\t1700000000.5\tzeta.txt\0d\t4096\t1700000001.0\tconf\0l\t7\t1700000002.0\tlatest\0f\t3\t1700000003.0\ttab\there\0";
         let l = parse_listing("x", out, Folder::Volume).unwrap();
-        let names: Vec<_> = l
-            .entries
-            .iter()
-            .map(|e| (e.name.as_str(), e.kind))
-            .collect();
-        assert_eq!(
-            names,
-            [
-                ("conf", "dir"),
-                ("latest", "link"),
-                ("tab\there", "file"),
-                ("zeta.txt", "file")
-            ]
-        );
+        let names: Vec<_> = l.entries.iter().map(|e| (e.name.as_str(), e.kind)).collect();
+        assert_eq!(names, [("conf", "dir"), ("latest", "link"), ("tab\there", "file"), ("zeta.txt", "file")]);
         assert_eq!(l.entries[3].size, 12);
         assert_eq!(l.entries[3].modified, 1_700_000_000);
         assert!(!l.truncated);
@@ -372,16 +335,10 @@ mod tests {
     #[test]
     fn a_peek_is_text_or_not() {
         let p = parse_peek("a", b"LD-OK 5\nhello").unwrap();
-        assert_eq!(
-            (p.text.as_deref(), p.size, p.truncated),
-            (Some("hello"), 5, false)
-        );
+        assert_eq!((p.text.as_deref(), p.size, p.truncated), (Some("hello"), 5, false));
         let p = parse_peek("a", b"LD-OK 100000\nhello").unwrap();
         assert!(p.truncated);
-        assert_eq!(
-            parse_peek("a", b"LD-OK 3\n\x00\x01\x02").unwrap().text,
-            None
-        );
+        assert_eq!(parse_peek("a", b"LD-OK 3\n\x00\x01\x02").unwrap().text, None);
         // A character cut at the end of the shown part is still text.
         let p = parse_peek("a", "LD-OK 9\nhé".as_bytes().split_last().unwrap().1).unwrap();
         assert_eq!(p.text.as_deref(), Some("h"));

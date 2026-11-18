@@ -34,16 +34,14 @@ pub fn is_vm_process(exe: &Path) -> bool {
 
 /// Whether a process with these files open is serving the instance kept in `instance_dir`.
 pub fn serves(open: &[PathBuf], instance_dir: &Path) -> bool {
-    open.iter()
-        .any(|f| f.starts_with(instance_dir) && f != instance_dir)
+    open.iter().any(|f| f.starts_with(instance_dir) && f != instance_dir)
 }
 
 /// The guest's process for the instance in `instance_dir`, if one is running.
 pub fn find(instance_dir: &Path) -> Option<u32> {
     let dir = std::fs::canonicalize(instance_dir).unwrap_or_else(|_| instance_dir.to_path_buf());
     sys::pids().into_iter().find(|&pid| {
-        sys::exe(pid).is_some_and(|exe| is_vm_process(&exe))
-            && serves(&sys::open_files(pid, FIRST_FILES), &dir)
+        sys::exe(pid).is_some_and(|exe| is_vm_process(&exe)) && serves(&sys::open_files(pid, FIRST_FILES), &dir)
     })
 }
 
@@ -84,11 +82,7 @@ pub struct VmProcess {
 
 impl VmProcess {
     pub fn new(instance_dir: impl Into<PathBuf>) -> VmProcess {
-        VmProcess {
-            dir: instance_dir.into(),
-            pid: None,
-            last_search: None,
-        }
+        VmProcess { dir: instance_dir.into(), pid: None, last_search: None }
     }
 
     /// The process now: the one remembered while it's alive, else a new search, at most every
@@ -107,10 +101,7 @@ impl VmProcess {
             return Some(pid);
         }
         self.pid = None;
-        if self
-            .last_search
-            .is_some_and(|t| now.duration_since(t) < RETRY)
-        {
+        if self.last_search.is_some_and(|t| now.duration_since(t) < RETRY) {
             return None;
         }
         self.last_search = Some(now);
@@ -158,22 +149,13 @@ mod sys {
             return Vec::new();
         }
         buf.truncate(got as usize);
-        buf.into_iter()
-            .filter(|&p| p > 0)
-            .map(|p| p as u32)
-            .collect()
+        buf.into_iter().filter(|&p| p > 0).map(|p| p as u32).collect()
     }
 
     pub fn exe(pid: u32) -> Option<PathBuf> {
         let mut buf = vec![0u8; libc::PROC_PIDPATHINFO_MAXSIZE as usize];
         // SAFETY: `buf` is as long as we say.
-        let n = unsafe {
-            libc::proc_pidpath(
-                pid as c_int,
-                buf.as_mut_ptr().cast::<c_void>(),
-                buf.len() as u32,
-            )
-        };
+        let n = unsafe { libc::proc_pidpath(pid as c_int, buf.as_mut_ptr().cast::<c_void>(), buf.len() as u32) };
         if n <= 0 {
             return None;
         }
@@ -185,8 +167,7 @@ mod sys {
     pub fn open_files(pid: u32, limit: usize) -> Vec<PathBuf> {
         let pid = pid as c_int;
         // SAFETY: a null buffer asks only for the size needed.
-        let bytes =
-            unsafe { libc::proc_pidinfo(pid, libc::PROC_PIDLISTFDS, 0, std::ptr::null_mut(), 0) };
+        let bytes = unsafe { libc::proc_pidinfo(pid, libc::PROC_PIDLISTFDS, 0, std::ptr::null_mut(), 0) };
         if bytes <= 0 {
             return Vec::new();
         }
@@ -194,15 +175,8 @@ mod sys {
         let mut fds: Vec<libc::proc_fdinfo> = Vec::with_capacity(room);
         let room_bytes = (room * size_of::<libc::proc_fdinfo>()) as c_int;
         // SAFETY: `fds` has capacity for `room_bytes`.
-        let n = unsafe {
-            libc::proc_pidinfo(
-                pid,
-                libc::PROC_PIDLISTFDS,
-                0,
-                fds.as_mut_ptr().cast::<c_void>(),
-                room_bytes,
-            )
-        };
+        let n =
+            unsafe { libc::proc_pidinfo(pid, libc::PROC_PIDLISTFDS, 0, fds.as_mut_ptr().cast::<c_void>(), room_bytes) };
         if n <= 0 {
             return Vec::new();
         }
@@ -230,8 +204,7 @@ mod sys {
                 let info = unsafe { info.assume_init() };
                 let raw = info.pvip.vip_path.as_flattened();
                 // SAFETY: c_char and u8 have the same layout.
-                let bytes: &[u8] =
-                    unsafe { std::slice::from_raw_parts(raw.as_ptr().cast::<u8>(), raw.len()) };
+                let bytes: &[u8] = unsafe { std::slice::from_raw_parts(raw.as_ptr().cast::<u8>(), raw.len()) };
                 let path = CStr::from_bytes_until_nul(bytes).ok()?.to_str().ok()?;
                 (!path.is_empty()).then(|| PathBuf::from(path))
             })
@@ -243,11 +216,7 @@ mod sys {
         let mut info = std::mem::MaybeUninit::<libc::rusage_info_v2>::zeroed();
         // SAFETY: `info` is a zeroed rusage_info_v2, the flavor asked for.
         let rc = unsafe {
-            libc::proc_pid_rusage(
-                pid as c_int,
-                libc::RUSAGE_INFO_V2,
-                info.as_mut_ptr().cast::<libc::rusage_info_t>(),
-            )
+            libc::proc_pid_rusage(pid as c_int, libc::RUSAGE_INFO_V2, info.as_mut_ptr().cast::<libc::rusage_info_t>())
         };
         if rc != 0 {
             return None;
@@ -265,9 +234,7 @@ mod sys {
         let Ok(dir) = std::fs::read_dir("/proc") else {
             return Vec::new();
         };
-        dir.flatten()
-            .filter_map(|e| e.file_name().to_str()?.parse().ok())
-            .collect()
+        dir.flatten().filter_map(|e| e.file_name().to_str()?.parse().ok()).collect()
     }
 
     pub fn exe(pid: u32) -> Option<PathBuf> {
@@ -279,10 +246,7 @@ mod sys {
         let Ok(dir) = std::fs::read_dir(format!("/proc/{pid}/fd")) else {
             return Vec::new();
         };
-        let mut fds: Vec<u32> = dir
-            .flatten()
-            .filter_map(|e| e.file_name().to_str()?.parse().ok())
-            .collect();
+        let mut fds: Vec<u32> = dir.flatten().filter_map(|e| e.file_name().to_str()?.parse().ok()).collect();
         fds.sort_unstable();
         fds.into_iter()
             .filter_map(|fd| std::fs::read_link(format!("/proc/{pid}/fd/{fd}")).ok())
@@ -338,9 +302,7 @@ mod tests {
         assert!(is_vm_process(Path::new(
             "/System/Library/Frameworks/Virtualization.framework/Versions/A/XPCServices/com.apple.Virtualization.VirtualMachine.xpc/Contents/MacOS/com.apple.Virtualization.VirtualMachine"
         )));
-        assert!(is_vm_process(Path::new(
-            "/opt/homebrew/bin/qemu-system-aarch64"
-        )));
+        assert!(is_vm_process(Path::new("/opt/homebrew/bin/qemu-system-aarch64")));
         assert!(is_vm_process(Path::new("/usr/bin/qemu-system-x86_64")));
         assert!(!is_vm_process(Path::new("/opt/homebrew/bin/limactl")));
         assert!(!is_vm_process(Path::new("/opt/homebrew/bin/qemu-img")));
@@ -359,12 +321,7 @@ mod tests {
         // A sibling whose name starts the same is another instance.
         assert!(!serves(&[PathBuf::from("/Users/me/.lima/web-2/disk")], dir));
         // Its cache of images isn't its own.
-        assert!(!serves(
-            &[PathBuf::from(
-                "/Users/me/Library/Caches/lima/download/by-url-sha256/x/data"
-            )],
-            dir
-        ));
+        assert!(!serves(&[PathBuf::from("/Users/me/Library/Caches/lima/download/by-url-sha256/x/data")], dir));
         assert!(!serves(&[PathBuf::from("/Users/me/.lima/web")], dir));
         assert!(!serves(&[], dir));
     }
@@ -379,14 +336,7 @@ mod tests {
             Some(42)
         };
         assert_eq!(vm.pid_with(t0, |_| true, search), Some(42));
-        assert_eq!(
-            vm.pid_with(
-                t0 + Duration::from_secs(1),
-                |_| true,
-                |_| panic!("no search while alive")
-            ),
-            Some(42)
-        );
+        assert_eq!(vm.pid_with(t0 + Duration::from_secs(1), |_| true, |_| panic!("no search while alive")), Some(42));
         assert_eq!(searches.get(), 1);
     }
 
@@ -395,14 +345,7 @@ mod tests {
         let t0 = Instant::now();
         let mut vm = VmProcess::new("/x");
         assert_eq!(vm.pid_with(t0, |_| true, |_| None), None);
-        assert_eq!(
-            vm.pid_with(
-                t0 + Duration::from_secs(3),
-                |_| true,
-                |_| panic!("too soon")
-            ),
-            None
-        );
+        assert_eq!(vm.pid_with(t0 + Duration::from_secs(3), |_| true, |_| panic!("too soon")), None);
         assert_eq!(vm.pid_with(t0 + RETRY, |_| true, |_| Some(7)), Some(7));
     }
 

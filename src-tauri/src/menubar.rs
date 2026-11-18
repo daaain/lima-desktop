@@ -23,8 +23,8 @@ use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent}
 use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
 
 use crate::collector::{Collector, Snapshot, now_ms};
-use crate::store::{Stack, Store};
 use crate::settings::{Drawing, Item, MenuBar, Saved, Warn};
+use crate::store::{Stack, Store};
 
 /// The popover window's label, and its width in points.
 pub const POPOVER: &str = "popover";
@@ -67,9 +67,9 @@ impl Res {
         match self {
             Res::Mem => past(w.memory_pct),
             Res::Cpu => past(w.cpu_pct),
-            Res::Disk => w
-                .disk_free_gb
-                .map_or(Threshold::Never, |gb| Threshold::FreeUnder(u64::from(gb) * 1_000_000_000)),
+            Res::Disk => {
+                w.disk_free_gb.map_or(Threshold::Never, |gb| Threshold::FreeUnder(u64::from(gb) * 1_000_000_000))
+            }
         }
     }
     fn index(self) -> usize {
@@ -341,7 +341,8 @@ impl Mask {
             .zip(&over.alpha)
             .flat_map(|(&a, &o)| {
                 // Over coverage `o`, the other colour shows through what's left.
-                let mix = |c: u8, d: u8| ((u16::from(d) * u16::from(o) + u16::from(c) * (255 - u16::from(o))) / 255) as u8;
+                let mix =
+                    |c: u8, d: u8| ((u16::from(d) * u16::from(o) + u16::from(c) * (255 - u16::from(o))) / 255) as u8;
                 let alpha = (u16::from(o) + u16::from(a) * (255 - u16::from(o)) / 255) as u8;
                 [mix(rgb[0], over_rgb[0]), mix(rgb[1], over_rgb[1]), mix(rgb[2], over_rgb[2]), alpha]
             })
@@ -577,9 +578,7 @@ impl Popover {
     /// A click on `res`'s item, the popover on screen or not: a second click on the same item
     /// hides it.
     fn click(self, res: Res, shown: bool, now: Instant) -> Click {
-        let just_hidden = self
-            .closed
-            .is_some_and(|(r, t)| r == res && now.saturating_duration_since(t) < CLICK_HID_IT);
+        let just_hidden = self.closed.is_some_and(|(r, t)| r == res && now.saturating_duration_since(t) < CLICK_HID_IT);
         match (shown, self.open_on == Some(res)) {
             (true, true) => Click::Hide,
             (true, false) => Click::Show,
@@ -590,10 +589,7 @@ impl Popover {
 
     /// Hidden now; when, and on which item, if it was showing.
     fn hidden(self, now: Instant) -> Popover {
-        Popover {
-            open_on: None,
-            closed: self.open_on.map(|r| (r, now)).or(self.closed),
-        }
+        Popover { open_on: None, closed: self.open_on.map(|r| (r, now)).or(self.closed) }
     }
 }
 
@@ -916,9 +912,7 @@ fn set_highlighted(_: &tauri::tray::TrayIcon, _: Option<&Icon>) -> tauri::Result
 fn toggle_popover(app: &AppHandle, res: Res, rect: tauri::Rect) {
     let state = app.state::<State>();
     let window = app.get_webview_window(POPOVER);
-    let shown = window
-        .as_ref()
-        .is_some_and(|w| w.is_visible().unwrap_or(false));
+    let shown = window.as_ref().is_some_and(|w| w.is_visible().unwrap_or(false));
     let popover = *state.popover.lock().expect("popover lock");
     match popover.click(res, shown, Instant::now()) {
         Click::Nothing => {}
@@ -1101,19 +1095,12 @@ fn show_popover(app: &AppHandle, w: &tauri::WebviewWindow, res: Res, item: Optio
     if let Ok(t) = w.theme() {
         let _ = w.set_background_color(Some(background(t)));
     }
-    let shown = PopoverShown {
-        tab: res.id(),
-        theme: app.state::<Saved>().get().theme,
-    };
+    let shown = PopoverShown { tab: res.id(), theme: app.state::<Saved>().get().theme };
     if let Err(e) = w.emit_to(POPOVER, "popover-shown", shown) {
         log::warn!("can't tell the popover its tab: {e}");
     }
     // Before it's shown: should it lose the focus at once, it's hidden as open on this item.
-    app.state::<State>()
-        .popover
-        .lock()
-        .expect("popover lock")
-        .open_on = Some(res);
+    app.state::<State>().popover.lock().expect("popover lock").open_on = Some(res);
     let _ = w.show();
     // Once more, now it's on its screen: should the move have left it at another screen's scale
     // (the cause of the popover opening out of place, fixed above), it's put right before it's seen
@@ -1726,7 +1713,9 @@ mod tests {
         let mem = ending(history(0.59, 0.43, 0.0), used(0.61, 0.446));
         let cpu = ending(history(0.44, 0.32, 0.0), used(0.48, 0.35));
         let chosen = crate::settings::MenuBar::default();
-        for (res, h, hot) in [(Res::Mem, mem, false), (Res::Cpu, cpu, false), (Res::Disk, history(0.62, 0.35, 0.0), true)] {
+        for (res, h, hot) in
+            [(Res::Mem, mem, false), (Res::Cpu, cpu, false), (Res::Disk, history(0.62, 0.35, 0.0), true)]
+        {
             let p = parts(res.item(&chosen), chosen.names).unwrap();
             for (theme, bar) in [("light", Bar::Light), ("dark", Bar::Dark)] {
                 write_rgba(&dir, &format!("{theme}-{}", res.id()), &shown(res, p, &h, hot, bar));
