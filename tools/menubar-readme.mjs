@@ -2,8 +2,9 @@
 // draws them (`cargo test menubar_readme -- --ignored`, macOS only, as CoreText sets their text),
 // on a menu bar, with the popover open under one of them, as the built UI draws it against the fake
 // backend (e2e-ui/). One picture on a light menu bar, open under memory, and one on a dark, open under
-// CPU, so the two show both tabs. Both as tall as the taller popover needs, so they line up side by
-// side. As lossless WebP.
+// CPU, so the two show both tabs. Both cropped alike, so they line up side by side: as tall as the
+// taller popover needs, and the popover in the same place (the dark bar's items moved left for it,
+// leaving some bar after the clock). As lossless WebP.
 //
 //   node tools/menubar-readme.mjs <items dir> [out dir, default docs/img]
 //
@@ -103,12 +104,18 @@ async function compose(browser, theme, items, popoverPng, height, out) {
   const context = await browser.newContext({ viewport: { width: 560, height: 400 }, deviceScaleFactor: SCALE, locale: 'en-GB' });
   const page = await context.newPage();
   await page.setContent(scene(theme, items, popoverPng));
-  await page.evaluate(async ({ height, width, gap }) => {
+  await page.evaluate(async ({ height, width, gap, anchor }) => {
     for (const c of document.querySelectorAll('canvas')) {
       const bytes = Uint8ClampedArray.from(atob(c.dataset.rgba), (ch) => ch.charCodeAt(0));
       c.getContext('2d').putImageData(new ImageData(bytes, c.width, c.height), 0, 0);
     }
     await Promise.all([...document.images].map((i) => i.decode()));
+    // The same crop in both pictures: the bar's items moved left, so the open one is where the
+    // light picture's is, and the popover lands in the same place.
+    const centre = (el) => { const r = el.getBoundingClientRect(); return r.left + r.width / 2; };
+    const bar = document.querySelector('.bar');
+    const shift = centre(document.querySelector('.item.open')) - centre(document.querySelector(`.item[data-res="${anchor}"]`));
+    bar.style.paddingRight = `${parseFloat(getComputedStyle(bar).paddingRight) + shift}px`;
     // Centred under its item and kept off the edges, as menubar.rs places it.
     const shot = document.querySelector('.shot').getBoundingClientRect();
     const open = document.querySelector('.item.open').getBoundingClientRect();
@@ -116,7 +123,7 @@ async function compose(browser, theme, items, popoverPng, height, out) {
     document.querySelector('.popover').style.left = `${Math.min(shot.width - width - gap, Math.max(gap, left))}px`;
     document.querySelector('.room').style.height = `${height + 4}px`;
     await document.fonts.ready;
-  }, { height, width: POPOVER_WIDTH, gap: GAP });
+  }, { height, width: POPOVER_WIDTH, gap: GAP, anchor: OPEN.light });
   const png = join(dirname(out), `${theme}.png`);
   await page.locator('.shot').screenshot({ path: png, animations: 'disabled' });
   await context.close();
