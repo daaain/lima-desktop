@@ -1,6 +1,7 @@
 //! Whether a newer Lima Desktop is out: GitHub's latest release, asked at most once a day while
 //! Settings allows it, compared with this app's own version. Nothing is installed; the UI says a
-//! newer one is out and links to its release page. The request carries only a generic user agent
+//! newer one is out, what it brings (each release's notes since the one running, from CHANGELOG.md
+//! at the latest's tag, asked for once per release found), and links to its release page. The request carries only a generic user agent
 //! (GitHub refuses one without), so nothing about the person or their computer leaves with it. A
 //! check that fails is logged and otherwise ignored: the notice just doesn't appear.
 
@@ -13,6 +14,8 @@ use tauri::Manager;
 
 /// GitHub's latest release of the app: never a draft or a pre-release.
 const LATEST: &str = "https://api.github.com/repos/daaain/lima-desktop/releases/latest";
+/// CHANGELOG.md, raw, at a tag (`?ref=v0.6.0`).
+const CHANGELOG_AT: &str = "https://api.github.com/repos/daaain/lima-desktop/contents/CHANGELOG.md";
 /// Where a release's page has to be for the UI to open it.
 const RELEASES: &str = "https://github.com/daaain/lima-desktop/releases/";
 
@@ -25,11 +28,24 @@ const FIRST_AFTER: Duration = Duration::from_secs(30);
 const LOOK_EVERY: Duration = Duration::from_secs(15 * 60);
 const TIMEOUT: Duration = Duration::from_secs(20);
 
-/// A newer version, as the UI shows it: "0.3.0", and its release page.
+/// A newer version, as the UI shows it: "0.3.0", its release page, and what it brings.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Update {
     pub version: String,
     pub url: String,
+    /// Each release's notes since the one running, newest first; none when they couldn't be read
+    /// (asked for again at the next check).
+    #[serde(default)]
+    pub notes: Vec<Notes>,
+}
+
+/// One release's notes, as CHANGELOG.md has them: its version, its date, and the Markdown under
+/// its heading (any summary, then its `###` sections of `- ` entries).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Notes {
+    pub version: String,
+    pub date: String,
+    pub text: String,
 }
 
 /// What's kept between runs, as `updates.json` beside the settings, so a restart doesn't ask again
@@ -65,7 +81,31 @@ pub fn parse(json: &str) -> Result<Update, String> {
     if !r.html_url.starts_with(RELEASES) {
         return Err(format!("{} isn't this app's releases", r.html_url));
     }
-    Ok(Update { version: version.to_string(), url: r.html_url })
+    Ok(Update { version: version.to_string(), url: r.html_url, notes: vec![] })
+}
+
+/// The notes of each release in `changelog` (CHANGELOG.md: `## 0.6.0 — 2026-11-17` headings, newest
+/// first) newer than `running`, up to `latest`, newest first. Nothing, from something else.
+pub fn notes_between(changelog: &str, running: &Version, latest: &Version) -> Vec<Notes> {
+    let mut found: Vec<Notes> = vec![];
+    let mut taking = false;
+    for line in changelog.lines() {
+        if let Some(heading) = line.strip_prefix("## ") {
+            let (version, date) = heading.split_once(" — ").unwrap_or((heading, ""));
+            taking = version_of(version.trim()).is_some_and(|v| v > *running && v <= *latest);
+            if taking {
+                found.push(Notes { version: version.trim().into(), date: date.trim().into(), text: String::new() });
+            }
+        } else if taking && let Some(n) = found.last_mut() {
+            n.text.push_str(line);
+            n.text.push('\n');
+        }
+    }
+    for n in &mut found {
+        n.text = n.text.trim().to_string();
+    }
+    found.sort_by_key(|n| std::cmp::Reverse(version_of(&n.version)));
+    found
 }
 
 fn version_of(tag: &str) -> Option<Version> {
@@ -96,9 +136,17 @@ impl Updates {
         Updates { path, running, checked: Mutex::new(checked) }
     }
 
-    /// A newer version than this one, as last heard of.
+    /// A newer version than this one, as last heard of, with the notes of the releases still ahead.
     pub fn available(&self) -> Option<Update> {
-        newer(self.checked.lock().expect("updates lock").latest.as_ref(), &self.running)
+        let mut u = newer(self.checked.lock().expect("updates lock").latest.as_ref(), &self.running)?;
+        u.notes.retain(|n| version_of(&n.version).is_some_and(|v| v > self.running));
+        Some(u)
+    }
+
+    /// The notes already found for `version`, the latest release, so they're asked for once.
+    pub fn notes_known(&self, version: &str) -> Option<Vec<Notes>> {
+        let c = self.checked.lock().expect("updates lock");
+        c.latest.as_ref().filter(|l| l.version == version && !l.notes.is_empty()).map(|l| l.notes.clone())
     }
 
     fn due(&self, now: i64) -> bool {
@@ -126,16 +174,31 @@ fn save(path: &Path, c: &Checked) -> std::io::Result<()> {
     std::fs::rename(&tmp, path)
 }
 
-/// GitHub's latest release, asked as `lima-desktop/<version>` and nothing else about whoever asks.
-fn fetch(running: &Version) -> Result<Update, String> {
+/// `url` from GitHub, as `accept`, asked as `lima-desktop/<version>` and nothing else about whoever asks.
+fn get(running: &Version, url: &str, accept: &str) -> Result<String, String> {
     let agent: ureq::Agent = ureq::Agent::config_builder()
         .timeout_global(Some(TIMEOUT))
         .user_agent(format!("lima-desktop/{running}"))
-        .accept("application/vnd.github+json")
+        .accept(accept)
         .build()
         .into();
-    let body = agent.get(LATEST).call().and_then(|mut r| r.body_mut().read_to_string()).map_err(|e| e.to_string())?;
-    parse(&body)
+    agent.get(url).call().and_then(|mut r| r.body_mut().read_to_string()).map_err(|e| e.to_string())
+}
+
+/// GitHub's latest release.
+fn fetch(running: &Version) -> Result<Update, String> {
+    parse(&get(running, LATEST, "application/vnd.github+json")?)
+}
+
+/// CHANGELOG.md as it was released in `version` (its tag, `v0.6.0`), raw.
+fn fetch_changelog(running: &Version, version: &str) -> Result<String, String> {
+    get(running, &format!("{CHANGELOG_AT}?ref=v{version}"), "application/vnd.github.raw+json")
+}
+
+/// The notes of each release since `running`, up to `version`, from its changelog.
+fn fetch_notes(running: &Version, version: &str) -> Result<Vec<Notes>, String> {
+    let latest = version_of(version).ok_or_else(|| format!("{version:?} isn't a version"))?;
+    Ok(notes_between(&fetch_changelog(running, version)?, running, &latest))
 }
 
 /// Starts looking: shortly after start, then every quarter of an hour, asking GitHub when a check
@@ -168,7 +231,28 @@ async fn check_if_due(app: &tauri::AppHandle) {
         Ok(latest) => log::debug!("the latest release is {}", latest.version),
         Err(e) => log::warn!("checking for a new version: {e}"),
     }
-    updates.record(now, fetched.ok());
+    let mut found = fetched.ok();
+    // A newer one: what it brings, asked for once (none, if that fails: the notice still shows,
+    // and they're asked for again at the next check).
+    if let Some(latest) = found.as_mut()
+        && newer(Some(latest), &updates.running).is_some()
+    {
+        latest.notes = match updates.notes_known(&latest.version) {
+            Some(known) => known,
+            None => {
+                let (running, version) = (updates.running.clone(), latest.version.clone());
+                tauri::async_runtime::spawn_blocking(move || fetch_notes(&running, &version))
+                    .await
+                    .map_err(|e| e.to_string())
+                    .and_then(|r| r)
+                    .unwrap_or_else(|e| {
+                        log::warn!("reading what {} brings: {e}", latest.version);
+                        vec![]
+                    })
+            }
+        };
+    }
+    updates.record(now, found);
 }
 
 #[cfg(test)]
@@ -182,7 +266,93 @@ mod tests {
         Update {
             version: version.into(),
             url: format!("https://github.com/daaain/lima-desktop/releases/tag/v{version}"),
+            notes: vec![],
         }
+    }
+
+    fn notes(version: &str, text: &str) -> Notes {
+        Notes { version: version.into(), date: "2026-11-17".into(), text: text.into() }
+    }
+
+    // As CHANGELOG.md is: a header, each release newest first, and a closing paragraph after the
+    // oldest, as the real one's says where earlier notes are.
+    const CHANGELOG: &str = "# Changelog
+
+Notable changes, per release.
+
+## 0.6.0 — 2026-11-17
+
+### Added
+
+- **Six.** Its entry.
+
+## 0.5.0 — 2026-11-17
+
+A summary of five.
+
+### Fixed
+
+- **Five.** Its entry.
+- **Five again.** Another.
+
+## 0.4.0 — 2026-11-16
+
+This changelog starts after 0.4.0.
+";
+
+    #[test]
+    fn the_notes_are_each_release_since_the_one_running_up_to_the_latest() {
+        let v = |s: &str| Version::parse(s).unwrap();
+        let between = notes_between(CHANGELOG, &v("0.4.0"), &v("0.6.0"));
+        assert_eq!(
+            between,
+            vec![
+                notes("0.6.0", "### Added\n\n- **Six.** Its entry."),
+                notes("0.5.0", "A summary of five.\n\n### Fixed\n\n- **Five.** Its entry.\n- **Five again.** Another."),
+            ]
+        );
+        assert_eq!(notes_between(CHANGELOG, &v("0.5.0"), &v("0.6.0")).len(), 1);
+        // Not past the latest release: a changelog read at its tag has nothing later, but say so.
+        assert_eq!(notes_between(CHANGELOG, &v("0.4.0"), &v("0.5.0"))[0].version, "0.5.0");
+        assert_eq!(notes_between(CHANGELOG, &v("0.4.0"), &v("0.5.0")).len(), 1);
+        assert_eq!(notes_between(CHANGELOG, &v("0.6.0"), &v("0.6.0")), vec![]);
+        // Not a changelog: nothing, not an error.
+        assert_eq!(notes_between("<html>", &v("0.4.0"), &v("0.6.0")), vec![]);
+    }
+
+    #[test]
+    fn notes_found_are_kept_and_only_those_still_ahead_are_offered() {
+        let path = dir().join("notes.json");
+        let _ = std::fs::remove_file(&path);
+        let u = Updates::load(path.clone(), Version::new(0, 4, 0));
+        assert_eq!(u.notes_known("0.6.0"), None);
+        let mut found = update("0.6.0");
+        found.notes = vec![notes("0.6.0", "six"), notes("0.5.0", "five")];
+        u.record(NOW, Some(found.clone()));
+        let again = Updates::load(path.clone(), Version::new(0, 4, 0));
+        assert_eq!(again.notes_known("0.6.0"), Some(found.notes.clone()), "not asked for again");
+        assert_eq!(again.notes_known("0.7.0"), None, "a later release has its own");
+        assert_eq!(again.available(), Some(found));
+        // Updated to 0.5.0 since: only 0.6.0's are ahead.
+        let on_five = Updates::load(path, Version::new(0, 5, 0)).available().unwrap();
+        assert_eq!(on_five.notes, vec![notes("0.6.0", "six")]);
+    }
+
+    #[test]
+    fn a_release_found_without_its_notes_has_them_asked_for_again() {
+        let path = dir().join("no-notes.json");
+        let _ = std::fs::remove_file(&path);
+        let u = Updates::load(path, Version::new(0, 4, 0));
+        u.record(NOW, Some(update("0.6.0")));
+        assert_eq!(u.notes_known("0.6.0"), None);
+    }
+
+    #[test]
+    fn a_file_from_before_the_notes_still_loads() {
+        let path = dir().join("old.json");
+        let old = r#"{"checkedAt": 1, "triedAt": 1, "latest": {"version": "0.6.0", "url": "https://github.com/daaain/lima-desktop/releases/tag/v0.6.0"}}"#;
+        std::fs::write(&path, old).unwrap();
+        assert_eq!(Updates::load(path, Version::new(0, 4, 0)).available(), Some(update("0.6.0")));
     }
 
     // As GitHub answers, cut to a few of its fields.
@@ -280,6 +450,17 @@ mod tests {
         assert_eq!(again.available(), Some(update("0.3.0")));
         assert!(!again.due(NOW + 10 * 60_000));
         assert!(again.due(NOW + HOUR));
+    }
+
+    // Asks GitHub for real: `cargo test changelog_live -- --ignored`.
+    #[test]
+    #[ignore]
+    fn changelog_live() {
+        let text = fetch_changelog(&Version::new(0, 0, 1), "0.6.0").expect("CHANGELOG.md at v0.6.0");
+        let found = notes_between(&text, &Version::new(0, 4, 0), &Version::new(0, 6, 0));
+        let versions: Vec<&str> = found.iter().map(|n| n.version.as_str()).collect();
+        assert_eq!(versions, ["0.6.0", "0.5.0"]);
+        assert!(found.iter().all(|n| n.text.contains("- **")), "{found:?}");
     }
 
     // Asks GitHub for real: `cargo test latest_release_live -- --ignored`.
