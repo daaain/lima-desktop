@@ -216,9 +216,9 @@ pub struct Mask {
 
 const H: u32 = 36;
 const FRAME: u32 = 2;
-/// Columns in a trace, each this wide, touching.
-pub const COLUMNS: usize = 11;
-const COLUMN: u32 = 4;
+/// Columns in a trace, each this wide (a point), touching.
+pub const COLUMNS: usize = 22;
+const COLUMN: u32 = 2;
 const TRACE_WIDTH: u32 = 2 * FRAME + COLUMNS as u32 * COLUMN;
 const BAR_WIDTH: u32 = 10;
 const SOLID: u8 = 255;
@@ -1440,6 +1440,16 @@ mod tests {
     }
 
     #[test]
+    fn a_column_is_one_point_wide() {
+        // Two pixels, as the items are drawn at twice the menu bar's points: the newest alone, at the right.
+        let mut h = vec![Share::default(); COLUMNS - 1];
+        h.push(used(1.0, 0.0));
+        let i = trace(&h);
+        let inked: Vec<u32> = (FRAME..i.width - FRAME).filter(|&x| px(&i, x, H / 2)[3] == SOLID).collect();
+        assert_eq!(inked, [i.width - FRAME - 2, i.width - FRAME - 1]);
+    }
+
+    #[test]
     fn only_the_last_columns_are_drawn() {
         let mut h = vec![used(1.0, 1.0)];
         h.extend(std::iter::repeat_n(Share::default(), COLUMNS));
@@ -1705,17 +1715,16 @@ mod tests {
                 .collect()
         };
         // Memory and CPU end where the popovers under them (light and dark) start, at the fake backend's
-        // figures; the disk, under neither, shows the warning colour.
+        // figures; the disk, under neither, shows the warning colour at the README's 63 %.
         let ending = |mut h: Vec<Share>, last: Share| {
             *h.last_mut().unwrap() = last;
             h
         };
         let mem = ending(history(0.59, 0.43, 0.0), used(0.61, 0.446));
         let cpu = ending(history(0.44, 0.32, 0.0), used(0.48, 0.35));
+        let disk = ending(history(0.62, 0.35, 0.0), used(0.63, 0.356));
         let chosen = crate::settings::MenuBar::default();
-        for (res, h, hot) in
-            [(Res::Mem, mem, false), (Res::Cpu, cpu, false), (Res::Disk, history(0.62, 0.35, 0.0), true)]
-        {
+        for (res, h, hot) in [(Res::Mem, mem, false), (Res::Cpu, cpu, false), (Res::Disk, disk, true)] {
             let p = parts(res.item(&chosen), chosen.names).unwrap();
             for (theme, bar) in [("light", Bar::Light), ("dark", Bar::Dark)] {
                 write_rgba(&dir, &format!("{theme}-{}", res.id()), &shown(res, p, &h, hot, bar));
