@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { inline, release } from './releaseNotes';
+import { day, inline, release } from './releaseNotes';
 
 describe('inline', () => {
   it('reads bold, code and links, and leaves the rest as text', () => {
@@ -66,5 +66,16 @@ And a second paragraph.
     const r = release(notes('This changelog starts after 0.4.0.'));
     expect(r.summary).toEqual([[{ text: 'This changelog starts after 0.4.0.' }]]);
     expect(r.sections).toEqual([]);
+  });
+});
+
+describe('day', () => {
+  it("writes a release's date as a day, in the calendar's own day whatever the time zone", () => {
+    expect(day('2026-11-20')).toBe('20 Nov 2026');
+    expect(day('2026-01-01')).toBe('1 Jan 2026');
+  });
+  it('leaves what is no date as it is', () => {
+    expect(day('soon')).toBe('soon');
+    expect(day('')).toBe('');
   });
 });

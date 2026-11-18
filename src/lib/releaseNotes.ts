@@ -88,3 +88,11 @@ export function release(notes: Notes): Release {
     sections: sections.map((s) => ({ name: s.name, entries: s.entries.map(entry) })),
   };
 }
+
+/** A release's date (`2026-11-20`, as CHANGELOG.md has it) as a day: "20 Nov 2026"; else as it is. */
+export function day(date: string): string {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return date;
+  const d = new Date(`${date}T00:00:00Z`);
+  if (Number.isNaN(d.getTime())) return date;
+  return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' });
+}

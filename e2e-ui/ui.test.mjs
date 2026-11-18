@@ -587,6 +587,72 @@ test('The new version opens its release page, stays dismissed, and a later one s
   await close();
 });
 
+// 0.4.0 out, with what it and 0.3.1 (also newer than the app here) bring, as updates.rs reads them
+// from CHANGELOG.md: one with a summary, one without.
+const V040_NOTES = {
+  ...V040,
+  notes: [
+    { version: '0.4.0', date: '2026-11-20', text: 'Calmer charts and a faster start.\n\n### Added\n\n- **Charts settle before they move.** The detail of it.\n- **The app starts sooner.** How much sooner.' },
+    { version: '0.3.1', date: '2026-11-18', text: '### Fixed\n\n- **A stalled VM is said at once.** <b>Not</b> bold: the text as it is.\n\n### Changed\n\n- **Settings reads better.** See [the guide](https://example.com/guide).' },
+  ],
+};
+
+test("What's new opens under the masthead: each release since this one, its summary or its leads, the rest under More", async () => {
+  const { page, errors, close } = await open('/', { init: `window.__fakeUpdate = ${JSON.stringify(V040_NOTES)};` });
+  const notice = page.locator('.update');
+  await notice.waitFor();
+  assert.equal((await notice.textContent()).replace(/\s+/g, ' ').trim(), "Lima Desktop 0.4.0 is out · What's new · Download ×");
+  await notice.getByRole('button', { name: "What's new" }).click();
+  const panel = page.getByRole('region', { name: "What's new" });
+  await panel.waitFor();
+  assert.deepEqual(await panel.getByRole('heading', { level: 3 }).allInnerTexts(), ['0.4.0 · 20 Nov 2026', '0.3.1 · 18 Nov 2026']);
+  const [four, three] = [panel.locator('article').nth(0), panel.locator('article').nth(1)];
+  // A summary stands for its release; without one, each entry's lead does.
+  assert.equal(await four.locator('.glance').innerText(), 'Calmer charts and a faster start.');
+  assert.deepEqual(await three.locator('.glance li').allInnerTexts(), ['A stalled VM is said at once.', 'Settings reads better.']);
+  // The rest, closed until asked for: as text, a tag in it shown, not obeyed.
+  const more = three.locator('details');
+  assert.equal(await more.getAttribute('open'), null);
+  await more.locator('summary').click();
+  assert.match(await more.innerText(), /Fixed\nA stalled VM is said at once\. <b>Not<\/b> bold: the text as it is\./);
+  assert.equal(await more.locator('b').count(), 0);
+  await more.getByRole('button', { name: 'the guide' }).click();
+  await page.waitForFunction(() => window.__fakeCalls.some((c) => c.cmd === 'open_url'));
+  assert.equal((await page.evaluate(() => window.__fakeCalls.find((c) => c.cmd === 'open_url'))).args.url, 'https://example.com/guide');
+  await shoot(page, 'whats-new');
+  await panel.getByRole('button', { name: "Close What's new" }).click();
+  await panel.waitFor({ state: 'detached' });
+  assert.deepEqual(errors, []);
+  await close();
+});
+
+test("What's new isn't offered when the notes couldn't be read", async () => {
+  const { page, errors, close } = await open('/', { init: `window.__fakeUpdate = ${JSON.stringify(V040)};` });
+  const notice = page.locator('.update');
+  await notice.waitFor();
+  assert.equal(await notice.getByRole('button', { name: "What's new" }).count(), 0);
+  assert.deepEqual(errors, []);
+  await close();
+});
+
+test("In the popover, What's new opens the main window with it open", async () => {
+  const { page, errors, close } = await open('/menubar?tab=mem', { width: 396, height: 560, init: `window.__fakeUpdate = ${JSON.stringify(V040_NOTES)};` });
+  const notice = page.locator('.newer .update');
+  await notice.getByRole('button', { name: "What's new" }).click();
+  await page.waitForFunction(() => window.__fakeCalls.some((c) => c.cmd === 'open_main'));
+  assert.equal(await page.getByRole('region', { name: "What's new" }).count(), 0, 'not in the popover itself');
+  // The main window, opening (it shares the popover's storage), opens it.
+  await page.setViewportSize({ width: 1320, height: 900 });
+  await page.goto(page.url().replace(/\/menubar.*$/, '/'));
+  await page.getByRole('region', { name: "What's new" }).waitFor();
+  // Once: the next time the window opens, it's closed.
+  await page.reload();
+  await page.locator('.update').waitFor();
+  assert.equal(await page.getByRole('region', { name: "What's new" }).count(), 0);
+  assert.deepEqual(errors, []);
+  await close();
+});
+
 test('The popover says a newer version too, above its footer', async () => {
   const { page, errors, close } = await open('/menubar?tab=mem', { width: 396, height: 560, init: `window.__fakeUpdate = ${JSON.stringify(V030)};` });
   const notice = page.locator('.newer .update');

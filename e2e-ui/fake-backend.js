@@ -643,7 +643,8 @@
     // __fakeCalls, so a test can wait for an answer that shows nothing.
     update_available: (args) => {
       calls.push({ cmd: 'update_available', args });
-      return settings.checkUpdates ? (window.__fakeUpdate ?? null) : null;
+      // As updates.rs answers: with its notes, none when a test gives none.
+      return settings.checkUpdates && window.__fakeUpdate ? { notes: [], ...window.__fakeUpdate } : null;
     },
     // The opener plugin's command (a link opened in the browser): a test reads it from __fakeCalls.
     'plugin:opener|open_url': (args) => void calls.push({ cmd: 'open_url', args }),
