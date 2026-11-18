@@ -238,8 +238,8 @@ mod sys {
     /// (the path is gone, or the volume doesn't report one of them), so `statvfs` answers instead.
     pub fn volume(path: &Path) -> Option<(u64, u64)> {
         use objc2_foundation::{
-            NSNumber, NSString, NSURL, NSURLResourceKey,
-            NSURLVolumeAvailableCapacityForImportantUsageKey, NSURLVolumeTotalCapacityKey,
+            NSNumber, NSString, NSURL, NSURLResourceKey, NSURLVolumeAvailableCapacityForImportantUsageKey,
+            NSURLVolumeTotalCapacityKey,
         };
         // Called every measuring interval from a thread with no pool of its own: without one,
         // what Foundation autoreleases here would stay until the thread ends, which it doesn't.
@@ -254,9 +254,8 @@ mod sys {
                 u64::try_from(n).ok()
             };
             // SAFETY: Foundation's constant keys, set before any of our code runs.
-            let (available_key, total_key) = unsafe {
-                (NSURLVolumeAvailableCapacityForImportantUsageKey, NSURLVolumeTotalCapacityKey)
-            };
+            let (available_key, total_key) =
+                unsafe { (NSURLVolumeAvailableCapacityForImportantUsageKey, NSURLVolumeTotalCapacityKey) };
             let total = number(total_key).filter(|&t| t > 0)?;
             Some((number(available_key)?, total))
         })
@@ -361,12 +360,32 @@ mod tests {
 
     #[test]
     fn the_row_follows_the_stored_columns() {
-        let u = HostUse { mem_used: 1, mem_total: 2, mem_wired: 3, mem_compressed: 4, cpu_mc: 5, cpu_total_mc: 6, disk_used: 7, disk_total: 8, mem_stored: 9 };
+        let u = HostUse {
+            mem_used: 1,
+            mem_total: 2,
+            mem_wired: 3,
+            mem_compressed: 4,
+            cpu_mc: 5,
+            cpu_total_mc: 6,
+            disk_used: 7,
+            disk_total: 8,
+            mem_stored: 9,
+        };
         assert_eq!(crate::store::HOST_METRICS.len(), u.row().len());
         let named: Vec<(&str, i64)> = crate::store::HOST_METRICS.iter().copied().zip(u.row()).collect();
         assert_eq!(
             named,
-            [("mem_used", 1), ("mem_total", 2), ("mem_wired", 3), ("mem_compressed", 4), ("cpu_mc", 5), ("cpu_total_mc", 6), ("disk_used", 7), ("disk_total", 8), ("mem_stored", 9)]
+            [
+                ("mem_used", 1),
+                ("mem_total", 2),
+                ("mem_wired", 3),
+                ("mem_compressed", 4),
+                ("cpu_mc", 5),
+                ("cpu_total_mc", 6),
+                ("disk_used", 7),
+                ("disk_total", 8),
+                ("mem_stored", 9)
+            ]
         );
     }
 

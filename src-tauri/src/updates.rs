@@ -61,8 +61,7 @@ pub fn parse(json: &str) -> Result<Update, String> {
         html_url: String,
     }
     let r: Release = serde_json::from_str(json).map_err(|e| format!("GitHub's answer: {e}"))?;
-    let version =
-        version_of(&r.tag_name).ok_or_else(|| format!("tag {:?} isn't a version", r.tag_name))?;
+    let version = version_of(&r.tag_name).ok_or_else(|| format!("tag {:?} isn't a version", r.tag_name))?;
     if !r.html_url.starts_with(RELEASES) {
         return Err(format!("{} isn't this app's releases", r.html_url));
     }
@@ -91,9 +90,7 @@ impl Updates {
         let checked = std::fs::read_to_string(&path)
             .ok()
             .and_then(|text| {
-                serde_json::from_str(&text)
-                    .map_err(|e| log::debug!("{}: {e}; checking afresh", path.display()))
-                    .ok()
+                serde_json::from_str(&text).map_err(|e| log::debug!("{}: {e}; checking afresh", path.display())).ok()
             })
             .unwrap_or_default();
         Updates { path, running, checked: Mutex::new(checked) }
@@ -137,11 +134,7 @@ fn fetch(running: &Version) -> Result<Update, String> {
         .accept("application/vnd.github+json")
         .build()
         .into();
-    let body = agent
-        .get(LATEST)
-        .call()
-        .and_then(|mut r| r.body_mut().read_to_string())
-        .map_err(|e| e.to_string())?;
+    let body = agent.get(LATEST).call().and_then(|mut r| r.body_mut().read_to_string()).map_err(|e| e.to_string())?;
     parse(&body)
 }
 
@@ -169,10 +162,8 @@ async fn check_if_due(app: &tauri::AppHandle) {
     }
     let running = updates.running.clone();
     // ureq blocks: off the async workers, which keep the app's measurements going.
-    let fetched = tauri::async_runtime::spawn_blocking(move || fetch(&running))
-        .await
-        .map_err(|e| e.to_string())
-        .and_then(|r| r);
+    let fetched =
+        tauri::async_runtime::spawn_blocking(move || fetch(&running)).await.map_err(|e| e.to_string()).and_then(|r| r);
     match &fetched {
         Ok(latest) => log::debug!("the latest release is {}", latest.version),
         Err(e) => log::warn!("checking for a new version: {e}"),
@@ -227,11 +218,7 @@ mod tests {
     fn only_a_newer_version_is_offered() {
         let running = Version::new(0, 2, 1);
         assert_eq!(newer(Some(&update("0.3.0")), &running), Some(update("0.3.0")));
-        assert_eq!(
-            newer(Some(&update("0.2.10")), &running),
-            Some(update("0.2.10")),
-            "not compared as text"
-        );
+        assert_eq!(newer(Some(&update("0.2.10")), &running), Some(update("0.2.10")), "not compared as text");
         assert_eq!(newer(Some(&update("0.2.1")), &running), None);
         assert_eq!(newer(Some(&update("0.2.0")), &running), None);
         assert_eq!(newer(None, &running), None);
@@ -253,21 +240,16 @@ mod tests {
 
     #[test]
     fn a_failed_check_is_tried_again_an_hour_later() {
-        let failed =
-            |t| Checked { checked_at: Some(NOW - 3 * DAY_MS), tried_at: Some(t), latest: None };
+        let failed = |t| Checked { checked_at: Some(NOW - 3 * DAY_MS), tried_at: Some(t), latest: None };
         assert!(!due(&failed(NOW - 10 * 60_000), NOW));
         assert!(due(&failed(NOW - HOUR), NOW));
-        let never_answered =
-            Checked { checked_at: None, tried_at: Some(NOW - 10 * 60_000), latest: None };
+        let never_answered = Checked { checked_at: None, tried_at: Some(NOW - 10 * 60_000), latest: None };
         assert!(!due(&never_answered, NOW));
     }
 
     fn dir() -> PathBuf {
-        let d = std::env::temp_dir().join(format!(
-            "ld-updates-{}-{:?}",
-            std::process::id(),
-            std::thread::current().id()
-        ));
+        let d =
+            std::env::temp_dir().join(format!("ld-updates-{}-{:?}", std::process::id(), std::thread::current().id()));
         std::fs::create_dir_all(&d).unwrap();
         d
     }

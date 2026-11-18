@@ -63,11 +63,7 @@ rc=$?
 
 /// Run the reader script over Lima's ssh: its raw output, as `read_oom_lines` interprets it (the
 /// snapshot recorder keeps it).
-pub async fn run_script(
-    ssh_config: &str,
-    instance: &str,
-    since_ms: i64,
-) -> std::io::Result<std::process::Output> {
+pub async fn run_script(ssh_config: &str, instance: &str, since_ms: i64) -> std::io::Result<std::process::Output> {
     let mut child = probe::ssh(ssh_config, instance).spawn()?;
     let mut stdin = child.stdin.take().expect("piped stdin");
     stdin.write_all(script(since_ms).as_bytes()).await?;
@@ -76,17 +72,11 @@ pub async fn run_script(
 }
 
 /// The OOM killer's kernel lines since `since_ms`, over Lima's ssh.
-pub async fn read_oom_lines(
-    ssh_config: &str,
-    instance: &str,
-    since_ms: i64,
-) -> Result<Vec<Entry>, JournalError> {
+pub async fn read_oom_lines(ssh_config: &str, instance: &str, since_ms: i64) -> Result<Vec<Entry>, JournalError> {
     let run = run_script(ssh_config, instance, since_ms);
     let out = match tokio::time::timeout(TIMEOUT, run).await {
         Err(_) => {
-            return Err(JournalError::Unreachable(
-                "the journal read timed out".into(),
-            ));
+            return Err(JournalError::Unreachable("the journal read timed out".into()));
         }
         Ok(Err(e)) => return Err(JournalError::Unreachable(format!("can't run ssh: {e}"))),
         Ok(Ok(out)) => out,
@@ -113,21 +103,13 @@ fn decode(line: &str) -> Option<Entry> {
         serde_json::Value::String(s) => s.clone(),
         // journald stores a message that isn't valid UTF-8 as an array of bytes
         serde_json::Value::Array(bytes) => {
-            let raw: Vec<u8> = bytes
-                .iter()
-                .filter_map(|b| b.as_u64())
-                .map(|b| b as u8)
-                .collect();
+            let raw: Vec<u8> = bytes.iter().filter_map(|b| b.as_u64()).map(|b| b as u8).collect();
             String::from_utf8_lossy(&raw).into_owned()
         }
         _ => return None,
     };
     let us: i64 = v["__REALTIME_TIMESTAMP"].as_str()?.parse().ok()?;
-    Some(Entry {
-        ts_ms: us / 1000,
-        boot: v["_BOOT_ID"].as_str().unwrap_or_default().to_string(),
-        message,
-    })
+    Some(Entry { ts_ms: us / 1000, boot: v["_BOOT_ID"].as_str().unwrap_or_default().to_string(), message })
 }
 
 /// The journal's answer, a JSON object per line, or the script's `E <reason>`.
@@ -162,10 +144,7 @@ mod tests {
         assert_eq!(entries[0].ts_ms, 1_794_229_820_051);
         assert_eq!(entries[0].boot, "f0bed60b3e5a481d9888c6d3966582f0");
         assert!(entries[1].message.starts_with("oom-kill:"));
-        assert!(
-            entries[2].message.starts_with("Memory"),
-            "byte-array MESSAGE, lossily"
-        );
+        assert!(entries[2].message.starts_with("Memory"), "byte-array MESSAGE, lossily");
     }
 
     fn run_script_locally(path: &str) -> std::process::Output {
@@ -178,9 +157,7 @@ mod tests {
             .spawn()
             .unwrap();
         let mut stdin = child.stdin.take().unwrap();
-        stdin
-            .write_all(script(1_794_229_820_051).as_bytes())
-            .unwrap();
+        stdin.write_all(script(1_794_229_820_051).as_bytes()).unwrap();
         drop(stdin);
         child.wait_with_output().unwrap()
     }
@@ -263,15 +240,10 @@ mod tests {
     fn without_journalctl_the_script_says_so_and_succeeds() {
         let empty = tempfile::tempdir().unwrap();
         let out = run_script_locally(empty.path().to_str().unwrap());
-        assert!(
-            out.status.success(),
-            "so ssh's own failures stay distinguishable"
-        );
+        assert!(out.status.success(), "so ssh's own failures stay distinguishable");
         assert_eq!(
             parse_output(&String::from_utf8_lossy(&out.stdout)),
-            Err(JournalError::Unavailable(
-                "there's no systemd journal in this VM".into()
-            ))
+            Err(JournalError::Unavailable("there's no systemd journal in this VM".into()))
         );
     }
 
@@ -297,9 +269,7 @@ mod tests {
         let err = parse_output("E there's no systemd journal (journalctl isn't installed)\n");
         assert_eq!(
             err,
-            Err(JournalError::Unavailable(
-                "there's no systemd journal (journalctl isn't installed)".into()
-            ))
+            Err(JournalError::Unavailable("there's no systemd journal (journalctl isn't installed)".into()))
         );
     }
 

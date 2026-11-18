@@ -33,11 +33,7 @@ impl Source {
         }
     }
     pub fn parse(s: &str) -> Source {
-        if s == "kernel" {
-            Source::Kernel
-        } else {
-            Source::Counter
-        }
+        if s == "kernel" { Source::Kernel } else { Source::Counter }
     }
 }
 
@@ -97,22 +93,13 @@ enum Line {
     /// `oom-kill:k=v,k=v,…` (bare words like `global_oom` map to "").
     OomKill(HashMap<String, String>),
     /// `… Killed process <pid> (<name>) … anon-rss:<n>kB …`.
-    Killed {
-        pid: i64,
-        process: String,
-        anon_rss: Option<i64>,
-        memcg: bool,
-    },
+    Killed { pid: i64, process: String, anon_rss: Option<i64>, memcg: bool },
 }
 
 fn kb_after(text: &str, label: &str) -> Option<i64> {
     let rest = &text[text.find(label)? + label.len()..];
     let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
-    rest[digits.len()..]
-        .starts_with("kB")
-        .then(|| digits.parse::<i64>().ok())
-        .flatten()
-        .map(|kb| kb * 1024)
+    rest[digits.len()..].starts_with("kB").then(|| digits.parse::<i64>().ok()).flatten().map(|kb| kb * 1024)
 }
 
 fn parse_killed(message: &str) -> Option<Line> {
@@ -151,9 +138,7 @@ pub fn libpod_id(path: &str) -> Option<String> {
     path.match_indices("libpod-")
         .filter_map(|(i, m)| {
             let id = path.get(i + m.len()..i + m.len() + 64)?;
-            id.bytes()
-                .all(|b| b.is_ascii_hexdigit())
-                .then(|| id.to_string())
+            id.bytes().all(|b| b.is_ascii_hexdigit()).then(|| id.to_string())
         })
         .last()
 }
@@ -163,10 +148,7 @@ fn from_oom_kill(vm: &str, entry: &Entry, f: &HashMap<String, String>) -> OomEve
     let cgroup = get("oom_memcg").or_else(|| get("task_memcg"));
     let mut e = OomEvent::new(vm, entry.ts_ms, Source::Kernel);
     e.constraint = get("constraint");
-    e.container_id = cgroup
-        .as_deref()
-        .and_then(libpod_id)
-        .or_else(|| get("task_memcg").as_deref().and_then(libpod_id));
+    e.container_id = cgroup.as_deref().and_then(libpod_id).or_else(|| get("task_memcg").as_deref().and_then(libpod_id));
     e.cgroup = cgroup;
     e.process = get("task");
     e.pid = get("pid").and_then(|p| p.parse().ok());
@@ -177,14 +159,7 @@ fn from_oom_kill(vm: &str, entry: &Entry, f: &HashMap<String, String>) -> OomEve
 /// fell just outside the window read).
 fn from_killed_alone(vm: &str, entry: &Entry, memcg: bool) -> OomEvent {
     let mut e = OomEvent::new(vm, entry.ts_ms, Source::Kernel);
-    e.constraint = Some(
-        if memcg {
-            CONSTRAINT_MEMCG
-        } else {
-            CONSTRAINT_NONE
-        }
-        .to_string(),
-    );
+    e.constraint = Some(if memcg { CONSTRAINT_MEMCG } else { CONSTRAINT_NONE }.to_string());
     e
 }
 
@@ -211,19 +186,11 @@ pub fn kernel_events(vm: &str, entries: &[Entry]) -> Vec<OomEvent> {
                 }
                 let mut e = from_oom_kill(vm, entry, &fields);
                 if e.constraint.as_deref() == Some(CONSTRAINT_MEMCG) {
-                    e.mem_limit = limit
-                        .take()
-                        .filter(|(boot, _)| *boot == entry.boot)
-                        .map(|(_, l)| l);
+                    e.mem_limit = limit.take().filter(|(boot, _)| *boot == entry.boot).map(|(_, l)| l);
                 }
                 open = Some((&entry.boot, e));
             }
-            Line::Killed {
-                pid,
-                process,
-                anon_rss,
-                memcg,
-            } => {
+            Line::Killed { pid, process, anon_rss, memcg } => {
                 let mut e = match open.take() {
                     Some((boot, e)) if boot == entry.boot && e.pid == Some(pid) => e,
                     other => {
@@ -258,11 +225,7 @@ pub fn counter_kills(prev: &Block, cur: &Block) -> Vec<Option<String>> {
     ids.sort();
     for id in ids {
         let now = cur.cgroups[id].oom_kills.unwrap_or(0);
-        let before = prev
-            .cgroups
-            .get(id)
-            .map_or(Some(0), |c| c.oom_kills)
-            .unwrap_or(0);
+        let before = prev.cgroups.get(id).map_or(Some(0), |c| c.oom_kills).unwrap_or(0);
         let rise = now.saturating_sub(before);
         kills.extend((0..rise).map(|_| Some(id.clone())));
     }
@@ -303,22 +266,14 @@ mod tests {
     const BOOT: &str = "f0bed60b3e5a481d9888c6d3966582f0";
 
     fn entry(ts_ms: i64, message: &str) -> Entry {
-        Entry {
-            ts_ms,
-            boot: BOOT.into(),
-            message: message.into(),
-        }
+        Entry { ts_ms, boot: BOOT.into(), message: message.into() }
     }
 
     /// A rootless podman container hitting its own 1 GiB limit, as `--grep` returns it.
     fn memcg_kill() -> Vec<Entry> {
-        let scope =
-            format!("/user.slice/user-501.slice/user@501.service/user.slice/libpod-{CT}.scope");
+        let scope = format!("/user.slice/user-501.slice/user@501.service/user.slice/libpod-{CT}.scope");
         vec![
-            entry(
-                1_000,
-                "memory: usage 1048576kB, limit 1048576kB, failcnt 3051",
-            ),
+            entry(1_000, "memory: usage 1048576kB, limit 1048576kB, failcnt 3051"),
             entry(
                 1_001,
                 &format!(
@@ -359,10 +314,7 @@ mod tests {
         assert_eq!(e.pid, Some(1234));
         assert_eq!(e.mem_limit, Some(1_073_741_824), "1 GiB");
         assert_eq!(e.anon_rss, Some(1_039_872 * 1024));
-        assert!(
-            e.cgroup.as_deref().unwrap().ends_with(".scope"),
-            "the limited cgroup"
-        );
+        assert!(e.cgroup.as_deref().unwrap().ends_with(".scope"), "the limited cgroup");
         assert_eq!(e.key, format!("{BOOT}:1234:1001"));
     }
 
@@ -373,10 +325,7 @@ mod tests {
         let e = &events[0];
         assert_eq!(e.constraint.as_deref(), Some(CONSTRAINT_NONE));
         assert_eq!(e.container_id, None);
-        assert_eq!(
-            e.cgroup.as_deref(),
-            Some("/system.slice/postgresql.service")
-        );
+        assert_eq!(e.cgroup.as_deref(), Some("/system.slice/postgresql.service"));
         assert_eq!(e.process.as_deref(), Some("postgres"));
         assert_eq!(e.mem_limit, None, "no cgroup limit was involved");
         assert_eq!(e.anon_rss, Some(6_234_112 * 1024));
@@ -384,9 +333,7 @@ mod tests {
 
     #[test]
     fn the_vm_running_out_kills_a_container_process() {
-        let task = format!(
-            "/user.slice/user-501.slice/user@501.service/user.slice/libpod-{CT2}.scope/container"
-        );
+        let task = format!("/user.slice/user-501.slice/user@501.service/user.slice/libpod-{CT2}.scope/container");
         let events = kernel_events(
             "cabash",
             &[
@@ -457,10 +404,7 @@ mod tests {
     fn unrelated_lines_are_ignored() {
         let events = kernel_events(
             "cabash",
-            &[entry(
-                1,
-                "fy-wall-deny IN= OUT=eth0 SRC=192.168.5.15 DST=192.168.5.2 PROTO=TCP",
-            )],
+            &[entry(1, "fy-wall-deny IN= OUT=eth0 SRC=192.168.5.15 DST=192.168.5.2 PROTO=TCP")],
         );
         assert!(events.is_empty());
     }
@@ -479,11 +423,7 @@ mod tests {
             cgroups: cgroups
                 .iter()
                 .map(|(id, n)| {
-                    let cgroup = Cgroup {
-                        peak: Some(1),
-                        oom_kills: Some(*n),
-                        own: None,
-                    };
+                    let cgroup = Cgroup { peak: Some(1), oom_kills: Some(*n), own: None };
                     (id.to_string(), cgroup)
                 })
                 .collect(),
@@ -498,38 +438,20 @@ mod tests {
         let kills = counter_kills(&prev, &cur);
         assert_eq!(kills.len(), 3, "the VM's rise");
         assert_eq!(kills.iter().filter(|k| k.as_deref() == Some(CT)).count(), 1);
-        assert_eq!(
-            kills.iter().filter(|k| k.as_deref() == Some(CT2)).count(),
-            1,
-            "a new scope counts from zero"
-        );
-        assert_eq!(
-            kills.iter().filter(|k| k.is_none()).count(),
-            1,
-            "its scope vanished with it"
-        );
+        assert_eq!(kills.iter().filter(|k| k.as_deref() == Some(CT2)).count(), 1, "a new scope counts from zero");
+        assert_eq!(kills.iter().filter(|k| k.is_none()).count(), 1, "its scope vanished with it");
     }
 
     #[test]
     fn counters_that_did_not_rise_or_reset_are_no_kills() {
         assert!(counter_kills(&block(Some(3), &[(CT, 1)]), &block(Some(3), &[(CT, 1)])).is_empty());
-        assert!(
-            counter_kills(&block(Some(9), &[]), &block(Some(0), &[])).is_empty(),
-            "a reboot"
-        );
+        assert!(counter_kills(&block(Some(9), &[]), &block(Some(0), &[])).is_empty(), "a reboot");
         assert!(counter_kills(&block(None, &[]), &block(Some(4), &[])).is_empty());
     }
 
     #[test]
     fn a_counter_event_says_why_it_has_no_detail() {
-        let e = counter_event(
-            "alp",
-            42_000,
-            1,
-            Some(CT.into()),
-            Some(512),
-            "no systemd journal",
-        );
+        let e = counter_event("alp", 42_000, 1, Some(CT.into()), Some(512), "no systemd journal");
         assert_eq!(e.source, Source::Counter);
         assert_eq!(e.key, "counter:42000:1");
         assert_eq!(e.detail.as_deref(), Some("no systemd journal"));

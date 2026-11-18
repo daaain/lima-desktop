@@ -210,10 +210,7 @@ fn rollup_minute(rows: &[(i64, Vec<i64>)], ncols: usize) -> Vec<i64> {
     let mut out = Vec::with_capacity(1 + 3 * ncols);
     out.push(rows.len() as i64);
     for c in 0..ncols {
-        let vals = rows
-            .iter()
-            .map(|(_, v)| v.get(c).copied().unwrap_or(ABSENT))
-            .filter(|&v| v != ABSENT);
+        let vals = rows.iter().map(|(_, v)| v.get(c).copied().unwrap_or(ABSENT)).filter(|&v| v != ABSENT);
         let (mut min, mut max, mut sum, mut n) = (i64::MAX, i64::MIN, 0i128, 0i128);
         for v in vals {
             min = min.min(v);
@@ -248,16 +245,9 @@ fn steady_spacing(ts: impl Iterator<Item = i64>) -> i64 {
 
 /// Schema evolution for a database an older build created.
 fn add_column(db: &Connection, table: &str, column: &str, decl: &str) -> rusqlite::Result<()> {
-    let exists = db
-        .prepare(&format!(
-            "SELECT 1 FROM pragma_table_info('{table}') WHERE name=?1"
-        ))?
-        .exists([column])?;
+    let exists = db.prepare(&format!("SELECT 1 FROM pragma_table_info('{table}') WHERE name=?1"))?.exists([column])?;
     if !exists {
-        db.execute(
-            &format!("ALTER TABLE {table} ADD COLUMN {column} {decl}"),
-            [],
-        )?;
+        db.execute(&format!("ALTER TABLE {table} ADD COLUMN {column} {decl}"), [])?;
     }
     Ok(())
 }
@@ -393,14 +383,7 @@ pub fn stack_columns(metric: &str) -> Option<StackColumns> {
         "disk" => ("disk_used", "disk_total", None, "host_disk_alloc", None, true),
         _ => return None,
     };
-    Some(StackColumns {
-        used,
-        total,
-        wired,
-        part,
-        before,
-        holds,
-    })
+    Some(StackColumns { used, total, wired, part, before, holds })
 }
 
 #[derive(Debug, Default, Serialize)]
@@ -486,10 +469,7 @@ impl Store {
         )?;
         // A stall still open is one an earlier run of the app was watching when it quit: when it
         // ended can't be known now, only that nobody saw it end.
-        db.execute(
-            "UPDATE vm_stall SET end_reason=?1 WHERE end_reason IS NULL",
-            [End::Unknown.as_str()],
-        )?;
+        db.execute("UPDATE vm_stall SET end_reason=?1 WHERE end_reason IS NULL", [End::Unknown.as_str()])?;
         // Compose labels, so a removed container still reads as its project's service.
         add_column(&db, "entity", "project", "TEXT")?;
         add_column(&db, "entity", "service", "TEXT")?;
@@ -514,14 +494,7 @@ impl Store {
     }
 
     /// The id for (kind, vm, key), creating it; `name` is kept current.
-    pub fn entity(
-        &mut self,
-        kind: Kind,
-        vm: &str,
-        key: &str,
-        name: &str,
-        now: i64,
-    ) -> rusqlite::Result<i64> {
+    pub fn entity(&mut self, kind: Kind, vm: &str, key: &str, name: &str, now: i64) -> rusqlite::Result<i64> {
         let id: Option<i64> = self
             .db
             .query_row(
@@ -532,10 +505,7 @@ impl Store {
             .optional()?;
         let id = match id {
             Some(id) => {
-                self.db.execute(
-                    "UPDATE entity SET name=?2 WHERE id=?1 AND name<>?2",
-                    params![id, name],
-                )?;
+                self.db.execute("UPDATE entity SET name=?2 WHERE id=?1 AND name<>?2", params![id, name])?;
                 id
             }
             None => {
@@ -576,10 +546,7 @@ impl Store {
     }
 
     fn ncols(&self, entity: i64) -> usize {
-        self.kinds
-            .get(&entity)
-            .map(|k| k.metrics().len())
-            .unwrap_or(0)
+        self.kinds.get(&entity).map(|k| k.metrics().len()).unwrap_or(0)
     }
 
     /// Record one sample. `values` follows `Kind::metrics()` order.
@@ -603,22 +570,13 @@ impl Store {
         self.seen_pending = true;
     }
 
-    fn load(
-        db: &Connection,
-        table: &str,
-        key: (i64, i64),
-    ) -> rusqlite::Result<Vec<(i64, Vec<i64>)>> {
+    fn load(db: &Connection, table: &str, key: (i64, i64)) -> rusqlite::Result<Vec<(i64, Vec<i64>)>> {
         let blob: Option<Vec<u8>> = db
-            .query_row(
-                &format!("SELECT blob FROM {table} WHERE entity=?1 AND t0=?2"),
-                params![key.0, key.1],
-                |r| r.get(0),
-            )
+            .query_row(&format!("SELECT blob FROM {table} WHERE entity=?1 AND t0=?2"), params![key.0, key.1], |r| {
+                r.get(0)
+            })
             .optional()?;
-        Ok(blob
-            .and_then(|b| decode(&b))
-            .map(|(rows, _)| rows)
-            .unwrap_or_default())
+        Ok(blob.and_then(|b| decode(&b)).map(|(rows, _)| rows).unwrap_or_default())
     }
 
     /// Write every touched chunk (and its minute's rollup) in one transaction. Minutes that are
@@ -628,8 +586,7 @@ impl Store {
         let current_minute = now - now.rem_euclid(MINUTE);
         let current_hour = now - now.rem_euclid(HOUR);
         let dirty = &self.dirty_raw;
-        self.raw
-            .retain(|k, _| k.1 >= current_minute || dirty.contains(k));
+        self.raw.retain(|k, _| k.1 >= current_minute || dirty.contains(k));
         self.rollup.retain(|k, _| k.1 >= current_hour);
         Ok(())
     }
@@ -642,11 +599,7 @@ impl Store {
         let dirty: Vec<(i64, i64)> = self.dirty_raw.drain().collect();
         let tx = self.db.transaction()?;
         for key in dirty {
-            let ncols = self
-                .kinds
-                .get(&key.0)
-                .map(|k| k.metrics().len())
-                .unwrap_or(0);
+            let ncols = self.kinds.get(&key.0).map(|k| k.metrics().len()).unwrap_or(0);
             let chunk = self.raw.get_mut(&key).expect("dirty chunk in memory");
             if !chunk.loaded {
                 let mut on_disk = Self::load(&tx, "raw", key)?;
@@ -684,10 +637,7 @@ impl Store {
             )?;
         }
         for (id, ts) in &self.seen {
-            tx.execute(
-                "UPDATE entity SET last_seen=?2 WHERE id=?1 AND last_seen<?2",
-                params![id, ts],
-            )?;
+            tx.execute("UPDATE entity SET last_seen=?2 WHERE id=?1 AND last_seen<?2", params![id, ts])?;
         }
         tx.commit()?;
         self.seen_pending = false;
@@ -697,16 +647,9 @@ impl Store {
     /// Drop raw chunks older than `raw_ms`, rollups, OOM kills and stalls older than `rollup_ms`,
     /// then entities with nothing left. Returns rows deleted.
     pub fn retain(&mut self, now: i64, raw_ms: i64, rollup_ms: i64) -> rusqlite::Result<usize> {
-        let mut n = self
-            .db
-            .execute("DELETE FROM raw WHERE t0 < ?1", params![now - raw_ms])?;
-        n += self
-            .db
-            .execute("DELETE FROM rollup WHERE t0 < ?1", params![now - rollup_ms])?;
-        n += self.db.execute(
-            "DELETE FROM oom_event WHERE ts < ?1",
-            params![now - rollup_ms],
-        )?;
+        let mut n = self.db.execute("DELETE FROM raw WHERE t0 < ?1", params![now - raw_ms])?;
+        n += self.db.execute("DELETE FROM rollup WHERE t0 < ?1", params![now - rollup_ms])?;
+        n += self.db.execute("DELETE FROM oom_event WHERE ts < ?1", params![now - rollup_ms])?;
         n += self.db.execute(
             "DELETE FROM vm_stall WHERE COALESCE(end_ts, start) < ?1 AND end_reason IS NOT NULL",
             params![now - rollup_ms],
@@ -745,20 +688,12 @@ impl Store {
     /// `metric` ("mem", "cpu" or "disk") over [from, to]: the computer's use and size, and the part
     /// of every VM measured in the range, on the computer's buckets. Empty before the computer
     /// has been measured.
-    pub fn stack(
-        &mut self,
-        metric: &str,
-        from: i64,
-        to: i64,
-        points: usize,
-    ) -> rusqlite::Result<Stack> {
+    pub fn stack(&mut self, metric: &str, from: i64, to: i64, points: usize) -> rusqlite::Result<Stack> {
         let Some(cols) = stack_columns(metric) else {
             return Ok(Stack::default());
         };
-        let host: Option<i64> = self
-            .db
-            .query_row("SELECT id FROM entity WHERE kind='host' LIMIT 1", [], |r| r.get(0))
-            .optional()?;
+        let host: Option<i64> =
+            self.db.query_row("SELECT id FROM entity WHERE kind='host' LIMIT 1", [], |r| r.get(0)).optional()?;
         let Some(host) = host else {
             return Ok(Stack::default());
         };
@@ -814,22 +749,10 @@ impl Store {
                 w[j] = None;
             }
         }
-        Ok(Stack {
-            ts: h.ts,
-            used,
-            total,
-            wired,
-            vms: out,
-        })
+        Ok(Stack { ts: h.ts, used, total, wired, vms: out })
     }
 
-    pub fn series(
-        &mut self,
-        entity: i64,
-        from: i64,
-        to: i64,
-        points: usize,
-    ) -> rusqlite::Result<Series> {
+    pub fn series(&mut self, entity: i64, from: i64, to: i64, points: usize) -> rusqlite::Result<Series> {
         Ok(self.bucketed(entity, from, to, points, None)?.0)
     }
 
@@ -852,13 +775,7 @@ impl Store {
     }
 
     /// An entity's rows in [from, to]: raw samples, else minute rollups (`[n, min, max, avg, …]`).
-    fn rows_for(
-        &mut self,
-        entity: i64,
-        from: i64,
-        to: i64,
-        use_raw: bool,
-    ) -> rusqlite::Result<Vec<(i64, Vec<i64>)>> {
+    fn rows_for(&mut self, entity: i64, from: i64, to: i64, use_raw: bool) -> rusqlite::Result<Vec<(i64, Vec<i64>)>> {
         if use_raw {
             self.rows_between("raw", entity, from, to, MINUTE)
         } else {
@@ -892,11 +809,8 @@ impl Store {
         // Its own from its first whole minute: the one it began in, only part there, is its lines'.
         let since = first_seen + (MINUTE - first_seen.rem_euclid(MINUTE)) % MINUTE;
         let use_raw = to - from <= RAW_QUERY_SPAN;
-        let mut rows = if from < since {
-            self.summed_rows(&lines, from, to.min(since - 1), use_raw)?
-        } else {
-            Vec::new()
-        };
+        let mut rows =
+            if from < since { self.summed_rows(&lines, from, to.min(since - 1), use_raw)? } else { Vec::new() };
         rows.extend(self.rows_for(id, from.max(since), to, use_raw)?);
         Ok(bucket(&rows, CT_METRICS.len(), CT_METRICS, from, to, points, None, use_raw).0)
     }
@@ -913,13 +827,7 @@ impl Store {
     }
 
     /// Compose containers as one series, on [`Store::series`]'s buckets: `lines` ([`Store::summed_rows`]).
-    fn summed_series(
-        &mut self,
-        lines: &[Vec<i64>],
-        from: i64,
-        to: i64,
-        points: usize,
-    ) -> rusqlite::Result<Series> {
+    fn summed_series(&mut self, lines: &[Vec<i64>], from: i64, to: i64, points: usize) -> rusqlite::Result<Series> {
         self.write_dirty()?;
         let Some(&first) = lines.iter().flatten().next() else {
             return Ok(Series::default());
@@ -937,13 +845,7 @@ impl Store {
     /// Beyond 6 h (`!use_raw`), minute rollups are added up instead (`add_minute`, `sum_minute`),
     /// which can't tell lines there at once from lines taking turns within a minute: exact for one
     /// line, an approximation for several (a project's history from before it had its own series).
-    fn summed_rows(
-        &mut self,
-        lines: &[Vec<i64>],
-        from: i64,
-        to: i64,
-        use_raw: bool,
-    ) -> rusqlite::Result<Rows> {
+    fn summed_rows(&mut self, lines: &[Vec<i64>], from: i64, to: i64, use_raw: bool) -> rusqlite::Result<Rows> {
         let Some(&first) = lines.iter().flatten().next() else {
             return Ok(Vec::new());
         };
@@ -1092,22 +994,12 @@ fn bucket(
     let spacing = steady_spacing(rows.iter().map(|r| r.0));
     let width = width.unwrap_or_else(|| ((to - from) / points.max(1) as i64).max(spacing + spacing / 4)).max(1);
     let points = ((to - from + width - 1) / width).max(1) as usize;
-    let sample_secs = if use_raw {
-        (spacing + 500) / 1000
-    } else {
-        MINUTE / 1000
-    };
+    let sample_secs = if use_raw { (spacing + 500) / 1000 } else { MINUTE / 1000 };
     let mut buckets: Vec<Option<Bucket>> = (0..points).map(|_| None).collect();
     for (ts, vals) in rows {
         let b = (((ts - from) / width) as usize).min(points - 1);
-        let acc = buckets[b].get_or_insert_with(|| {
-            (
-                vec![i64::MAX; ncols],
-                vec![i64::MIN; ncols],
-                vec![0; ncols],
-                vec![0; ncols],
-            )
-        });
+        let acc = buckets[b]
+            .get_or_insert_with(|| (vec![i64::MAX; ncols], vec![i64::MIN; ncols], vec![0; ncols], vec![0; ncols]));
         for c in 0..ncols {
             let (lo, hi, avg, weight) = if use_raw {
                 let v = vals.get(c).copied().unwrap_or(ABSENT);
@@ -1126,22 +1018,12 @@ fn bucket(
             acc.3[c] += weight as i128;
         }
     }
-    let mut series = Series {
-        sample_secs,
-        ts: Vec::new(),
-        metrics: HashMap::new(),
-    };
+    let mut series = Series { sample_secs, ts: Vec::new(), metrics: HashMap::new() };
     let mut bands: Vec<Band> = (0..ncols).map(|_| Band::default()).collect();
     // Empty buckets stay in as nulls (from the first sample on), so a chart breaks its line
     // over a gap (the app or the VM was down) instead of drawing through it.
-    let first = buckets
-        .iter()
-        .position(Option::is_some)
-        .unwrap_or(buckets.len());
-    let last = buckets
-        .iter()
-        .rposition(Option::is_some)
-        .map_or(0, |i| i + 1);
+    let first = buckets.iter().position(Option::is_some).unwrap_or(buckets.len());
+    let last = buckets.iter().rposition(Option::is_some).map_or(0, |i| i + 1);
     for (i, b) in buckets.iter().enumerate().take(last).skip(first) {
         series.ts.push(from + i as i64 * width);
         let Some((lo, hi, sum, n)) = b else {
@@ -1168,7 +1050,6 @@ fn bucket(
 }
 
 impl Store {
-
     /// Max / average / p95 of every metric of `entity` over [from, to] — the right-sizing numbers.
     /// p95 is computed from raw samples when the window still has them (≤ raw retention).
     pub fn summary(
@@ -1185,19 +1066,14 @@ impl Store {
         if from >= raw_available_from {
             let rows = self.rows_between("raw", entity, from, to, MINUTE)?;
             for (c, name) in names.iter().enumerate().take(ncols) {
-                let mut vals: Vec<i64> = rows
-                    .iter()
-                    .map(|r| r.1.get(c).copied().unwrap_or(ABSENT))
-                    .filter(|&v| v != ABSENT)
-                    .collect();
+                let mut vals: Vec<i64> =
+                    rows.iter().map(|r| r.1.get(c).copied().unwrap_or(ABSENT)).filter(|&v| v != ABSENT).collect();
                 vals.sort_unstable();
                 let n = vals.len();
                 let s = Summary {
                     min: vals.first().copied(),
                     max: vals.last().copied(),
-                    avg: (n > 0).then(|| {
-                        (vals.iter().map(|&v| v as i128).sum::<i128>() / n as i128) as i64
-                    }),
+                    avg: (n > 0).then(|| (vals.iter().map(|&v| v as i128).sum::<i128>() / n as i128) as i64),
                     p95: (n > 0).then(|| vals[((n - 1) as f64 * 0.95).round() as usize]),
                     samples: n as u64,
                 };
@@ -1222,13 +1098,7 @@ impl Store {
                 }
                 out.insert(
                     name.to_string(),
-                    Summary {
-                        min,
-                        max,
-                        avg: (n > 0).then(|| (sum / n) as i64),
-                        p95: None,
-                        samples: n as u64,
-                    },
+                    Summary { min, max, avg: (n > 0).then(|| (sum / n) as i64), p95: None, samples: n as u64 },
                 );
             }
         }
@@ -1236,12 +1106,7 @@ impl Store {
     }
 
     /// Keep a container entity's compose project and service.
-    pub fn label_entity(
-        &mut self,
-        id: i64,
-        project: Option<&str>,
-        service: Option<&str>,
-    ) -> rusqlite::Result<()> {
+    pub fn label_entity(&mut self, id: i64, project: Option<&str>, service: Option<&str>) -> rusqlite::Result<()> {
         self.db.execute(
             "UPDATE entity SET project=?2, service=?3
              WHERE id=?1 AND (project IS NOT ?2 OR service IS NOT ?3)",
@@ -1282,13 +1147,7 @@ impl Store {
     }
 
     /// OOM kills in [from, to], newest first, at most `limit`; every VM's when `vm` is `None`.
-    pub fn oom_events(
-        &self,
-        vm: Option<&str>,
-        from: i64,
-        to: i64,
-        limit: usize,
-    ) -> rusqlite::Result<Vec<OomRecord>> {
+    pub fn oom_events(&self, vm: Option<&str>, from: i64, to: i64, limit: usize) -> rusqlite::Result<Vec<OomRecord>> {
         let mut st = self.db.prepare_cached(
             "SELECT o.vm, o.key, o.ts, o.source, o.oom_constraint, o.container_id, o.cgroup,
                     o.process, o.pid, o.mem_limit, o.anon_rss, o.detail, e.name, e.project, e.service
@@ -1354,22 +1213,13 @@ impl Store {
 
     /// Forget a stall that turned out not to be one.
     pub fn drop_stall(&mut self, vm: &str, start: i64) -> rusqlite::Result<()> {
-        self.db.execute(
-            "DELETE FROM vm_stall WHERE vm=?1 AND start=?2",
-            params![vm, start],
-        )?;
+        self.db.execute("DELETE FROM vm_stall WHERE vm=?1 AND start=?2", params![vm, start])?;
         Ok(())
     }
 
     /// Stalls overlapping [from, to] (those going on included), newest first, at most `limit`;
     /// every VM's when `vm` is `None`.
-    pub fn stalls(
-        &self,
-        vm: Option<&str>,
-        from: i64,
-        to: i64,
-        limit: usize,
-    ) -> rusqlite::Result<Vec<StallRecord>> {
+    pub fn stalls(&self, vm: Option<&str>, from: i64, to: i64, limit: usize) -> rusqlite::Result<Vec<StallRecord>> {
         let mut st = self.db.prepare_cached(
             "SELECT s.vm, s.start, s.end_ts, s.end_reason, s.mem_used, s.mem_total, s.psi_mem_some,
                     s.psi_mem_full, s.container_id, s.container_mem, e.name, e.project, e.service
@@ -1433,15 +1283,8 @@ mod tests {
 
     #[test]
     fn rollup_keeps_min_max_avg_and_skips_absent() {
-        let rows = vec![
-            (0, vec![10, ABSENT]),
-            (1, vec![30, ABSENT]),
-            (2, vec![20, ABSENT]),
-        ];
-        assert_eq!(
-            rollup_minute(&rows, 2),
-            vec![3, 10, 30, 20, ABSENT, ABSENT, ABSENT]
-        );
+        let rows = vec![(0, vec![10, ABSENT]), (1, vec![30, ABSENT]), (2, vec![20, ABSENT])];
+        assert_eq!(rollup_minute(&rows, 2), vec![3, 10, 30, 20, ABSENT, ABSENT, ABSENT]);
     }
 
     fn vm_row(mem: i64) -> Vec<i64> {
@@ -1457,15 +1300,7 @@ mod tests {
     }
 
     /// A container of `project` in `vm`, as the collector makes one: its entity, then its labels.
-    fn ct(
-        s: &mut Store,
-        vm: &str,
-        id: &str,
-        name: &str,
-        project: &str,
-        service: &str,
-        now: i64,
-    ) -> i64 {
+    fn ct(s: &mut Store, vm: &str, id: &str, name: &str, project: &str, service: &str, now: i64) -> i64 {
         let e = s.entity(Kind::Container, vm, id, name, now).unwrap();
         s.label_entity(e, Some(project), Some(service)).unwrap();
         e
@@ -1473,15 +1308,7 @@ mod tests {
 
     /// Two containers at 1 Hz from `start` for `secs`, at 10 each but for one 100 apiece: a's at
     /// second `a_spike`, b's at `b_spike`, sampled on the same ticks as the collector does.
-    fn two_spikes(
-        s: &mut Store,
-        a: i64,
-        b: i64,
-        start: i64,
-        secs: i64,
-        a_spike: i64,
-        b_spike: i64,
-    ) {
+    fn two_spikes(s: &mut Store, a: i64, b: i64, start: i64, secs: i64, a_spike: i64, b_spike: i64) {
         for i in 0..secs {
             let ts = start + i * 1000;
             s.ingest(a, ts, ct_row(if i == a_spike { 100 } else { 10 }));
@@ -1507,9 +1334,7 @@ mod tests {
         let a = ct(&mut s, "acme", "a", "shop-web-1", "shop", "web", start);
         let b = ct(&mut s, "acme", "b", "shop-db-1", "shop", "db", start);
         two_spikes(&mut s, a, b, start, 120, 10, 70);
-        let day = s
-            .summed_series(&[vec![a], vec![b]], start - 12 * HOUR, start + 12 * HOUR, 1)
-            .unwrap();
+        let day = s.summed_series(&[vec![a], vec![b]], start - 12 * HOUR, start + 12 * HOUR, 1).unwrap();
         assert_eq!(day.sample_secs, 60);
         assert_eq!(day.metrics["mem"].max, vec![Some(110)]);
     }
@@ -1519,30 +1344,15 @@ mod tests {
         let mut s = Store::in_memory().unwrap();
         let start = 10 * HOUR;
         let old = ct(&mut s, "acme", "old", "shop-web-1", "shop", "web", start);
-        let new = ct(
-            &mut s,
-            "acme",
-            "new",
-            "shop-web-1",
-            "shop",
-            "web",
-            start + 60_000,
-        );
+        let new = ct(&mut s, "acme", "new", "shop-web-1", "shop", "web", start + 60_000);
         for i in 0..60 {
             s.ingest(old, start + i * 1000, ct_row(30));
             s.ingest(new, start + 60_000 + i * 1000, ct_row(50));
         }
         s.flush(start + 120_000).unwrap();
-        let got = s
-            .summed_series(&[vec![old, new]], start, start + 120_000, 2)
-            .unwrap();
+        let got = s.summed_series(&[vec![old, new]], start, start + 120_000, 2).unwrap();
         assert_eq!(got.metrics["mem"].avg, vec![Some(30), Some(50)]);
-        assert!(
-            s.summed_series(&[], start, start + 120_000, 2)
-                .unwrap()
-                .ts
-                .is_empty()
-        );
+        assert!(s.summed_series(&[], start, start + 120_000, 2).unwrap().ts.is_empty());
     }
 
     #[test]
@@ -1550,60 +1360,12 @@ mod tests {
         let mut s = Store::in_memory().unwrap();
         let start = 10 * HOUR;
         let gone = ct(&mut s, "acme", "c0", "shop-web-1", "shop", "web", start);
-        let web = ct(
-            &mut s,
-            "acme",
-            "c1",
-            "shop-web-1",
-            "shop",
-            "web",
-            start + HOUR,
-        );
-        let web2 = ct(
-            &mut s,
-            "acme",
-            "c2",
-            "shop-web-2",
-            "shop",
-            "web",
-            start + HOUR,
-        );
-        let db = ct(
-            &mut s,
-            "acme",
-            "c3",
-            "shop-db-1",
-            "shop",
-            "db",
-            start + HOUR,
-        );
-        ct(
-            &mut s,
-            "acme",
-            "c4",
-            "blog-web-1",
-            "blog",
-            "web",
-            start + HOUR,
-        );
-        ct(
-            &mut s,
-            "other",
-            "c5",
-            "shop-web-1",
-            "shop",
-            "web",
-            start + HOUR,
-        );
-        let long_ago = ct(
-            &mut s,
-            "acme",
-            "c6",
-            "shop-web-1",
-            "shop",
-            "web",
-            start - 48 * HOUR,
-        );
+        let web = ct(&mut s, "acme", "c1", "shop-web-1", "shop", "web", start + HOUR);
+        let web2 = ct(&mut s, "acme", "c2", "shop-web-2", "shop", "web", start + HOUR);
+        let db = ct(&mut s, "acme", "c3", "shop-db-1", "shop", "db", start + HOUR);
+        ct(&mut s, "acme", "c4", "blog-web-1", "blog", "web", start + HOUR);
+        ct(&mut s, "other", "c5", "shop-web-1", "shop", "web", start + HOUR);
+        let long_ago = ct(&mut s, "acme", "c6", "shop-web-1", "shop", "web", start - 48 * HOUR);
         s.flush(start + HOUR).unwrap();
         // Lines, each its containers in order, the lines in any order.
         let lines = |mut v: Vec<Vec<i64>>| {
@@ -1683,12 +1445,7 @@ mod tests {
     }
 
     /// `mem` over [from, to] as `compose_series` gives it for the project, or one line of it.
-    fn compose_mem(
-        s: &mut Store,
-        line: Option<(&str, &str)>,
-        (from, to): (i64, i64),
-        points: usize,
-    ) -> Band {
+    fn compose_mem(s: &mut Store, line: Option<(&str, &str)>, (from, to): (i64, i64), points: usize) -> Band {
         s.flush(to).unwrap();
         let mut got = s.compose_series("acme", "shop", line, from, to, points).unwrap();
         got.metrics.remove("mem").unwrap()
@@ -1759,9 +1516,7 @@ mod tests {
         let mem = &raw.metrics["mem_used"];
         assert_eq!(mem.min[0], Some(1_000));
 
-        let day = s
-            .series(vm, start - 10 * HOUR, start + 14 * HOUR, 100)
-            .unwrap();
+        let day = s.series(vm, start - 10 * HOUR, start + 14 * HOUR, 100).unwrap();
         assert_eq!(day.sample_secs, 60);
         let peak = day.metrics["mem_used"].max.iter().flatten().max().copied();
         assert_eq!(peak, Some(9_000), "the spike survives the rollup");
@@ -1769,10 +1524,7 @@ mod tests {
         let sum = s.summary(vm, start, start + 3 * HOUR, 0).unwrap();
         assert_eq!(sum["mem_used"].max, Some(9_000));
         assert_eq!(sum["mem_used"].samples, 3 * 3600);
-        assert!(
-            sum["mem_used"].p95.unwrap() < 9_000,
-            "p95 ignores a one-second spike"
-        );
+        assert!(sum["mem_used"].p95.unwrap() < 9_000, "p95 ignores a one-second spike");
         let sum = s.summary(vm, start, start + 3 * HOUR, i64::MAX).unwrap();
         assert_eq!(sum["mem_used"].max, Some(9_000));
         assert_eq!(sum["mem_used"].min, Some(1_000));
@@ -1984,9 +1736,7 @@ mod tests {
     fn a_memory_stack_has_the_computer_s_wired_memory_too() {
         let mut s = Store::in_memory().unwrap();
         let t = 10 * MINUTE;
-        let host = s
-            .entity(Kind::Host, "", "host", "this computer", 0)
-            .unwrap();
+        let host = s.entity(Kind::Host, "", "host", "this computer", 0).unwrap();
         let col = |m: &str| HOST_METRICS.iter().position(|c| *c == m).unwrap();
         for i in 0..60 {
             let mut h = vec![ABSENT; HOST_METRICS.len()];
@@ -2001,10 +1751,7 @@ mod tests {
             s.ingest(host, t + i * 1000, h);
         }
         let st = s.stack("mem", t, t + MINUTE, 6).unwrap();
-        assert_eq!(
-            st.wired,
-            Some(vec![None, None, None, Some(8), Some(8), Some(8)])
-        );
+        assert_eq!(st.wired, Some(vec![None, None, None, Some(8), Some(8), Some(8)]));
         // Only memory has it.
         assert_eq!(s.stack("cpu", t, t + MINUTE, 6).unwrap().wired, None);
         let json = serde_json::to_value(s.stack("cpu", t, t + MINUTE, 6).unwrap()).unwrap();
@@ -2057,10 +1804,7 @@ mod tests {
         };
         // The computer on the dot every 2 s; each guest's readings over ssh at its own moment
         // after it, give or take a fifth of a second, and the newest of one of them still to come.
-        let (a, b) = (
-            s.entity(Kind::Vm, "a", "a", "a", 0).unwrap(),
-            s.entity(Kind::Vm, "b", "b", "b", 0).unwrap(),
-        );
+        let (a, b) = (s.entity(Kind::Vm, "a", "a", "a", 0).unwrap(), s.entity(Kind::Vm, "b", "b", "b", 0).unwrap());
         let mut at = t;
         let mut i = 0;
         while at < to {
@@ -2195,26 +1939,11 @@ mod tests {
     #[test]
     fn reading_the_same_kernel_record_twice_keeps_one_event() {
         let mut s = Store::in_memory().unwrap();
-        let events = [
-            kill("cabash", 1_000, 1234, None),
-            kill("cabash", 2_000, 1300, None),
-        ];
+        let events = [kill("cabash", 1_000, 1234, None), kill("cabash", 2_000, 1300, None)];
         assert_eq!(s.add_oom_events(&events).unwrap(), 2);
-        assert_eq!(
-            s.add_oom_events(&events).unwrap(),
-            0,
-            "a re-read adds nothing"
-        );
-        assert_eq!(
-            s.add_oom_events(&[kill("other", 1_000, 1234, None)])
-                .unwrap(),
-            1,
-            "another VM's"
-        );
-        assert_eq!(
-            s.oom_events(Some("cabash"), 0, 10_000, 100).unwrap().len(),
-            2
-        );
+        assert_eq!(s.add_oom_events(&events).unwrap(), 0, "a re-read adds nothing");
+        assert_eq!(s.add_oom_events(&[kill("other", 1_000, 1234, None)]).unwrap(), 1, "another VM's");
+        assert_eq!(s.oom_events(Some("cabash"), 0, 10_000, 100).unwrap().len(), 2);
         assert_eq!(s.oom_events(None, 0, 10_000, 100).unwrap().len(), 3);
     }
 
@@ -2222,27 +1951,11 @@ mod tests {
     fn a_removed_container_keeps_its_name_and_compose_labels() {
         let mut s = Store::in_memory().unwrap();
         let ct = "a".repeat(64);
-        let id = s
-            .entity(
-                Kind::Container,
-                "cabash",
-                &ct,
-                "inspect-replay-7-default-1",
-                0,
-            )
-            .unwrap();
-        s.label_entity(id, Some("inspect-replay-7"), Some("default"))
-            .unwrap();
-        s.add_oom_events(&[
-            kill("cabash", 1_000, 1234, Some(&ct)),
-            kill("cabash", 2_000, 99, None),
-        ])
-        .unwrap();
+        let id = s.entity(Kind::Container, "cabash", &ct, "inspect-replay-7-default-1", 0).unwrap();
+        s.label_entity(id, Some("inspect-replay-7"), Some("default")).unwrap();
+        s.add_oom_events(&[kill("cabash", 1_000, 1234, Some(&ct)), kill("cabash", 2_000, 99, None)]).unwrap();
         let got = s.oom_events(Some("cabash"), 0, 10_000, 100).unwrap();
-        assert_eq!(
-            got[1].container_name.as_deref(),
-            Some("inspect-replay-7-default-1")
-        );
+        assert_eq!(got[1].container_name.as_deref(), Some("inspect-replay-7-default-1"));
         assert_eq!(got[1].compose_project.as_deref(), Some("inspect-replay-7"));
         assert_eq!(got[1].compose_service.as_deref(), Some("default"));
         assert_eq!(got[1].event.mem_limit, Some(1 << 30));
@@ -2272,12 +1985,7 @@ mod tests {
         let mut s = Store::in_memory().unwrap();
         let events: Vec<OomEvent> = (1..=5).map(|i| kill("v", i * 1000, i, None)).collect();
         s.add_oom_events(&events).unwrap();
-        let ts: Vec<i64> = s
-            .oom_events(Some("v"), 2000, 4000, 100)
-            .unwrap()
-            .iter()
-            .map(|r| r.event.ts)
-            .collect();
+        let ts: Vec<i64> = s.oom_events(Some("v"), 2000, 4000, 100).unwrap().iter().map(|r| r.event.ts).collect();
         assert_eq!(ts, [4000, 3000, 2000]);
         let latest = s.oom_events(Some("v"), 0, i64::MAX, 1).unwrap();
         assert_eq!(latest[0].event.ts, 5000);
@@ -2286,8 +1994,7 @@ mod tests {
     #[test]
     fn oom_events_age_out_with_the_rollups() {
         let mut s = Store::in_memory().unwrap();
-        s.add_oom_events(&[kill("v", 1_000, 1, None), kill("v", 50 * HOUR, 2, None)])
-            .unwrap();
+        s.add_oom_events(&[kill("v", 1_000, 1, None), kill("v", 50 * HOUR, 2, None)]).unwrap();
         s.retain(100 * HOUR, HOUR, 60 * HOUR).unwrap();
         let left = s.oom_events(None, 0, i64::MAX, 100).unwrap();
         assert_eq!(left.len(), 1);
@@ -2322,8 +2029,7 @@ mod tests {
         let open = s.stalls(Some("tangible"), 0, 10_000, 10).unwrap();
         assert_eq!(open.len(), 1);
         assert_eq!(open[0].stall, stall("tangible", 1_000), "every field round-trips");
-        s.end_stall(&ended(stall("tangible", 1_000), Some(5_000), End::Stopped))
-            .unwrap();
+        s.end_stall(&ended(stall("tangible", 1_000), Some(5_000), End::Stopped)).unwrap();
         let closed = &s.stalls(Some("tangible"), 0, 10_000, 10).unwrap()[0];
         assert_eq!(closed.stall.end, Some(5_000));
         assert_eq!(closed.stall.end_reason, Some(End::Stopped));
@@ -2340,18 +2046,12 @@ mod tests {
     #[test]
     fn stalls_overlapping_the_range_come_newest_first() {
         let mut s = Store::in_memory().unwrap();
-        s.add_stall(&ended(stall("v", 1_000), Some(9_000), End::Resumed))
-            .unwrap();
-        s.add_stall(&ended(stall("v", 20_000), Some(21_000), End::Resumed))
-            .unwrap();
+        s.add_stall(&ended(stall("v", 1_000), Some(9_000), End::Resumed)).unwrap();
+        s.add_stall(&ended(stall("v", 20_000), Some(21_000), End::Resumed)).unwrap();
         s.add_stall(&stall("v", 30_000)).unwrap(); // still going on
         s.add_stall(&stall("other", 30_000)).unwrap();
         let starts = |from, to| -> Vec<i64> {
-            s.stalls(Some("v"), from, to, 10)
-                .unwrap()
-                .iter()
-                .map(|r| r.stall.start)
-                .collect()
+            s.stalls(Some("v"), from, to, 10).unwrap().iter().map(|r| r.stall.start).collect()
         };
         assert_eq!(starts(0, i64::MAX), [30_000, 20_000, 1_000]);
         assert_eq!(starts(5_000, 6_000), [1_000], "began before the range, ended in it");
@@ -2366,8 +2066,7 @@ mod tests {
         let db = Connection::open_in_memory().unwrap();
         let mut s = Store::init(db).unwrap();
         s.add_stall(&stall("v", 1_000)).unwrap();
-        s.add_stall(&ended(stall("v", 500), Some(900), End::Resumed))
-            .unwrap();
+        s.add_stall(&ended(stall("v", 500), Some(900), End::Resumed)).unwrap();
         let s = Store::init(s.db).unwrap();
         let got = s.stalls(None, 0, i64::MAX, 10).unwrap();
         assert_eq!(got[0].stall.end_reason, Some(End::Unknown));
@@ -2412,8 +2111,7 @@ mod tests {
     #[test]
     fn stalls_age_out_with_the_rollups() {
         let mut s = Store::in_memory().unwrap();
-        s.add_stall(&ended(stall("v", 1_000), Some(2_000), End::Resumed))
-            .unwrap();
+        s.add_stall(&ended(stall("v", 1_000), Some(2_000), End::Resumed)).unwrap();
         s.add_stall(&stall("v", 50 * HOUR)).unwrap();
         s.retain(100 * HOUR, HOUR, 60 * HOUR).unwrap();
         let left = s.stalls(None, 0, i64::MAX, 10).unwrap();

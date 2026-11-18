@@ -157,19 +157,10 @@ impl Watch {
             }
             Change::Ended(stall)
         });
-        self.last = Some(Last {
-            at,
-            ts,
-            uptime,
-            reading,
-        });
+        self.last = Some(Last { at, ts, uptime, reading });
         self.since = Some(at);
         self.recent.push_back((ts, reading));
-        while self
-            .recent
-            .front()
-            .is_some_and(|(t, _)| ts - t > PRESSURE_WINDOW_MS)
-        {
+        while self.recent.front().is_some_and(|(t, _)| ts - t > PRESSURE_WINDOW_MS) {
             self.recent.pop_front();
         }
         change
@@ -206,8 +197,7 @@ impl Watch {
         if at.saturating_duration_since(since) < threshold {
             return None;
         }
-        let peak =
-            |f: fn(&Reading) -> Option<i64>| self.recent.iter().filter_map(|(_, r)| f(r)).max();
+        let peak = |f: fn(&Reading) -> Option<i64>| self.recent.iter().filter_map(|(_, r)| f(r)).max();
         let (container_id, container_mem) = largest.unzip();
         let stall = Stall {
             vm: vm.to_string(),
@@ -229,10 +219,7 @@ impl Watch {
     /// last block is forgotten, so the next start has to deliver one before anything counts.
     pub fn stopped(&mut self, ts: i64) -> Option<Change> {
         let open = self.open.take();
-        *self = Watch {
-            held: self.held,
-            ..Watch::default()
-        };
+        *self = Watch { held: self.held, ..Watch::default() };
         open.map(|(mut stall, _)| {
             stall.end = Some(ts.max(stall.start));
             stall.end_reason = Some(End::Stopped);
@@ -254,12 +241,7 @@ mod tests {
     const T: Duration = MIN_SILENCE;
 
     fn reading(used: i64, psi: i64) -> Reading {
-        Reading {
-            mem_used: Some(used),
-            mem_total: Some(100),
-            psi_mem_some: Some(psi),
-            psi_mem_full: Some(psi / 10),
-        }
+        Reading { mem_used: Some(used), mem_total: Some(100), psi_mem_some: Some(psi), psi_mem_full: Some(psi / 10) }
     }
 
     /// A watch that has seen a block at `t0` (wall-clock 1 000 000 ms, uptime 1000 s).
@@ -303,16 +285,9 @@ mod tests {
         assert_eq!((s.end, s.end_reason), (None, None));
         assert_eq!((s.mem_used, s.mem_total), (Some(95), Some(100)));
         assert_eq!((s.psi_mem_some, s.psi_mem_full), (Some(250), Some(25)));
-        assert_eq!(
-            (s.container_id.as_deref(), s.container_mem),
-            (Some("c1"), Some(80))
-        );
+        assert_eq!((s.container_id.as_deref(), s.container_mem), (Some("c1"), Some(80)));
         assert_eq!(w.stalled_since(), Some(1_000_000));
-        assert_eq!(
-            w.tick(t0 + 10 * T, T, "vm", None),
-            None,
-            "one stall at a time"
-        );
+        assert_eq!(w.tick(t0 + 10 * T, T, "vm", None), None, "one stall at a time");
     }
 
     #[test]
@@ -321,12 +296,7 @@ mod tests {
         let mut w = watching(t0);
         for i in 1..200u64 {
             let at = t0 + S * i as u32;
-            w.block(
-                at,
-                1_000_000 + i as i64 * 1000,
-                1000.0 + i as f64,
-                reading(50, 0),
-            );
+            w.block(at, 1_000_000 + i as i64 * 1000, 1000.0 + i as f64, reading(50, 0));
             assert_eq!(w.tick(at, T, "vm", None), None);
         }
     }
@@ -359,11 +329,7 @@ mod tests {
         assert_eq!(s.end, Some(1_300_000));
         assert_eq!(s.end_reason, Some(End::Resumed));
         assert_eq!(w.stalled_since(), None);
-        assert_eq!(
-            w.tick(t0 + 300 * S + T - S, T, "vm", None),
-            None,
-            "silence counts from the new block"
-        );
+        assert_eq!(w.tick(t0 + 300 * S + T - S, T, "vm", None), None, "silence counts from the new block");
     }
 
     #[test]
@@ -374,11 +340,7 @@ mod tests {
         let s = ended(w.stopped(2_000_000));
         assert_eq!((s.end, s.end_reason), (Some(2_000_000), Some(End::Stopped)));
         assert_eq!(w.stalled_since(), None);
-        assert_eq!(
-            w.tick(t0 + 10 * T, T, "vm", None),
-            None,
-            "started again, it has to answer once first"
-        );
+        assert_eq!(w.tick(t0 + 10 * T, T, "vm", None), None, "started again, it has to answer once first");
         assert_eq!(w.stopped(2_100_000), None, "nothing to end");
     }
 
@@ -443,12 +405,7 @@ mod tests {
         let mut w = Watch::default();
         w.block(t0, 1_000_000, 600.0, reading(95, 250));
         began(w.tick(t0 + T, T, "vm", None));
-        let s = ended(w.block(
-            t0 + 120 * S,
-            1_120_000 + 8 * 3_600_000,
-            720.0,
-            reading(10, 0),
-        ));
+        let s = ended(w.block(t0 + 120 * S, 1_120_000 + 8 * 3_600_000, 720.0, reading(10, 0)));
         assert_eq!(s.end_reason, Some(End::Resumed));
     }
 
@@ -459,11 +416,7 @@ mod tests {
         w.hold(true, t0 + S);
         assert_eq!(w.tick(t0 + 10 * T, T, "vm", None), None);
         w.hold(false, t0 + 10 * T);
-        assert_eq!(
-            w.tick(t0 + 11 * T - S, T, "vm", None),
-            None,
-            "counted from the end of the action"
-        );
+        assert_eq!(w.tick(t0 + 11 * T - S, T, "vm", None), None, "counted from the end of the action");
         began(w.tick(t0 + 11 * T, T, "vm", None));
     }
 
@@ -505,12 +458,7 @@ mod tests {
         let t0 = Instant::now();
         let mut w = watching(t0);
         assert_eq!(w.tick(t0 + 5 * S, T, "vm", None), None);
-        w.block(
-            t0 + 6 * S,
-            1_000_000 + 8 * 3_600_000,
-            1006.0,
-            reading(50, 0),
-        );
+        w.block(t0 + 6 * S, 1_000_000 + 8 * 3_600_000, 1006.0, reading(50, 0));
         assert_eq!(w.tick(t0 + 6 * S + T - S, T, "vm", None), None);
     }
 }

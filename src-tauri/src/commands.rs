@@ -5,12 +5,12 @@ use std::sync::Arc;
 use tauri::State;
 
 use crate::collector::{Collector, Snapshot, now_ms};
+use crate::guest_files::{self, Folder, Listing, Peek};
 use crate::lima::{self, Action, Resize};
 use crate::podman::{ContainerAction, Image, Layer, Libpod, LogLine, Pruned, Volume};
-use crate::guest_files::{self, Folder, Listing, Peek};
-use serde::Deserialize;
 use crate::settings::{Saved, Settings};
 use crate::store::{Entity, OomRecord, Series, Stack, StallRecord, Summary};
+use serde::Deserialize;
 
 type C<'a> = State<'a, Arc<Collector>>;
 
@@ -55,16 +55,8 @@ pub fn update_available(
 /// One of the computer's resources ("mem", "cpu", "disk") over [from, to], for the menu bar's
 /// stacked chart: the computer's use and size and each VM's part, on the same buckets.
 #[tauri::command]
-pub fn host_stack(
-    c: C<'_>,
-    metric: String,
-    from: i64,
-    to: i64,
-    points: Option<usize>,
-) -> Result<Stack, String> {
-    c.store()
-        .stack(&metric, from, to, points.unwrap_or(120).clamp(10, 2000))
-        .map_err(err)
+pub fn host_stack(c: C<'_>, metric: String, from: i64, to: i64, points: Option<usize>) -> Result<Stack, String> {
+    c.store().stack(&metric, from, to, points.unwrap_or(120).clamp(10, 2000)).map_err(err)
 }
 
 /// The `n` apps using the most of a resource ("mem" or "cpu") now, leaving out the VMs' own
@@ -81,11 +73,9 @@ pub async fn top_apps(
     let squeeze = c.squeeze();
     let sampler = sampler.inner().clone();
     // A few tens of ms of system calls and a `ps`: off the main thread.
-    tauri::async_runtime::spawn_blocking(move || {
-        sampler.top(metric, n.unwrap_or(5).clamp(1, 50), &exclude, squeeze)
-    })
-    .await
-    .map_err(err)?
+    tauri::async_runtime::spawn_blocking(move || sampler.top(metric, n.unwrap_or(5).clamp(1, 50), &exclude, squeeze))
+        .await
+        .map_err(err)?
 }
 
 /// Shows the main window, making it again if it was closed.
@@ -138,12 +128,7 @@ async fn libpod(c: &Collector, vm: &str) -> Result<Libpod, String> {
 }
 
 #[tauri::command]
-pub async fn container_action(
-    c: C<'_>,
-    vm: String,
-    id: String,
-    action: ContainerAction,
-) -> Result<(), String> {
+pub async fn container_action(c: C<'_>, vm: String, id: String, action: ContainerAction) -> Result<(), String> {
     libpod(&c, &vm).await?.act(&id, action).await.map_err(err)
 }
 
@@ -159,18 +144,15 @@ pub async fn container_logs(
     since: Option<i64>,
 ) -> Result<Vec<LogLine>, String> {
     // `since` is Unix ms, as every time the UI sends; podman takes seconds.
-    libpod(&c, &vm).await?
+    libpod(&c, &vm)
+        .await?
         .logs(&id, tail.unwrap_or(500).min(MAX_LOG_LINES), since.map(|ms| ms.div_euclid(1000)))
         .await
         .map_err(err)
 }
 
 #[tauri::command]
-pub async fn container_inspect(
-    c: C<'_>,
-    vm: String,
-    id: String,
-) -> Result<serde_json::Value, String> {
+pub async fn container_inspect(c: C<'_>, vm: String, id: String) -> Result<serde_json::Value, String> {
     libpod(&c, &vm).await?.inspect(&id).await.map_err(err)
 }
 
@@ -205,9 +187,14 @@ pub async fn volumes(c: C<'_>, vm: String) -> Result<Vec<Volume>, String> {
 #[derive(Debug, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum Source {
-    Volume { name: String },
+    Volume {
+        name: String,
+    },
     /// `layer`: which of the image's layers, newest first — the n-th history step with a size.
-    Layer { image: String, layer: usize },
+    Layer {
+        image: String,
+        layer: usize,
+    },
 }
 
 /// Where `source` is kept in the guest (from podman, never from the UI), what kind of folder it
@@ -282,16 +269,8 @@ pub async fn system_df(c: C<'_>, vm: String) -> Result<serde_json::Value, String
 }
 
 #[tauri::command]
-pub fn series(
-    c: C<'_>,
-    entity: i64,
-    from: i64,
-    to: i64,
-    points: Option<usize>,
-) -> Result<Series, String> {
-    c.store()
-        .series(entity, from, to, points.unwrap_or(600).clamp(10, 5000))
-        .map_err(err)
+pub fn series(c: C<'_>, entity: i64, from: i64, to: i64, points: Option<usize>) -> Result<Series, String> {
+    c.store().series(entity, from, to, points.unwrap_or(600).clamp(10, 5000)).map_err(err)
 }
 
 /// A compose project in `vm` over [from, to] (store::compose_series): its containers added up
@@ -311,18 +290,11 @@ pub fn compose_series(
 ) -> Result<Series, String> {
     let line = service.as_deref().zip(name.as_deref());
     let points = points.unwrap_or(600).clamp(10, 5000);
-    c.store()
-        .compose_series(&vm, &project, line, from, to, points)
-        .map_err(err)
+    c.store().compose_series(&vm, &project, line, from, to, points).map_err(err)
 }
 
 #[tauri::command]
-pub fn summary(
-    c: C<'_>,
-    entity: i64,
-    from: i64,
-    to: i64,
-) -> Result<HashMap<String, Summary>, String> {
+pub fn summary(c: C<'_>, entity: i64, from: i64, to: i64) -> Result<HashMap<String, Summary>, String> {
     let raw_days = c.snapshot().retention.map(|r| r.raw_days).unwrap_or(7);
     let raw_from = now_ms() - raw_days * 86_400_000;
     c.store().summary(entity, from, to, raw_from).map_err(err)
@@ -343,9 +315,7 @@ pub fn oom_events(
     to: i64,
     limit: Option<usize>,
 ) -> Result<Vec<OomRecord>, String> {
-    c.store()
-        .oom_events(vm.as_deref(), from, to, limit.unwrap_or(500).clamp(1, 5000))
-        .map_err(err)
+    c.store().oom_events(vm.as_deref(), from, to, limit.unwrap_or(500).clamp(1, 5000)).map_err(err)
 }
 
 /// VM stalls overlapping [from, to] (one going on included), newest first (at most `limit`,
@@ -358,7 +328,5 @@ pub fn stalls(
     to: i64,
     limit: Option<usize>,
 ) -> Result<Vec<StallRecord>, String> {
-    c.store()
-        .stalls(vm.as_deref(), from, to, limit.unwrap_or(500).clamp(1, 5000))
-        .map_err(err)
+    c.store().stalls(vm.as_deref(), from, to, limit.unwrap_or(500).clamp(1, 5000)).map_err(err)
 }

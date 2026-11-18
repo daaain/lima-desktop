@@ -95,11 +95,7 @@ impl Default for Warn {
     /// by a few container images; with less, one VM's next pull or build can fill the computer's
     /// disk.
     fn default() -> Self {
-        Warn {
-            memory_pct: Some(75),
-            cpu_pct: Some(75),
-            disk_free_gb: Some(50),
-        }
+        Warn { memory_pct: Some(75), cpu_pct: Some(75), disk_free_gb: Some(50) }
     }
 }
 
@@ -125,10 +121,7 @@ impl Warn {
 
 impl Default for MenuBar {
     fn default() -> Self {
-        let item = |drawing| Item {
-            drawing,
-            figure: true,
-        };
+        let item = |drawing| Item { drawing, figure: true };
         MenuBar {
             memory: item(Drawing::Trace),
             cpu: item(Drawing::Trace),
@@ -185,11 +178,7 @@ impl Settings {
         match serde_json::from_str::<Settings>(&text) {
             Ok(s) if s.check().is_ok() => s,
             Ok(s) => {
-                log::warn!(
-                    "{}: {}; using the defaults",
-                    path.display(),
-                    s.check().unwrap_err()
-                );
+                log::warn!("{}: {}; using the defaults", path.display(), s.check().unwrap_err());
                 Settings::default()
             }
             Err(e) => {
@@ -227,8 +216,7 @@ impl Saved {
     pub fn set(&self, s: Settings) -> Result<(), String> {
         s.check()?;
         let mut current = self.current.lock().expect("settings lock");
-        s.save(&self.path)
-            .map_err(|e| format!("can't save {}: {e}", self.path.display()))?;
+        s.save(&self.path).map_err(|e| format!("can't save {}: {e}", self.path.display()))?;
         *current = s;
         Ok(())
     }
@@ -239,11 +227,8 @@ mod tests {
     use super::*;
 
     fn dir() -> PathBuf {
-        let d = std::env::temp_dir().join(format!(
-            "ld-settings-{}-{:?}",
-            std::process::id(),
-            std::thread::current().id()
-        ));
+        let d =
+            std::env::temp_dir().join(format!("ld-settings-{}-{:?}", std::process::id(), std::thread::current().id()));
         std::fs::create_dir_all(&d).unwrap();
         d
     }
@@ -260,13 +245,7 @@ mod tests {
         assert_eq!(Settings::load(&d.join("old.json")), Settings::default());
         // A file from before the theme was a setting: its interval stands, the theme follows the system.
         std::fs::write(d.join("v1.json"), r#"{"intervalSecs": 10}"#).unwrap();
-        assert_eq!(
-            Settings::load(&d.join("v1.json")),
-            Settings {
-                interval_secs: 10,
-                ..Settings::default()
-            }
-        );
+        assert_eq!(Settings::load(&d.join("v1.json")), Settings { interval_secs: 10, ..Settings::default() });
         // From before the menu bar: it gets the default items, and keeps running when closed.
         std::fs::write(d.join("v2.json"), r#"{"intervalSecs": 5, "theme": "dark"}"#).unwrap();
         let v2 = Settings::load(&d.join("v2.json"));
@@ -274,11 +253,7 @@ mod tests {
         assert_eq!(v2.menu_bar, MenuBar::default());
         assert!(v2.keep_running);
         // An item that isn't offered is refused as a whole, like any other value.
-        std::fs::write(
-            d.join("look.json"),
-            r#"{"menuBar": {"memory": {"drawing": "pie", "figure": true}}}"#,
-        )
-        .unwrap();
+        std::fs::write(d.join("look.json"), r#"{"menuBar": {"memory": {"drawing": "pie", "figure": true}}}"#).unwrap();
         assert_eq!(Settings::load(&d.join("look.json")), Settings::default());
         // From before an item's drawing and figure were apart (never released): an item as one
         // word is a value no longer offered, so the file is refused the same way.
@@ -288,11 +263,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(Settings::load(&d.join("looks.json")), Settings::default());
-        std::fs::write(
-            d.join("theme.json"),
-            r#"{"intervalSecs": 1, "theme": "sepia"}"#,
-        )
-        .unwrap();
+        std::fs::write(d.join("theme.json"), r#"{"intervalSecs": 1, "theme": "sepia"}"#).unwrap();
         assert_eq!(Settings::load(&d.join("theme.json")), Settings::default());
     }
 
@@ -317,24 +288,11 @@ mod tests {
             interval_secs: 5,
             theme: Theme::Dark,
             menu_bar: MenuBar {
-                memory: Item {
-                    drawing: Drawing::Bar,
-                    figure: false,
-                },
-                cpu: Item {
-                    drawing: Drawing::Off,
-                    figure: false,
-                },
-                disk: Item {
-                    drawing: Drawing::Off,
-                    figure: true,
-                },
+                memory: Item { drawing: Drawing::Bar, figure: false },
+                cpu: Item { drawing: Drawing::Off, figure: false },
+                disk: Item { drawing: Drawing::Off, figure: true },
                 names: false,
-                warn: Warn {
-                    memory_pct: Some(90),
-                    cpu_pct: None,
-                    disk_free_gb: Some(200),
-                },
+                warn: Warn { memory_pct: Some(90), cpu_pct: None, disk_free_gb: Some(200) },
             },
             keep_running: false,
             check_updates: false,
@@ -347,27 +305,9 @@ mod tests {
     #[test]
     fn by_default_memory_and_cpu_are_traces_and_the_disk_a_bar_each_with_its_figure_and_name() {
         let m = MenuBar::default();
-        assert_eq!(
-            m.memory,
-            Item {
-                drawing: Drawing::Trace,
-                figure: true
-            }
-        );
-        assert_eq!(
-            m.cpu,
-            Item {
-                drawing: Drawing::Trace,
-                figure: true
-            }
-        );
-        assert_eq!(
-            m.disk,
-            Item {
-                drawing: Drawing::Bar,
-                figure: true
-            }
-        );
+        assert_eq!(m.memory, Item { drawing: Drawing::Trace, figure: true });
+        assert_eq!(m.cpu, Item { drawing: Drawing::Trace, figure: true });
+        assert_eq!(m.disk, Item { drawing: Drawing::Bar, figure: true });
         assert!(m.names);
         assert_eq!(
             serde_json::to_value(m).unwrap(),
@@ -383,57 +323,24 @@ mod tests {
 
     #[test]
     fn an_item_is_shown_unless_both_its_drawing_and_figure_are_off() {
-        assert!(
-            Item {
-                drawing: Drawing::Off,
-                figure: true
-            }
-            .shown()
-        );
-        assert!(
-            Item {
-                drawing: Drawing::Bar,
-                figure: false
-            }
-            .shown()
-        );
-        assert!(
-            !Item {
-                drawing: Drawing::Off,
-                figure: false
-            }
-            .shown()
-        );
+        assert!(Item { drawing: Drawing::Off, figure: true }.shown());
+        assert!(Item { drawing: Drawing::Bar, figure: false }.shown());
+        assert!(!Item { drawing: Drawing::Off, figure: false }.shown());
     }
 
     #[test]
     fn an_interval_not_offered_is_refused_and_changes_nothing() {
         let d = dir();
         let saved = Saved::load(d.join("refused.json"));
-        let e = saved
-            .set(Settings {
-                interval_secs: 3,
-                ..Settings::default()
-            })
-            .unwrap_err();
-        assert_eq!(
-            e,
-            "3 s isn't one of the intervals offered (1 s, 2 s, 5 s, 10 s)"
-        );
+        let e = saved.set(Settings { interval_secs: 3, ..Settings::default() }).unwrap_err();
+        assert_eq!(e, "3 s isn't one of the intervals offered (1 s, 2 s, 5 s, 10 s)");
         assert_eq!(saved.get().interval_secs, 1);
         assert!(!d.join("refused.json").exists());
     }
 
     #[test]
     fn memory_and_cpu_warn_past_three_quarters_and_the_disk_under_50_gb_free_by_default() {
-        assert_eq!(
-            Warn::default(),
-            Warn {
-                memory_pct: Some(75),
-                cpu_pct: Some(75),
-                disk_free_gb: Some(50),
-            }
-        );
+        assert_eq!(Warn::default(), Warn { memory_pct: Some(75), cpu_pct: Some(75), disk_free_gb: Some(50) });
         assert_eq!(MenuBar::default().warn, Warn::default());
     }
 
@@ -452,13 +359,7 @@ mod tests {
         assert_eq!(v4.menu_bar.warn, Warn::default());
         // One of them chosen: the others as they were.
         std::fs::write(d.join("one.json"), r#"{"menuBar": {"warn": {"cpuPct": 90}}}"#).unwrap();
-        assert_eq!(
-            Settings::load(&d.join("one.json")).menu_bar.warn,
-            Warn {
-                cpu_pct: Some(90),
-                ..Warn::default()
-            }
-        );
+        assert_eq!(Settings::load(&d.join("one.json")).menu_bar.warn, Warn { cpu_pct: Some(90), ..Warn::default() });
     }
 
     #[test]
@@ -469,11 +370,7 @@ mod tests {
             r#"{"menuBar": {"warn": {"memoryPct": null, "cpuPct": null, "diskFreeGb": null}}}"#,
         )
         .unwrap();
-        let never = Warn {
-            memory_pct: None,
-            cpu_pct: None,
-            disk_free_gb: None,
-        };
+        let never = Warn { memory_pct: None, cpu_pct: None, disk_free_gb: None };
         assert_eq!(Settings::load(&d.join("never.json")).menu_bar.warn, never);
         assert_eq!(
             serde_json::to_value(never).unwrap(),
@@ -485,40 +382,13 @@ mod tests {
     fn a_warning_not_offered_is_refused_and_changes_nothing() {
         let d = dir();
         let saved = Saved::load(d.join("warn.json"));
-        let with = |warn| Settings {
-            menu_bar: MenuBar {
-                warn,
-                ..MenuBar::default()
-            },
-            ..Settings::default()
-        };
-        let e = saved
-            .set(with(Warn {
-                memory_pct: Some(77),
-                ..Warn::default()
-            }))
-            .unwrap_err();
-        assert_eq!(
-            e,
-            "77 % isn't one of the warnings offered (50 %, 60 %, 70 %, 75 %, 80 %, 85 %, 90 %, 95 %)"
-        );
-        let e = saved
-            .set(with(Warn {
-                cpu_pct: Some(100),
-                ..Warn::default()
-            }))
-            .unwrap_err();
+        let with = |warn| Settings { menu_bar: MenuBar { warn, ..MenuBar::default() }, ..Settings::default() };
+        let e = saved.set(with(Warn { memory_pct: Some(77), ..Warn::default() })).unwrap_err();
+        assert_eq!(e, "77 % isn't one of the warnings offered (50 %, 60 %, 70 %, 75 %, 80 %, 85 %, 90 %, 95 %)");
+        let e = saved.set(with(Warn { cpu_pct: Some(100), ..Warn::default() })).unwrap_err();
         assert!(e.starts_with("100 % isn't"), "{e}");
-        let e = saved
-            .set(with(Warn {
-                disk_free_gb: Some(30),
-                ..Warn::default()
-            }))
-            .unwrap_err();
-        assert_eq!(
-            e,
-            "30 GB free isn't one of the warnings offered (10 GB, 25 GB, 50 GB, 100 GB, 200 GB)"
-        );
+        let e = saved.set(with(Warn { disk_free_gb: Some(30), ..Warn::default() })).unwrap_err();
+        assert_eq!(e, "30 GB free isn't one of the warnings offered (10 GB, 25 GB, 50 GB, 100 GB, 200 GB)");
         assert_eq!(saved.get(), Settings::default());
         assert!(!d.join("warn.json").exists());
         // In a file, the same: the defaults.
