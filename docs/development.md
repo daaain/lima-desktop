@@ -11,7 +11,7 @@ just --list                    # the same and more as recipes; `just check` runs
 just format                    # the Markdown, one line per paragraph and list item
 ```
 
-Markdown is written one line per paragraph and list item, never wrapped by hand, so an edit changes only its own lines. `just format` (Prettier, Markdown only: `.prettierrc.json`, `.prettierignore`) makes it so, and `just check` fails on a file it would change. `just format` does the Rust too, with rustfmt in wide, dense lines (`src-tauri/rustfmt.toml`: 120 columns, and a chain, struct or argument list kept on one line while it fits), which `just check` holds it to as well.
+Markdown is written one line per paragraph and list item, never wrapped by hand, so an edit changes only its own lines. `just format` (Prettier, Markdown only: `.prettierrc.json`, `.prettierignore`) makes it so, and `just check` fails on a file it would change. `just format` does the Rust too, with rustfmt in wide, dense lines (`src-tauri/rustfmt.toml`: 120 columns, and a chain, struct or argument list kept on one line while it fits), which `just check` holds it to as well. The reformat that brought it in is in `.git-blame-ignore-revs`, which GitHub's blame skips; for `git blame` to as well, run `git config blame.ignoreRevsFile .git-blame-ignore-revs` once.
 
 `LD_DATA_DIR=<dir>` makes the app keep its data (the metrics history, `metrics.db`) there instead of the platform's app data directory: anything run against fake or replayed VMs should set it, so the real history never mixes with theirs.
 
