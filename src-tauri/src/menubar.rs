@@ -185,6 +185,13 @@ pub struct Parts {
     pub name_under: bool,
 }
 
+/// An item's parts as this platform can show them. A Linux panel shows an item's image alone (its
+/// title only with GNOME's AppIndicator extension), so there it has no figure and no name, and one
+/// with no drawing isn't there; Settings doesn't offer them there either.
+pub fn parts_here(item: Item, names: bool) -> Option<Parts> {
+    if cfg!(target_os = "macos") { parts(item, names) } else { parts(Item { figure: false, ..item }, false) }
+}
+
 /// An item's parts as Settings has it; `None` when it isn't in the menu bar.
 pub fn parts(item: Item, names: bool) -> Option<Parts> {
     item.shown().then_some(Parts {
@@ -682,10 +689,11 @@ pub fn apply(app: &AppHandle) {
     let chosen = app.state::<Saved>().get().menu_bar;
     let state = app.state::<State>();
     let mut ok = true;
-    let none = RESOURCES.iter().all(|r| !r.item(&chosen).shown());
+    let there = |r: Res| parts_here(r.item(&chosen), chosen.names).is_some();
+    let none = RESOURCES.iter().all(|&r| !there(r));
     // Added right to left, so they read memory, CPU, disk.
     for res in RESOURCES.into_iter().rev() {
-        let want = res.item(&chosen).shown();
+        let want = there(res);
         match (want, app.tray_by_id(res.id()).is_some()) {
             (true, false) => {
                 state.added[res.index()].fetch_add(1, Ordering::Relaxed);
@@ -812,7 +820,7 @@ fn draw(app: &AppHandle) {
     let history = state.history.lock().expect("menu bar lock").clone();
     let mut drawn = state.drawn.lock().expect("menu bar lock");
     for res in RESOURCES {
-        let (Some(tray), Some(p)) = (app.tray_by_id(res.id()), parts(res.item(&chosen), chosen.names)) else {
+        let (Some(tray), Some(p)) = (app.tray_by_id(res.id()), parts_here(res.item(&chosen), chosen.names)) else {
             continue;
         };
         let h: Vec<Share> = history[res.index()].iter().copied().collect();
@@ -1772,31 +1780,46 @@ mod tests {
         assert_eq!(panel_bar("ubuntu:GNOME", Some(2)), Bar::Dark);
     }
 
+    #[test]
+    fn a_linux_panel_shows_an_item_as_its_drawing_alone() {
+        // Its label shows only with GNOME's extension: there's no figure, nor a name, to choose there,
+        // and an item with no drawing isn't there.
+        let cases = [
+            (Drawing::Trace, true, true),
+            (Drawing::Bar, false, true),
+            (Drawing::Off, true, false),
+            (Drawing::Off, true, true),
+        ];
+        for (d, figure, names) in cases {
+            let here = parts_here(item(d, figure), names);
+            if cfg!(target_os = "macos") {
+                assert_eq!(here, parts(item(d, figure), names));
+            } else {
+                assert_eq!(here, parts(item(d, false), false), "{d:?}, figure {figure}, names {names}");
+            }
+        }
+    }
+
     #[cfg(not(target_os = "macos"))]
     #[test]
-    fn elsewhere_the_image_is_the_drawing_and_the_figure_its_title() {
+    fn elsewhere_the_image_is_the_drawing_with_no_title() {
         let now = [used(0.4, 0.2)];
-        let s = shown(Res::Mem, parts(item(Drawing::Trace, true), true).unwrap(), &now, false, Bar::Light);
-        assert_eq!(s.icon, Some(trace(&now)));
-        assert_eq!(s.title.as_deref(), Some("mem 40%"));
-        let s = shown(Res::Mem, parts(item(Drawing::Bar, false), true).unwrap(), &now, false, Bar::Light);
+        let s = shown(Res::Mem, parts_here(item(Drawing::Trace, true), true).unwrap(), &now, false, Bar::Light);
+        assert_eq!((s.icon, s.title), (Some(trace(&now)), None));
+        let s = shown(Res::Mem, parts_here(item(Drawing::Bar, false), true).unwrap(), &now, false, Bar::Light);
         assert_eq!((s.icon, s.title), (Some(bar(now[0])), None));
-        // A tray item shows no title without an image: one with only its figure has the app's.
-        let s = shown(Res::Cpu, parts(item(Drawing::Off, true), false).unwrap(), &[], false, Bar::Light);
-        assert_eq!((s.icon, s.title.as_deref()), (Some(glyph_on(Bar::Light)), Some("–")));
+        assert_eq!(s.tooltip.as_deref(), Some(tooltip(Res::Mem, now[0]).as_str()));
     }
 
     #[cfg(not(target_os = "macos"))]
     #[test]
     fn elsewhere_an_item_is_painted_for_the_panel_as_no_panel_tints_it() {
         let now = [used(0.9, 0.2)];
-        let p = parts(item(Drawing::Trace, true), true).unwrap();
+        let p = parts_here(item(Drawing::Trace, true), true).unwrap();
         for (bar, hot) in [(Bar::Dark, false), (Bar::Light, false), (Bar::Dark, true), (Bar::Light, true)] {
             let s = shown(Res::Mem, p, &now, hot, bar);
             assert_eq!(s.icon, drawing_in(Drawing::Trace, &now, bar.paint(hot)), "{bar:?}, hot {hot}");
         }
-        let off = parts(item(Drawing::Off, true), false).unwrap();
-        assert_eq!(shown(Res::Cpu, off, &[], false, Bar::Dark).icon, Some(glyph_on(Bar::Dark)));
         assert!(glyph_on(Bar::Dark).rgba.chunks(4).all(|p| p[..3] == WHITE));
     }
 
@@ -1842,7 +1865,7 @@ mod tests {
         let disk = ending(history(0.62, 0.35, 0.0), used(0.63, 0.356));
         let chosen = crate::settings::MenuBar::default();
         for (res, h, hot) in [(Res::Mem, mem, false), (Res::Cpu, cpu, false), (Res::Disk, disk, true)] {
-            let p = parts(res.item(&chosen), chosen.names).unwrap();
+            let p = parts_here(res.item(&chosen), chosen.names).unwrap();
             for (theme, bar) in [("light", Bar::Light), ("dark", Bar::Dark)] {
                 write_rgba(&dir, &format!("{theme}-{}", res.id()), &shown(res, p, &h, hot, bar));
             }

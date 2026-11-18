@@ -99,6 +99,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::snapshot,
             commands::settings,
+            commands::platform,
             commands::set_settings,
             commands::vm_action,
             commands::vm_resize,

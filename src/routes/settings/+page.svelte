@@ -33,12 +33,17 @@
     menuBar({ warn: { ...settings!.menuBar.warn, [WARN_KEYS[key]]: value === '' ? null : Number(value) } });
 
   let settings = $state<Settings | null>(null);
+  // A Linux panel shows an item's image alone (its title only with GNOME's AppIndicator extension),
+  // so there an item is its drawing, with no figure or name to choose (menubar.rs's parts_here).
+  let drawingsOnly = $state(false);
   let saving = $state(false);
   let error = $state<string | null>(null);
 
   onMount(async () => {
     try {
-      settings = await api.settings();
+      const [s, platform] = await Promise.all([api.settings(), api.platform()]);
+      drawingsOnly = platform === 'linux';
+      settings = s;
     } catch (e) {
       error = String(e);
     }
@@ -107,11 +112,13 @@
                   disabled={saving} onclick={() => chosen.drawing !== d && menuItem(item.key, { drawing: d })}>{DRAWING_LABELS[d]}</button>
               {/each}
             </div>
-            <label class="check">
-              <input type="checkbox" checked={chosen.figure} disabled={saving} aria-label="{item.label} figure"
-                onchange={(e) => menuItem(item.key, { figure: e.currentTarget.checked })} />
-              Figure
-            </label>
+            {#if !drawingsOnly}
+              <label class="check">
+                <input type="checkbox" checked={chosen.figure} disabled={saving} aria-label="{item.label} figure"
+                  onchange={(e) => menuItem(item.key, { figure: e.currentTarget.checked })} />
+                Figure
+              </label>
+            {/if}
             <label class="warn">
               Warn
               <select aria-label="{item.label} warns" disabled={saving} value={String(settings.menuBar.warn[WARN_KEYS[item.key]] ?? '')}
@@ -124,17 +131,26 @@
         </div>
       {/each}
     </div>
-    <label class="check">
-      <input type="checkbox" checked={settings.menuBar.names} disabled={saving} onchange={(e) => menuBar({ names: e.currentTarget.checked })} />
-      Name each one (“mem”, “cpu”, “disk”)
-    </label>
-    <p class="note">
-      Each item is the whole computer's memory, CPU or disk in use, with the VMs' part drawn pale at the bottom and
-      everything else solid above it, so its top edge is the total. A trace draws it moving over time, a bar as it is
-      now; the figure is the percent in use. A name goes small under the figure, or on its side beside a drawing alone.
-      Clicking an item opens the VMs' part over time. An item with neither a drawing nor a figure is left out, and with
-      all three left out, the app's own icon stays in the menu bar as the way back in.
-    </p>
+    {#if drawingsOnly}
+      <p class="note">
+        Each item is the whole computer's memory, CPU or disk in use, with the VMs' part drawn pale at the bottom and
+        everything else solid above it, so its top edge is the total. A trace draws it moving over time, a bar as it is
+        now; pointing at one says it in numbers. Its menu opens the VMs' part over time. An item drawn as None is left
+        out, and with all three left out, the app's own icon stays in the panel as the way back in.
+      </p>
+    {:else}
+      <label class="check">
+        <input type="checkbox" checked={settings.menuBar.names} disabled={saving} onchange={(e) => menuBar({ names: e.currentTarget.checked })} />
+        Name each one (“mem”, “cpu”, “disk”)
+      </label>
+      <p class="note">
+        Each item is the whole computer's memory, CPU or disk in use, with the VMs' part drawn pale at the bottom and
+        everything else solid above it, so its top edge is the total. A trace draws it moving over time, a bar as it is
+        now; the figure is the percent in use. A name goes small under the figure, or on its side beside a drawing alone.
+        Clicking an item opens the VMs' part over time. An item with neither a drawing nor a figure is left out, and with
+        all three left out, the app's own icon stays in the menu bar as the way back in.
+      </p>
+    {/if}
     <p class="note">
       An item turns the warning colour, and so does the figure in the window it opens, when memory or CPU is past the
       percent in use chosen, or when the disk has less than the space chosen left: a percent says little across disk

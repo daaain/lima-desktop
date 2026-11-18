@@ -374,6 +374,8 @@ export type ContainerAction = 'start' | 'stop' | 'restart' | 'remove';
 export const api = {
   snapshot: () => invoke<Snapshot>('snapshot'),
   settings: () => invoke<Settings>('settings'),
+  /** The platform the app runs on, as Rust names it ("macos", "linux"). */
+  platform: () => invoke<string>('platform'),
   setSettings: (settings: Settings) => invoke<Settings>('set_settings', { settings }),
   /** The menu bar popover's chart: `metric` over [from, to] in about `points` buckets. */
   hostStack: (metric: StackMetric, from: number, to: number, points = 120) =>
