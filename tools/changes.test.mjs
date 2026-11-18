@@ -56,6 +56,9 @@ test("a heading in an entry is refused: it would end the release's section early
 for (const [what, section, body, complaint] of [
   ['a code block', 'Fixed', '- a:\n\n  ```sh\n  echo\n  ```', /code block.*`code`/],
   ['a code block of tildes', 'Fixed', '- a:\n\n  ~~~\n  echo\n  ~~~', /code block/],
+  // Said as a code block, not as the heading its shell comment, or its `## ` line, would be taken for.
+  ['a code block with a comment in it', 'Fixed', '- a:\n\n  ```sh\n  # a comment\n  ```', /: a code block:/],
+  ['a code block with a level-two heading in it', 'Fixed', '- a:\n\n  ```md\n## in a block\n  ```', /: a code block:/],
   ['an image', 'Fixed', '- See ![the menu bar](https://example.com/m.png).', /image/],
   ['HTML', 'Fixed', '- Now <b>bold</b>.', /HTML.*`code`/],
   ['an autolink', 'Fixed', '- At <https://example.com>.', /\[.*\]\(https:/],

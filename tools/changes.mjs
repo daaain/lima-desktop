@@ -53,14 +53,15 @@ export function parse(name, text) {
   if (!BUMPS.includes(bump)) throw new ChangesError(`${name}: bump '${bump}' is not one of ${BUMPS.join(', ')}`);
   if (!body) throw new ChangesError(`${name}: the entry is empty`);
   if (section !== SUMMARY && !body.startsWith('- ')) throw new ChangesError(`${name}: the entry must be a \`- \` bullet (or several)`);
-  // A release's notes end at the next `## `, wherever it is, a code block included; any other
-  // heading, outside one, would nest under the release's own wrongly.
-  if (/^\s*## /m.test(body)) throw new ChangesError(`${name}: a \`## \` heading line, even in a code block, would end the release's notes there`);
+  // What What's new couldn't show first: a code block is said as one, not as the heading its shell
+  // comment or `## ` line would otherwise be taken for.
+  const unshown = unshowable(body, section);
+  if (unshown) throw new ChangesError(`${name}: ${unshown}`);
+  // A release's notes end at the next `## `; any other heading would nest under the release's own.
+  if (/^\s*## /m.test(body)) throw new ChangesError(`${name}: a \`## \` heading line would end the release's notes there`);
   for (const line of body.split('\n')) {
     if (/^\s*#{1,6} /.test(line)) throw new ChangesError(`${name}: no heading in an entry: the release gives it its section's`);
   }
-  const unshown = unshowable(body, section);
-  if (unshown) throw new ChangesError(`${name}: ${unshown}`);
   return { name, section, bump, body };
 }
 

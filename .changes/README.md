@@ -18,7 +18,7 @@ bump: minor
 - **`bump`** is the smallest release this change can go out in: `patch`, `minor` or `major`. `just release` warns when it's asked for a smaller step than a fragment says.
 - **The entry** is one or more `- ` bullets, written as it should read in the changelog: what changed for the person using the app, in bold, then why. It's what they read to decide whether to upgrade, and it becomes the GitHub Release's notes.
 
-The app's What's new shows these entries, so they keep to what it can show: one level of `- ` bullets (a Summary is prose), with **bold**, _italics_, `code` and links to web pages (`[text](https://…)`). `just check` refuses anything else, such as code blocks, images, HTML, underscores for emphasis, or a nested list, and says what to write instead. Inside `code`, anything goes.
+The app's What's new shows these entries, so they keep to what it can show: one level of `- ` bullets (a Summary is prose), with **bold**, _italics_, `code` and links to web pages (`[text](https://…)`). `just check` refuses anything else, such as code blocks, images, HTML, underscores for bold, or a nested list, and says what to write instead. Inside `code`, anything goes.
 
 CI and other changes nobody using the app would notice need no fragment. Like all the Markdown here, a bullet is one line, not wrapped by hand: `just format` makes it so.
 
