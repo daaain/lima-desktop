@@ -65,6 +65,8 @@ for (const [what, section, body, complaint] of [
   ['bold in underscores', 'Fixed', '- It is __very__ fast.', /\*\*bold\*\*/],
   ['strikethrough', 'Fixed', '- It was ~~slow~~.', /strikethrough/],
   ['a link that is not to the web', 'Fixed', '- See [the guide](./docs/guide.md).', /https:\/\//],
+  // What's new would read the address only up to its first `)`, and open a page that isn't it.
+  ['a bracket in a link\'s address', 'Fixed', '- See [the guide](https://example.com/a(b)).', /%28/],
   ['a nested list', 'Fixed', '- A:\n  - b', /nested list/],
   ['a numbered list', 'Fixed', '- A:\n\n1. b', /numbered list/],
   ['a bullet of another kind', 'Fixed', '- A\n* b', /`- `/],

@@ -88,6 +88,8 @@ export function unshowable(body, section) {
   if (/~~\S/.test(text)) return "strikethrough: What's new shows none";
   for (const [, href] of text.matchAll(/\[[^\]]*\]\(([^)]*)\)/g)) {
     if (!/^https?:\/\//.test(href)) return `a link to ${href}: What's new opens web pages only, so give its https:// address`;
+    // What's new reads an address up to its first `)`, so one with brackets would open another page.
+    if (href.includes('(')) return `a bracket in the link to ${href}…: write ( as %28 and ) as %29`;
   }
   return null;
 }
