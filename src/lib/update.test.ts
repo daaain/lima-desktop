@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { outSentence, shownUpdate } from './update';
 
-const v030 = { version: '0.3.0', url: 'https://github.com/daaain/lima-desktop/releases/tag/v0.3.0' };
-const v040 = { version: '0.4.0', url: 'https://github.com/daaain/lima-desktop/releases/tag/v0.4.0' };
+const v030 = { version: '0.3.0', url: 'https://github.com/daaain/lima-desktop/releases/tag/v0.3.0', notes: [] };
+const v040 = { version: '0.4.0', url: 'https://github.com/daaain/lima-desktop/releases/tag/v0.4.0', notes: [] };
 
 describe('shownUpdate', () => {
   it('shows a newer version until it is dismissed', () => {

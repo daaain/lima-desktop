@@ -428,10 +428,19 @@ export const api = {
   updateAvailable: () => invoke<Update | null>('update_available'),
 };
 
-/** A newer Lima Desktop (updates.rs): its version ("0.3.0") and its release page on GitHub. */
+/** A newer Lima Desktop (updates.rs): its version ("0.3.0"), its release page on GitHub, and the notes
+ * of each release since the one running, newest first (none when they couldn't be read). */
 export interface Update {
   version: string;
   url: string;
+  notes: Notes[];
+}
+
+/** One release's notes, as CHANGELOG.md has them: the Markdown under its heading. */
+export interface Notes {
+  version: string;
+  date: string;
+  text: string;
 }
 
 /** Is `action` locked by the instance's marker (or `limactl protect`)? */
