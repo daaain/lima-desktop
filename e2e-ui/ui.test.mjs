@@ -669,6 +669,24 @@ test("In the popover, What's new opens the main window with it open", async () =
   await close();
 });
 
+test("From the popover, What's new opens at once in a main window that was open, though it hadn't heard of the release yet", async () => {
+  // The main window, open since before the daily check found 0.4.0: it asks every ten minutes.
+  const { page: main, errors, close } = await open('/');
+  await asked(main, 1);
+  assert.equal(await main.locator('.update').count(), 0);
+  await main.evaluate((u) => (window.__fakeUpdate = u), V040_NOTES);
+  // The popover, shown since, has heard; it shares the main window's storage (one webview context).
+  const popover = await main.context().newPage();
+  await popover.clock.setFixedTime(NOW);
+  await popover.addInitScript({ path: join(root, 'e2e-ui/fake-backend.js') });
+  await popover.addInitScript(`window.__fakeUpdate = ${JSON.stringify(V040_NOTES)};`);
+  await popover.goto(`${base}/menubar?tab=mem`);
+  await popover.locator('.newer .update').getByRole('button', { name: "What's new" }).click();
+  await main.getByRole('region', { name: "What's new" }).waitFor({ timeout: 5000 });
+  assert.deepEqual(errors, []);
+  await close();
+});
+
 test('The popover says a newer version too, above its footer', async () => {
   const { page, errors, close } = await open('/menubar?tab=mem', { width: 396, height: 560, init: `window.__fakeUpdate = ${JSON.stringify(V030)};` });
   const notice = page.locator('.newer .update');

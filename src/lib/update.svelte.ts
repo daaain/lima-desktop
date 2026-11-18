@@ -46,8 +46,12 @@ class UpdateState {
       // Dismissed in another window (the main one or the menu bar's popover, which share this
       // storage): put away here too.
       if (e.key === KEY) this.dismissed = e.newValue;
-      // What's new, asked for from the popover while this window was open.
-      if (e.key === SHOW_NOTES && e.newValue && !popover && take(SHOW_NOTES)) this.notesOpen = true;
+      // What's new, asked for from the popover while this window was open: asking the backend too,
+      // as the popover, shown since, may know of a release this window hasn't heard of yet.
+      if (e.key === SHOW_NOTES && e.newValue && !popover && take(SHOW_NOTES)) {
+        this.notesOpen = true;
+        this.refresh();
+      }
     });
   }
 
