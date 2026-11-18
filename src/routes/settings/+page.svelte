@@ -162,7 +162,7 @@
         onchange={(e) => save({ checkUpdates: e.currentTarget.checked }).then(() => update.refresh())} />
       Say when a new version is out
     </label>
-    <p class="note">Once a day the app asks GitHub for its latest release, and sends nothing about you or this computer.</p>
+    <p class="note">Once a day the app asks GitHub for its latest release, and when it's newer, for what it brings. It sends nothing about you or this computer.</p>
   </section>
   {#if error}<p class="error">{error}</p>{/if}
 {/if}
