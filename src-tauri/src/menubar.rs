@@ -165,11 +165,6 @@ pub fn figure(now: Option<Share>) -> String {
     }
 }
 
-/// The title where the figure can't be drawn into the image (not macOS): the name before it.
-pub fn title(res: Res, now: Option<Share>, names: bool) -> String {
-    if names { format!("{} {}", res.id(), figure(now)) } else { figure(now) }
-}
-
 pub fn tooltip(res: Res, now: Share) -> String {
     format!("{}: this computer {:.0} % in use, the VMs {:.0} %", res.id(), now.whole * 100.0, now.vms * 100.0)
 }
@@ -183,6 +178,13 @@ pub struct Parts {
     pub figure: bool,
     /// The name, small, under the figure.
     pub name_under: bool,
+}
+
+/// An item's parts as this platform can show them. A Linux panel shows an item's image alone (its
+/// title only with GNOME's AppIndicator extension), so there it has no figure and no name, and one
+/// with no drawing isn't there; Settings doesn't offer them there either.
+pub fn parts_here(item: Item, names: bool) -> Option<Parts> {
+    if cfg!(target_os = "macos") { parts(item, names) } else { parts(Item { figure: false, ..item }, false) }
 }
 
 /// An item's parts as Settings has it; `None` when it isn't in the menu bar.
@@ -216,9 +218,9 @@ pub struct Mask {
 
 const H: u32 = 36;
 const FRAME: u32 = 2;
-/// Columns in a trace, each this wide, touching.
-pub const COLUMNS: usize = 11;
-const COLUMN: u32 = 4;
+/// Columns in a trace, each this wide (a point), touching.
+pub const COLUMNS: usize = 22;
+const COLUMN: u32 = 2;
 const TRACE_WIDTH: u32 = 2 * FRAME + COLUMNS as u32 * COLUMN;
 const BAR_WIDTH: u32 = 10;
 const SOLID: u8 = 255;
@@ -226,14 +228,13 @@ const PALE: u8 = 95;
 /// The warning colour: macOS's orange for a dark menu bar, which still reads on a light one.
 const HOT: [u8; 3] = [255, 159, 10];
 /// On a light menu bar the bright one is faint (about 2:1): a deeper one, legible as small text.
-#[cfg(any(target_os = "macos", test))]
 const HOT_ON_LIGHT: [u8; 3] = [179, 77, 0];
 const INK: [u8; 3] = [0, 0, 0];
-#[cfg(target_os = "macos")]
 const WHITE: [u8; 3] = [255, 255, 255];
 
-/// The menu bar's appearance, for what macOS can't tint: an item that warns isn't a template image,
-/// so its warning colour is chosen for the bar, and its names painted in the bar's own text colour.
+/// The menu bar's appearance, for what it can't tint. On macOS an item that warns isn't a template
+/// image, so its warning colour is chosen for the bar, and its names painted in the bar's own text
+/// colour. A Linux panel tints nothing, so every item is painted for it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Bar {
     #[default]
@@ -242,7 +243,6 @@ pub enum Bar {
 }
 
 impl Bar {
-    #[cfg(target_os = "macos")]
     fn ink(self) -> [u8; 3] {
         match self {
             Bar::Dark => WHITE,
@@ -251,12 +251,16 @@ impl Bar {
     }
 
     /// The warning colour on this menu bar.
-    #[cfg(any(target_os = "macos", test))]
     fn hot(self) -> [u8; 3] {
         match self {
             Bar::Dark => HOT,
             Bar::Light => HOT_ON_LIGHT,
         }
+    }
+
+    /// What an item is painted in on this menu bar: its ink, or when it warns its warning colour.
+    pub fn paint(self, hot: bool) -> [u8; 3] {
+        if hot { self.hot() } else { self.ink() }
     }
 
     /// The menu bar as an item it highlights shows it: inverted (a light highlight on a dark bar).
@@ -367,13 +371,18 @@ fn drawing_width(d: Drawing) -> u32 {
 
 /// The drawing alone, with nothing set beside it; `hot`, in the warning colour.
 pub fn drawing(d: Drawing, history: &[Share], hot: bool) -> Option<Icon> {
+    drawing_in(d, history, ink(hot).0)
+}
+
+/// The drawing alone, painted in `rgb`.
+pub fn drawing_in(d: Drawing, history: &[Share], rgb: [u8; 3]) -> Option<Icon> {
     let mut m = Mask::new(drawing_width(d), H);
     match d {
         Drawing::Off => return None,
         Drawing::Trace => m.trace(0, history),
         Drawing::Bar => m.bar(0, history.last().copied()),
     }
-    Some(m.paint(ink(hot).0))
+    Some(m.paint(rgb))
 }
 
 /// The last [`COLUMNS`] measurements, oldest first, the newest at the right; columns touch. Not
@@ -541,14 +550,20 @@ const GLYPH_FONT: &str = "Georgia-Bold";
 #[cfg(target_os = "macos")]
 const GLYPH_PX: f64 = 38.0;
 
-/// The app's own glyph, for when no item is chosen: an L, as a template image (a plain one: no
-/// font is to hand to set it in).
+/// The app's own glyph, for when no item is chosen: an L (a plain one: no font is to hand to set it
+/// in), in the panel's ink.
 #[cfg(not(target_os = "macos"))]
-pub fn glyph() -> Icon {
+pub fn glyph_on(bar: Bar) -> Icon {
     let mut m = Mask::new(20, H);
     m.fill(3, 9, 6, 30, SOLID);
     m.fill(3, 18, 25, 30, SOLID);
-    m.paint(INK)
+    m.paint(bar.ink())
+}
+
+/// In black, as macOS's is, for the tests that look at either.
+#[cfg(all(test, not(target_os = "macos")))]
+fn glyph() -> Icon {
+    glyph_on(Bar::Light)
 }
 
 // ---- in the app ---------------------------------------------------------------------------------
@@ -605,6 +620,9 @@ pub struct State {
     /// Whether the menu bar could be used here (Linux needs an app indicator library): without it,
     /// closing the window mustn't leave an app with no way back in.
     available: AtomicBool,
+    /// The panel the app's glyph was last painted for (Linux).
+    #[cfg(not(target_os = "macos"))]
+    glyph: Mutex<Option<Bar>>,
 }
 
 /// Whether closing the window should leave the app running.
@@ -669,10 +687,11 @@ pub fn apply(app: &AppHandle) {
     let chosen = app.state::<Saved>().get().menu_bar;
     let state = app.state::<State>();
     let mut ok = true;
-    let none = RESOURCES.iter().all(|r| !r.item(&chosen).shown());
+    let there = |r: Res| parts_here(r.item(&chosen), chosen.names).is_some();
+    let none = RESOURCES.iter().all(|&r| !there(r));
     // Added right to left, so they read memory, CPU, disk.
     for res in RESOURCES.into_iter().rev() {
-        let want = res.item(&chosen).shown();
+        let want = there(res);
         match (want, app.tray_by_id(res.id()).is_some()) {
             (true, false) => {
                 state.added[res.index()].fetch_add(1, Ordering::Relaxed);
@@ -685,7 +704,7 @@ pub fn apply(app: &AppHandle) {
         }
     }
     match (none, app.tray_by_id(APP_ITEM).is_some()) {
-        (true, false) => ok &= add(app, APP_ITEM, Some(glyph())).is_ok(),
+        (true, false) => ok &= add(app, APP_ITEM, Some(app_glyph())).is_ok(),
         (false, true) => {
             app.remove_tray_by_id(APP_ITEM);
         }
@@ -696,6 +715,18 @@ pub fn apply(app: &AppHandle) {
     tauri::async_runtime::spawn_blocking(move || draw(&app));
 }
 
+/// What an item's menu calls the popover, on Linux, where a click opens the menu: the details of its
+/// own resource, the tab it opens on; the app's own item (`None`) opens on memory, with all three.
+#[cfg(any(not(target_os = "macos"), test))]
+fn popover_label(res: Option<Res>) -> &'static str {
+    match res {
+        Some(Res::Mem) => "Show memory use details",
+        Some(Res::Cpu) => "Show CPU use details",
+        Some(Res::Disk) => "Show disk use details",
+        None => "Show memory, CPU and disk use details",
+    }
+}
+
 fn add(app: &AppHandle, id: &str, icon: Option<Icon>) -> tauri::Result<()> {
     // The item's own tab; the app's item opens on memory.
     let res = Res::from_id(id).unwrap_or(Res::Mem);
@@ -704,14 +735,13 @@ fn add(app: &AppHandle, id: &str, icon: Option<Icon>) -> tauri::Result<()> {
     let quit = MenuItem::with_id(app, "quit", "Quit Lima Desktop", true, None::<&str>)?;
     // Linux tells of no clicks on an item, only of its menu: the popover is opened from there.
     #[cfg(not(target_os = "macos"))]
-    let popover = MenuItem::with_id(app, "popover", "Memory, CPU and Disk…", true, None::<&str>)?;
+    let popover = MenuItem::with_id(app, "popover", popover_label(Res::from_id(id)), true, None::<&str>)?;
     #[cfg(not(target_os = "macos"))]
     let items: &[&dyn tauri::menu::IsMenuItem<tauri::Wry>] = &[&popover, &open, &separator, &quit];
     #[cfg(target_os = "macos")]
     let items: &[&dyn tauri::menu::IsMenuItem<tauri::Wry>] = &[&open, &separator, &quit];
     let menu = Menu::with_items(app, items)?;
     let mut b = TrayIconBuilder::with_id(id)
-        .tooltip("Lima Desktop")
         .menu(&menu)
         .show_menu_on_left_click(false)
         .on_menu_event(move |app, e| match e.id().as_ref() {
@@ -733,6 +763,10 @@ fn add(app: &AppHandle, id: &str, icon: Option<Icon>) -> tauri::Result<()> {
                 toggle_popover(tray.app_handle(), res, rect);
             }
         });
+    // Until its first measurement says more; AppIndicator shows no tooltip (tray-icon: "Unsupported").
+    if cfg!(target_os = "macos") {
+        b = b.tooltip("Lima Desktop");
+    }
     if let Some(i) = icon {
         b = b.icon(Image::new_owned(i.rgba, i.width, i.height)).icon_as_template(true);
     }
@@ -777,20 +811,19 @@ pub fn shown(res: Res, p: Parts, history: &[Share], hot: bool, bar: Bar) -> Show
     let now = history.last().copied();
     #[cfg(target_os = "macos")]
     let (icon, title) = (Some(item(res, p, history, hot, bar)), None);
+    // Elsewhere the drawing alone, with no title: a Linux panel shows one only with GNOME's
+    // AppIndicator extension. The app's own glyph stands in for no drawing, which only a caller
+    // passing `parts` rather than `parts_here` asks for (the preview).
     #[cfg(not(target_os = "macos"))]
-    let _ = bar;
-    #[cfg(not(target_os = "macos"))]
-    let (icon, title) = (
-        // Linux shows no title without an image: one with only its figure has the app's.
-        drawing(p.drawing, history, hot).or_else(|| Some(glyph())),
-        p.figure.then(|| title(res, now, p.name_under)),
-    );
+    let (icon, title) = (drawing_in(p.drawing, history, bar.paint(hot)).or_else(|| Some(glyph_on(bar))), None);
     // Highlighted, macOS inverts a template image itself; one that warns is drawn again, inverted.
     #[cfg(target_os = "macos")]
     let highlighted = hot.then(|| item(res, p, history, hot, bar.inverted()));
     #[cfg(not(target_os = "macos"))]
     let highlighted = None;
-    Shown { icon, template: ink(hot).1, highlighted, title, tooltip: now.map(|s| tooltip(res, s)) }
+    // AppIndicator shows no tooltip (tray-icon: "Unsupported"), so there's none to make there.
+    let tooltip = if cfg!(target_os = "macos") { now.map(|s| tooltip(res, s)) } else { None };
+    Shown { icon, template: ink(hot).1, highlighted, title, tooltip }
 }
 
 /// Redraws every item, changing only what has changed. Never on the main thread: each change
@@ -801,14 +834,15 @@ fn draw(app: &AppHandle) {
     let history = state.history.lock().expect("menu bar lock").clone();
     let mut drawn = state.drawn.lock().expect("menu bar lock");
     for res in RESOURCES {
-        let (Some(tray), Some(p)) = (app.tray_by_id(res.id()), parts(res.item(&chosen), chosen.names)) else {
+        let (Some(tray), Some(p)) = (app.tray_by_id(res.id()), parts_here(res.item(&chosen), chosen.names)) else {
             continue;
         };
         let h: Vec<Share> = history[res.index()].iter().copied().collect();
         // As Settings has it now, so a change there shows at once.
         let hot = warns(&h, res.threshold(&chosen.warn));
-        // Only an item that warns needs to know (and asking is a trip to the main thread).
-        let bar = if hot { appearance(&tray) } else { Bar::default() };
+        // On macOS only an item that warns needs to know (and asking is a trip to the main thread);
+        // a Linux panel tints nothing, so there every item does.
+        let bar = if hot || cfg!(not(target_os = "macos")) { appearance(&tray) } else { Bar::default() };
         let new = shown(res, p, &h, hot, bar);
         // An item put in the menu bar again since it was last drawn starts empty.
         let added = state.added[res.index()].load(Ordering::Relaxed);
@@ -840,6 +874,16 @@ fn draw(app: &AppHandle) {
             Err(e) => log::warn!("can't redraw {} in the menu bar: {e}", res.id()),
         }
     }
+    // The app's glyph, there when no item is, painted for the panel as it is now.
+    #[cfg(not(target_os = "macos"))]
+    if let Some(tray) = app.tray_by_id(APP_ITEM) {
+        let mut last = state.glyph.lock().expect("menu bar lock");
+        if let Some(g) = glyph_repaint(&mut last, desktop_bar())
+            && let Err(e) = tray.set_icon(Some(Image::new_owned(g.rgba, g.width, g.height)))
+        {
+            log::warn!("can't repaint the app's glyph in the menu bar: {e}");
+        }
+    }
 }
 
 /// The appearance of the menu bar `tray` is in: its button's, which follows the menu bar's (dark
@@ -860,7 +904,89 @@ fn appearance(tray: &tauri::tray::TrayIcon) -> Bar {
 
 #[cfg(not(target_os = "macos"))]
 fn appearance(_: &tauri::tray::TrayIcon) -> Bar {
-    Bar::default()
+    desktop_bar()
+}
+
+/// The app's glyph, for its item when no other is chosen: a template image on macOS, painted for
+/// the panel elsewhere.
+#[cfg(target_os = "macos")]
+fn app_glyph() -> Icon {
+    glyph()
+}
+#[cfg(not(target_os = "macos"))]
+fn app_glyph() -> Icon {
+    glyph_on(desktop_bar())
+}
+
+/// The app's glyph to paint its item in, when the panel isn't what it was last painted for (`last`,
+/// then updated): it follows a change of light and dark, as the other items do.
+#[cfg(not(target_os = "macos"))]
+fn glyph_repaint(last: &mut Option<Bar>, now: Bar) -> Option<Icon> {
+    (*last != Some(now)).then(|| {
+        *last = Some(now);
+        glyph_on(now)
+    })
+}
+
+/// The panel a Linux desktop shows its tray items on, from its name (`XDG_CURRENT_DESKTOP`, as
+/// "ubuntu:GNOME") and the colour scheme its portal says (1 dark, 2 light, 0 no preference; None
+/// with no portal). Dark unless it says light, as most panels are; GNOME's top bar, and Ubuntu's, is
+/// dark in both. Only when it's the desktop's first name: one built on GNOME ("GNOME-Classic:GNOME",
+/// "Budgie:GNOME") themes its own panel, and GNOME Classic's is light.
+#[cfg(any(not(target_os = "macos"), test))]
+fn panel_bar(desktop: &str, scheme: Option<u32>) -> Bar {
+    let first = desktop.split(':').next().unwrap_or_default();
+    if first.eq_ignore_ascii_case("GNOME") || first.eq_ignore_ascii_case("ubuntu") {
+        return Bar::Dark;
+    }
+    match scheme {
+        Some(2) => Bar::Light,
+        _ => Bar::Dark,
+    }
+}
+
+/// [`panel_bar`] for this desktop, asked again at most every half minute, as a change of theme is
+/// rare and each tick redraws every item.
+#[cfg(not(target_os = "macos"))]
+fn desktop_bar() -> Bar {
+    static LAST: Mutex<Option<(Instant, Bar)>> = Mutex::new(None);
+    let mut last = LAST.lock().expect("panel lock");
+    if let Some((at, bar)) = *last
+        && at.elapsed() < Duration::from_secs(30)
+    {
+        return bar;
+    }
+    let bar = panel_bar(&std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default(), portal_color_scheme());
+    *last = Some((Instant::now(), bar));
+    bar
+}
+
+/// The colour scheme the desktop's settings portal says (`org.freedesktop.appearance`), if there's
+/// one to ask; given up on after a moment, so a stuck portal can't hold up the items.
+#[cfg(not(target_os = "macos"))]
+fn portal_color_scheme() -> Option<u32> {
+    use zbus::zvariant::Value;
+    // `Read` gives the value in a variant, and older portals in a variant in that.
+    fn number(v: &Value) -> Option<u32> {
+        match v {
+            Value::U32(n) => Some(*n),
+            Value::Value(inner) => number(inner),
+            _ => None,
+        }
+    }
+    let bus =
+        zbus::blocking::connection::Builder::session().ok()?.method_timeout(Duration::from_secs(2)).build().ok()?;
+    let reply = bus
+        .call_method(
+            Some("org.freedesktop.portal.Desktop"),
+            "/org/freedesktop/portal/desktop",
+            Some("org.freedesktop.portal.Settings"),
+            "Read",
+            &("org.freedesktop.appearance", "color-scheme"),
+        )
+        .ok()?;
+    let value: zbus::zvariant::OwnedValue = reply.body().deserialize().ok()?;
+    number(&value)
 }
 
 /// The image `tray` shows while it's highlighted (pressed, or its menu open): `icon`, else its own,
@@ -1340,10 +1466,7 @@ mod tests {
         let s = used(0.704, 0.5);
         assert_eq!(figure(Some(s)), "70%");
         assert_eq!(figure(None), "–");
-        assert_eq!(title(Res::Mem, Some(s), false), "70%");
-        assert_eq!(title(Res::Cpu, Some(s), true), "cpu 70%");
-        assert_eq!(title(Res::Disk, Some(used(1.0, 0.0)), true), "disk 100%");
-        assert_eq!(title(Res::Disk, None, true), "disk –");
+        assert_eq!(figure(Some(used(1.0, 0.0))), "100%");
     }
 
     fn item(drawing: Drawing, figure: bool) -> Item {
@@ -1437,6 +1560,16 @@ mod tests {
         let i = trace(&[full; COLUMNS]);
         let y = H / 2;
         assert!((FRAME..i.width - FRAME).all(|x| px(&i, x, y)[3] == SOLID));
+    }
+
+    #[test]
+    fn a_column_is_one_point_wide() {
+        // Two pixels, as the items are drawn at twice the menu bar's points: the newest alone, at the right.
+        let mut h = vec![Share::default(); COLUMNS - 1];
+        h.push(used(1.0, 0.0));
+        let i = trace(&h);
+        let inked: Vec<u32> = (FRAME..i.width - FRAME).filter(|&x| px(&i, x, H / 2)[3] == SOLID).collect();
+        assert_eq!(inked, [i.width - FRAME - 2, i.width - FRAME - 1]);
     }
 
     #[test]
@@ -1660,18 +1793,95 @@ mod tests {
         assert!(rows >= 24, "{rows} rows");
     }
 
+    #[test]
+    fn an_item_is_painted_in_its_bars_ink_or_warning_colour() {
+        assert_eq!(Bar::Dark.paint(false), WHITE);
+        assert_eq!(Bar::Light.paint(false), INK);
+        assert_eq!(Bar::Dark.paint(true), HOT);
+        assert_eq!(Bar::Light.paint(true), HOT_ON_LIGHT);
+    }
+
+    #[test]
+    fn a_linux_panel_is_dark_unless_the_desktop_says_light_and_gnomes_always_is() {
+        // The portal's colour scheme: 1 dark, 2 light, 0 no preference; None, no portal.
+        assert_eq!(panel_bar("KDE", Some(2)), Bar::Light);
+        assert_eq!(panel_bar("KDE", Some(1)), Bar::Dark);
+        assert_eq!(panel_bar("XFCE", Some(0)), Bar::Dark);
+        assert_eq!(panel_bar("XFCE", None), Bar::Dark);
+        assert_eq!(panel_bar("", None), Bar::Dark);
+        // GNOME's top bar is dark in both modes, Ubuntu's too.
+        assert_eq!(panel_bar("GNOME", Some(2)), Bar::Dark);
+        assert_eq!(panel_bar("ubuntu:GNOME", Some(2)), Bar::Dark);
+        // Desktops built on GNOME theme their own panel: GNOME Classic's is light.
+        assert_eq!(panel_bar("GNOME-Classic:GNOME", Some(2)), Bar::Light);
+        assert_eq!(panel_bar("Budgie:GNOME", Some(2)), Bar::Light);
+        assert_eq!(panel_bar("Budgie:GNOME", Some(1)), Bar::Dark);
+    }
+
+    #[test]
+    fn an_items_menu_says_what_it_shows_details_of() {
+        assert_eq!(popover_label(Some(Res::Mem)), "Show memory use details");
+        assert_eq!(popover_label(Some(Res::Cpu)), "Show CPU use details");
+        assert_eq!(popover_label(Some(Res::Disk)), "Show disk use details");
+        // The app's own item, there when no other is: it opens on memory, with all three tabs.
+        assert_eq!(popover_label(None), "Show memory, CPU and disk use details");
+    }
+
     #[cfg(not(target_os = "macos"))]
     #[test]
-    fn elsewhere_the_image_is_the_drawing_and_the_figure_its_title() {
+    fn the_apps_glyph_is_painted_again_when_the_panel_changes() {
+        let mut last = None;
+        assert_eq!(glyph_repaint(&mut last, Bar::Dark), Some(glyph_on(Bar::Dark)));
+        assert_eq!(glyph_repaint(&mut last, Bar::Dark), None);
+        assert_eq!(glyph_repaint(&mut last, Bar::Light), Some(glyph_on(Bar::Light)));
+        assert_eq!(last, Some(Bar::Light));
+    }
+
+    #[test]
+    fn a_linux_panel_shows_an_item_as_its_drawing_alone() {
+        // Its label shows only with GNOME's extension: there's no figure, nor a name, to choose there,
+        // and an item with no drawing isn't there.
+        let cases = [
+            (Drawing::Trace, true, true),
+            (Drawing::Bar, false, true),
+            (Drawing::Off, true, false),
+            (Drawing::Off, true, true),
+        ];
+        for (d, figure, names) in cases {
+            let here = parts_here(item(d, figure), names);
+            if cfg!(target_os = "macos") {
+                assert_eq!(here, parts(item(d, figure), names));
+            } else {
+                assert_eq!(here, parts(item(d, false), false), "{d:?}, figure {figure}, names {names}");
+            }
+        }
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn elsewhere_the_image_is_the_drawing_with_no_title() {
         let now = [used(0.4, 0.2)];
-        let s = shown(Res::Mem, parts(item(Drawing::Trace, true), true).unwrap(), &now, false, Bar::Dark);
-        assert_eq!(s.icon, Some(trace(&now)));
-        assert_eq!(s.title.as_deref(), Some("mem 40%"));
-        let s = shown(Res::Mem, parts(item(Drawing::Bar, false), true).unwrap(), &now, false, Bar::Dark);
+        let s = shown(Res::Mem, parts_here(item(Drawing::Trace, true), true).unwrap(), &now, false, Bar::Light);
+        assert_eq!((s.icon, s.title), (Some(trace(&now)), None));
+        let s = shown(Res::Mem, parts_here(item(Drawing::Bar, false), true).unwrap(), &now, false, Bar::Light);
         assert_eq!((s.icon, s.title), (Some(bar(now[0])), None));
-        // A tray item shows no title without an image: one with only its figure has the app's.
-        let s = shown(Res::Cpu, parts(item(Drawing::Off, true), false).unwrap(), &[], false, Bar::Dark);
-        assert_eq!((s.icon, s.title.as_deref()), (Some(glyph()), Some("–")));
+        // Nor a tooltip: AppIndicator has none.
+        assert_eq!(s.tooltip, None);
+        // Not even for a caller that asks for the figure (the preview): no panel would show it.
+        let s = shown(Res::Mem, parts(item(Drawing::Trace, true), true).unwrap(), &now, false, Bar::Light);
+        assert_eq!(s.title, None);
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn elsewhere_an_item_is_painted_for_the_panel_as_no_panel_tints_it() {
+        let now = [used(0.9, 0.2)];
+        let p = parts_here(item(Drawing::Trace, true), true).unwrap();
+        for (bar, hot) in [(Bar::Dark, false), (Bar::Light, false), (Bar::Dark, true), (Bar::Light, true)] {
+            let s = shown(Res::Mem, p, &now, hot, bar);
+            assert_eq!(s.icon, drawing_in(Drawing::Trace, &now, bar.paint(hot)), "{bar:?}, hot {hot}");
+        }
+        assert!(glyph_on(Bar::Dark).rgba.chunks(4).all(|p| p[..3] == WHITE));
     }
 
     /// Writes an item's image to `dir/name.rgba`: a header line (width, height, and 1 for a template
@@ -1683,11 +1893,12 @@ mod tests {
         std::fs::write(dir.join(format!("{name}.rgba")), out).unwrap();
     }
 
-    /// The README's menu bar (`just readme-menubar`, tools/menubar-readme.mjs): Settings' default
-    /// items, memory at the popover screenshot's 61 % (the VMs 57.1 of its 128 GiB) and CPU past its
-    /// warning, on a light and a dark menu bar, as `{light,dark}-{mem,cpu,disk}.rgba` in
-    /// `LD_MENUBAR_README`.
-    #[cfg(target_os = "macos")]
+    /// The README's menu bar (`just readme-menubar`, `just readme-menubar-linux`,
+    /// tools/menubar-readme.mjs): Settings' default items, memory at the popover screenshot's 61 % (the
+    /// VMs 57.1 of its 128 GiB) and the disk past its warning, on a light and a dark menu bar, as
+    /// `{light,dark}-{mem,cpu,disk}.rgba` in `LD_MENUBAR_README`, with the popover's width and gap
+    /// (`popover.json`) to place it as `place` does. On Linux, the drawings alone, as a panel shows them.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     #[test]
     #[ignore]
     fn menubar_readme() {
@@ -1705,22 +1916,23 @@ mod tests {
                 .collect()
         };
         // Memory and CPU end where the popovers under them (light and dark) start, at the fake backend's
-        // figures; the disk, under neither, shows the warning colour.
+        // figures; the disk, under neither, shows the warning colour at the README's 63 %.
         let ending = |mut h: Vec<Share>, last: Share| {
             *h.last_mut().unwrap() = last;
             h
         };
         let mem = ending(history(0.59, 0.43, 0.0), used(0.61, 0.446));
         let cpu = ending(history(0.44, 0.32, 0.0), used(0.48, 0.35));
+        let disk = ending(history(0.62, 0.35, 0.0), used(0.63, 0.356));
         let chosen = crate::settings::MenuBar::default();
-        for (res, h, hot) in
-            [(Res::Mem, mem, false), (Res::Cpu, cpu, false), (Res::Disk, history(0.62, 0.35, 0.0), true)]
-        {
-            let p = parts(res.item(&chosen), chosen.names).unwrap();
+        for (res, h, hot) in [(Res::Mem, mem, false), (Res::Cpu, cpu, false), (Res::Disk, disk, true)] {
+            let p = parts_here(res.item(&chosen), chosen.names).unwrap();
             for (theme, bar) in [("light", Bar::Light), ("dark", Bar::Dark)] {
                 write_rgba(&dir, &format!("{theme}-{}", res.id()), &shown(res, p, &h, hot, bar));
             }
         }
+        let popover = serde_json::json!({ "width": POPOVER_WIDTH, "gap": GAP });
+        std::fs::write(dir.join("popover.json"), popover.to_string()).unwrap();
     }
 
     /// Writes every kind of item to `LD_MENUBAR_PREVIEW` (a directory), as raw RGBA with a

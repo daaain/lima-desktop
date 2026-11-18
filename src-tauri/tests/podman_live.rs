@@ -1,6 +1,6 @@
 //! Against a REAL podman API, opt-in: `LD_PODMAN_SOCKET=/path/to/podman.sock cargo test --test podman_live`.
 //! Expects a running container labelled `com.docker.compose.project=shop`, and for the removal
-//! test the tag `localhost/ld-test:gone` and the volume `ld-test-gone` (see docs/development.md).
+//! test the tag `localhost/ld-test:gone` and the volume `ld-test-gone` (see DEVELOPMENT.md).
 //! Skips silently when the variable is unset.
 
 use lima_desktop_lib::podman::{ContainerAction, Libpod, PodmanError};
@@ -82,7 +82,7 @@ async fn lists_images_and_volumes_from_a_real_engine() {
     assert!(volumes.iter().all(|v| !v.name.is_empty() && !v.created_at.is_empty()));
 }
 
-/// Removes ONLY the fixtures from docs/development.md: the tag `localhost/ld-test:gone` and the
+/// Removes ONLY the fixtures from DEVELOPMENT.md: the tag `localhost/ld-test:gone` and the
 /// volume `ld-test-gone`; then prunes dangling images.
 #[tokio::test]
 async fn removes_images_and_volumes_and_refuses_what_is_in_use() {

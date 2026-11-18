@@ -28,6 +28,13 @@ pub fn settings(saved: State<'_, Saved>) -> Settings {
     saved.get()
 }
 
+/// The platform the app runs on ("macos", "linux"): what its menu bar can show differs (Settings
+/// offers no figure or name where a panel shows only an item's image).
+#[tauri::command]
+pub fn platform() -> &'static str {
+    std::env::consts::OS
+}
+
 /// Saves `settings` and puts them into effect; refused, with why, when a value isn't offered.
 #[tauri::command]
 pub fn set_settings(

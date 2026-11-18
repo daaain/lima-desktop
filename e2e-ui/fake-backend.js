@@ -609,6 +609,8 @@
   const commands = {
     snapshot,
     settings: () => copy(),
+    // macOS, unless a test sets __fakePlatform ('linux').
+    platform: () => window.__fakePlatform ?? 'macos',
     set_settings: (args) => later(setSettings(args)),
     // A test can set __fakeSeries to stand between the app and an answer: to change it, or have it
     // land late (a promise), so answers arrive out of order.
