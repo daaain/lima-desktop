@@ -1809,11 +1809,12 @@ mod tests {
         std::fs::write(dir.join(format!("{name}.rgba")), out).unwrap();
     }
 
-    /// The README's menu bar (`just readme-menubar`, tools/menubar-readme.mjs): Settings' default
-    /// items, memory at the popover screenshot's 61 % (the VMs 57.1 of its 128 GiB) and CPU past its
-    /// warning, on a light and a dark menu bar, as `{light,dark}-{mem,cpu,disk}.rgba` in
-    /// `LD_MENUBAR_README`, with the popover's width and gap (`popover.json`) to place it as `place` does.
-    #[cfg(target_os = "macos")]
+    /// The README's menu bar (`just readme-menubar`, `just readme-menubar-linux`,
+    /// tools/menubar-readme.mjs): Settings' default items, memory at the popover screenshot's 61 % (the
+    /// VMs 57.1 of its 128 GiB) and the disk past its warning, on a light and a dark menu bar, as
+    /// `{light,dark}-{mem,cpu,disk}.rgba` in `LD_MENUBAR_README`, with the popover's width and gap
+    /// (`popover.json`) to place it as `place` does. On Linux, the drawings alone, as a panel shows them.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     #[test]
     #[ignore]
     fn menubar_readme() {

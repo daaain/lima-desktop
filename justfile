@@ -116,6 +116,23 @@ readme-menubar:
     pnpm build
     node tools/menubar-readme.mjs "$items" docs/img
 
+# The README's Linux menu bar pictures (docs/img/menubar-linux*.webp, committed): the items as the app draws them for a light and a dark panel, in a real panel's tray (xfce4-panel under Xvfb, tools/linux-panel.sh), with the popover where Linux opens it. Drawn in the dev box, started if it's down; on Linux, here
+readme-menubar-linux:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ "$(uname)" != Linux ]; then
+      command -v fy >/dev/null || { echo "Drawn in foldyard's dev box, and there's no fy here: run this on Linux." >&2; exit 1; }
+      fy box ps 2>/dev/null | grep -q ' Up ' || fy box up
+      exec fy box exec -- just readme-menubar-linux
+    fi
+    items=$(mktemp -d)
+    trap 'rm -rf "$items"' EXIT
+    (cd src-tauri && LD_MENUBAR_README="$items" cargo test -q --lib menubar_readme -- --ignored)
+    # 560 points wide, as tools/menubar-readme.mjs composes the pictures.
+    for theme in light dark; do sh tools/linux-panel.sh "$items" "$theme" "$items/panel-$theme.png" 560; done
+    pnpm build
+    node tools/menubar-readme.mjs --linux "$items" docs/img
+
 # Everything CI would run: type checks, formatting, all tests, clippy (the browser run is `just ui-e2e`)
 check:
     pnpm check
@@ -175,6 +192,12 @@ release version_or_bump:
       just readme-menubar || { git checkout -q HEAD -- "${paths[@]}"; echo "The redraw failed: nothing is changed." >&2; exit 1; }
     else
       echo "Not on a Mac: the README's menu bar pictures (docs/img) aren't redrawn. Run just readme-menubar on one if the popover changed." >&2
+    fi
+    # The Linux ones are drawn in a real panel: in the dev box (started if it's down), or here on Linux.
+    if [ "$(uname)" = Linux ] || command -v fy >/dev/null; then
+      just readme-menubar-linux || { git checkout -q HEAD -- "${paths[@]}"; echo "The Linux redraw failed: nothing is changed." >&2; exit 1; }
+    else
+      echo "No dev box (fy) here: the README's Linux menu bar pictures aren't redrawn. Run just readme-menubar-linux where there is one if the popover or the items changed." >&2
     fi
     if [ -n "$(git status --porcelain)" ]; then
       git add -A -- "${paths[@]}"

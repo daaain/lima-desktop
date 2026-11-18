@@ -7,7 +7,12 @@
 // away from the clock). As lossless WebP. The popover's width and gap come from menubar.rs, with the
 // items (popover.json).
 //
-//   node tools/menubar-readme.mjs <items dir> [out dir, default docs/img]
+// With --linux (`just readme-menubar-linux`, in the dev box): the same two, on a Linux panel instead.
+// The items are drawn by the panel itself, a real one (tools/linux-panel.sh: `panel-{light,dark}.png`
+// in the items dir), and the popover is where the app opens it there, from the items' menu: at the
+// top right of the screen, under the panel.
+//
+//   node tools/menubar-readme.mjs [--linux] <items dir> [out dir, default docs/img]
 //
 // Needs `pnpm build` first, and cwebp (brew install webp).
 import { execFileSync, spawn } from 'node:child_process';
@@ -18,8 +23,10 @@ import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const [itemsDir, outDir = join(root, 'docs/img')] = process.argv.slice(2);
-if (!itemsDir) throw new Error('usage: node tools/menubar-readme.mjs <items dir> [out dir]');
+const args = process.argv.slice(2);
+const LINUX = args[0] === '--linux';
+const [itemsDir, outDir = join(root, 'docs/img')] = LINUX ? args.slice(1) : args;
+if (!itemsDir) throw new Error('usage: node tools/menubar-readme.mjs [--linux] <items dir> [out dir]');
 const PORT = Number(process.env.LD_UI_PORT ?? 4173);
 const base = `http://127.0.0.1:${PORT}`;
 // The browser tests' moment (e2e-ui/ui.test.mjs), so the popover is the one in their screenshots.
@@ -71,6 +78,11 @@ async function popover(browser, theme) {
   return { png: png.toString('base64'), height: png.readUInt32BE(20) / SCALE };
 }
 
+const WALLPAPER = {
+  dark: 'linear-gradient(160deg, #1b2440, #2a1f3d 55%, #14161f)',
+  light: 'linear-gradient(160deg, #c9d6f2, #e6d9f0 55%, #f4e6dc)',
+};
+
 /** The menu bar, its items and the popover open under one, on a wallpaper. */
 function scene(theme, items, popoverPng) {
   const dark = theme === 'dark';
@@ -83,7 +95,7 @@ function scene(theme, items, popoverPng) {
   * { box-sizing: border-box; }
   body { margin: 0; }
   .shot { position: relative; width: 560px; padding-bottom: 36px; font: 500 13px -apple-system, BlinkMacSystemFont, sans-serif;
-    background: ${dark ? 'linear-gradient(160deg, #1b2440, #2a1f3d 55%, #14161f)' : 'linear-gradient(160deg, #c9d6f2, #e6d9f0 55%, #f4e6dc)'}; }
+    background: ${WALLPAPER[theme]}; }
   .bar { height: ${BAR_HEIGHT}px; display: flex; justify-content: flex-end; align-items: center; gap: 6px; padding: 0 12px;
     background: ${dark ? 'rgba(16, 16, 22, 0.62)' : 'rgba(255, 255, 255, 0.5)'}; color: ${dark ? '#fff' : 'rgba(0, 0, 0, 0.85)'}; }
   .item { display: flex; align-items: center; height: 22px; padding: 0 5px; border-radius: 5px; }
@@ -97,6 +109,45 @@ function scene(theme, items, popoverPng) {
   <div class="room"></div>
   <div class="popover"><img src="data:image/png;base64,${popoverPng}"></div>
   </div></body></html>`;
+}
+
+/** A Linux panel, as the panel drew it, and the popover at the top right of the screen under it, on a wallpaper. */
+function linuxScene(theme, panelPng, popoverPng) {
+  const dark = theme === 'dark';
+  return `<!doctype html><html><head><meta charset="utf-8"><style>
+  * { box-sizing: border-box; }
+  body { margin: 0; }
+  .shot { position: relative; width: 560px; padding-bottom: 36px; background: ${WALLPAPER[theme]}; }
+  .panel { display: block; width: 560px; }
+  .popover { position: absolute; width: ${POPOVER_WIDTH}px; overflow: hidden;
+    box-shadow: 0 0 0 1px ${dark ? 'rgba(255, 255, 255, 0.12)' : 'rgba(0, 0, 0, 0.18)'}, 0 8px 24px rgba(0, 0, 0, ${dark ? 0.45 : 0.18}); }
+  .popover img { display: block; width: ${POPOVER_WIDTH}px; }
+  </style></head><body><div class="shot">
+  <img class="panel" src="data:image/png;base64,${panelPng}">
+  <div class="room"></div>
+  <div class="popover"><img src="data:image/png;base64,${popoverPng}"></div>
+  </div></body></html>`;
+}
+
+/** The Linux picture: the popover where `place` puts one opened from a menu (the top right of the
+ * screen's work area, which starts under the panel), and `height` points of room for it. */
+async function composeLinux(browser, theme, panelPng, popoverPng, height, out) {
+  const context = await browser.newContext({ viewport: { width: 560, height: 400 }, deviceScaleFactor: SCALE, locale: 'en-GB' });
+  const page = await context.newPage();
+  await page.setContent(linuxScene(theme, panelPng, popoverPng));
+  await page.evaluate(async ({ height, width, gap }) => {
+    await Promise.all([...document.images].map((i) => i.decode()));
+    const shot = document.querySelector('.shot').getBoundingClientRect();
+    const panel = document.querySelector('.panel').getBoundingClientRect();
+    const pop = document.querySelector('.popover');
+    pop.style.left = `${shot.width - width - gap}px`;
+    pop.style.top = `${panel.height + gap}px`;
+    document.querySelector('.room').style.height = `${height + gap}px`;
+  }, { height, width: POPOVER_WIDTH, gap: GAP });
+  const png = join(dirname(out), `linux-${theme}.png`);
+  await page.locator('.shot').screenshot({ path: png, animations: 'disabled' });
+  await context.close();
+  return png;
 }
 
 /** The picture, `height` points of room under the bar (the taller popover's), so the two side by side in the README line up. */
@@ -145,9 +196,16 @@ try {
   for (const theme of themes) popovers[theme] = await popover(browser, theme);
   const height = Math.max(...themes.map((theme) => popovers[theme].height));
   for (const theme of themes) {
-    const items = await Promise.all(RESOURCES.map((res) => item(theme, res)));
-    const png = await compose(browser, theme, items, popovers[theme].png, height, join(work, 'x'));
-    const out = join(outDir, theme === 'dark' ? 'menubar-dark.webp' : 'menubar.webp');
+    let png;
+    if (LINUX) {
+      const panel = (await readFile(join(itemsDir, `panel-${theme}.png`))).toString('base64');
+      png = await composeLinux(browser, theme, panel, popovers[theme].png, height, join(work, 'x'));
+    } else {
+      const items = await Promise.all(RESOURCES.map((res) => item(theme, res)));
+      png = await compose(browser, theme, items, popovers[theme].png, height, join(work, 'x'));
+    }
+    const name = `menubar${LINUX ? '-linux' : ''}${theme === 'dark' ? '-dark' : ''}.webp`;
+    const out = join(outDir, name);
     execFileSync('cwebp', ['-quiet', '-lossless', '-z', '9', png, '-o', out]);
     console.log(out);
   }
