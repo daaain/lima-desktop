@@ -23,6 +23,9 @@ const base = `http://127.0.0.1:${PORT}`;
 // The browser tests' moment (e2e-ui/ui.test.mjs), so the popover is the one in their screenshots.
 const NOW = new Date('2026-11-10T14:30:00Z');
 const SCALE = 2; // the items' own: they're drawn at twice the menu bar's points
+/** The popover's width and its least gap to the screen's edge, as menubar.rs has them (POPOVER_WIDTH, GAP). */
+const POPOVER_WIDTH = 396;
+const GAP = 4;
 const RESOURCES = ['mem', 'cpu', 'disk'];
 /** The tab each picture's popover is open on. */
 const OPEN = { light: 'mem', dark: 'cpu' };
@@ -49,7 +52,7 @@ async function item(theme, res) {
 async function popover(browser, theme) {
   const dark = theme === 'dark';
   const context = await browser.newContext({
-    viewport: { width: 396, height: 560 }, deviceScaleFactor: SCALE, colorScheme: dark ? 'dark' : 'light', locale: 'en-GB', timezoneId: 'UTC',
+    viewport: { width: POPOVER_WIDTH, height: 560 }, deviceScaleFactor: SCALE, colorScheme: dark ? 'dark' : 'light', locale: 'en-GB', timezoneId: 'UTC',
   });
   const page = await context.newPage();
   await page.clock.setFixedTime(NOW);
@@ -84,9 +87,9 @@ function scene(theme, items, popoverPng) {
   .item { display: flex; align-items: center; height: 22px; padding: 0 5px; border-radius: 5px; }
   .item.open { background: ${dark ? 'rgba(255, 255, 255, 0.2)' : 'rgba(0, 0, 0, 0.1)'}; }
   .clock { margin-left: 8px; }
-  .popover { position: absolute; top: 28px; width: 396px; border-radius: 10px; overflow: hidden;
+  .popover { position: absolute; top: 28px; width: ${POPOVER_WIDTH}px; border-radius: 10px; overflow: hidden;
     box-shadow: 0 0 0 0.5px ${dark ? 'rgba(255, 255, 255, 0.18)' : 'rgba(0, 0, 0, 0.22)'}, 0 12px 36px rgba(0, 0, 0, ${dark ? 0.5 : 0.22}); }
-  .popover img { display: block; width: 396px; }
+  .popover img { display: block; width: ${POPOVER_WIDTH}px; }
   .room { height: 4px; }
   </style></head><body><div class="shot">
   <div class="bar">${canvases}<span class="clock">Tue 10 Nov 14:30</span></div>
@@ -100,20 +103,20 @@ async function compose(browser, theme, items, popoverPng, height, out) {
   const context = await browser.newContext({ viewport: { width: 560, height: 400 }, deviceScaleFactor: SCALE, locale: 'en-GB' });
   const page = await context.newPage();
   await page.setContent(scene(theme, items, popoverPng));
-  await page.evaluate(async (height) => {
+  await page.evaluate(async ({ height, width, gap }) => {
     for (const c of document.querySelectorAll('canvas')) {
       const bytes = Uint8ClampedArray.from(atob(c.dataset.rgba), (ch) => ch.charCodeAt(0));
       c.getContext('2d').putImageData(new ImageData(bytes, c.width, c.height), 0, 0);
     }
     await Promise.all([...document.images].map((i) => i.decode()));
-    // Centred under its item, as menubar.rs places it, and the picture as tall as it.
+    // Centred under its item and kept off the edges, as menubar.rs places it.
     const shot = document.querySelector('.shot').getBoundingClientRect();
     const open = document.querySelector('.item.open').getBoundingClientRect();
-    const pop = document.querySelector('.popover');
-    pop.style.left = `${Math.min(shot.width - 364, Math.max(4, open.left + open.width / 2 - 180))}px`;
+    const left = open.left + open.width / 2 - width / 2;
+    document.querySelector('.popover').style.left = `${Math.min(shot.width - width - gap, Math.max(gap, left))}px`;
     document.querySelector('.room').style.height = `${height + 4}px`;
     await document.fonts.ready;
-  }, height);
+  }, { height, width: POPOVER_WIDTH, gap: GAP });
   const png = join(dirname(out), `${theme}.png`);
   await page.locator('.shot').screenshot({ path: png, animations: 'disabled' });
   await context.close();
