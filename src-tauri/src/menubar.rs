@@ -1686,7 +1686,7 @@ mod tests {
     /// The README's menu bar (`just readme-menubar`, tools/menubar-readme.mjs): Settings' default
     /// items, memory at the popover screenshot's 61 % (the VMs 57.1 of its 128 GiB) and CPU past its
     /// warning, on a light and a dark menu bar, as `{light,dark}-{mem,cpu,disk}.rgba` in
-    /// `LD_MENUBAR_README`.
+    /// `LD_MENUBAR_README`, with the popover's width and gap (`popover.json`) to place it as `place` does.
     #[cfg(target_os = "macos")]
     #[test]
     #[ignore]
@@ -1721,6 +1721,8 @@ mod tests {
                 write_rgba(&dir, &format!("{theme}-{}", res.id()), &shown(res, p, &h, hot, bar));
             }
         }
+        let popover = serde_json::json!({ "width": POPOVER_WIDTH, "gap": GAP });
+        std::fs::write(dir.join("popover.json"), popover.to_string()).unwrap();
     }
 
     /// Writes every kind of item to `LD_MENUBAR_PREVIEW` (a directory), as raw RGBA with a

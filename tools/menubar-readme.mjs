@@ -4,7 +4,8 @@
 // backend (e2e-ui/). One picture on a light menu bar, open under memory, and one on a dark, open under
 // CPU, so the two show both tabs. Both cropped alike, so they line up side by side: as tall as the
 // taller popover needs, and the popover in the same place (the dark bar's items moved left for it,
-// leaving some bar after the clock). As lossless WebP.
+// away from the clock). As lossless WebP. The popover's width and gap come from menubar.rs, with the
+// items (popover.json).
 //
 //   node tools/menubar-readme.mjs <items dir> [out dir, default docs/img]
 //
@@ -24,9 +25,9 @@ const base = `http://127.0.0.1:${PORT}`;
 // The browser tests' moment (e2e-ui/ui.test.mjs), so the popover is the one in their screenshots.
 const NOW = new Date('2026-11-10T14:30:00Z');
 const SCALE = 2; // the items' own: they're drawn at twice the menu bar's points
-/** The popover's width and its least gap to the screen's edge, as menubar.rs has them (POPOVER_WIDTH, GAP). */
-const POPOVER_WIDTH = 396;
-const GAP = 4;
+/** The popover's width, and its gap to its item and the screen's edge, as menubar.rs places it (written by its test). */
+const { width: POPOVER_WIDTH, gap: GAP } = JSON.parse(await readFile(join(itemsDir, 'popover.json'), 'utf8'));
+const BAR_HEIGHT = 24;
 const RESOURCES = ['mem', 'cpu', 'disk'];
 /** The tab each picture's popover is open on. */
 const OPEN = { light: 'mem', dark: 'cpu' };
@@ -83,15 +84,14 @@ function scene(theme, items, popoverPng) {
   body { margin: 0; }
   .shot { position: relative; width: 560px; padding-bottom: 36px; font: 500 13px -apple-system, BlinkMacSystemFont, sans-serif;
     background: ${dark ? 'linear-gradient(160deg, #1b2440, #2a1f3d 55%, #14161f)' : 'linear-gradient(160deg, #c9d6f2, #e6d9f0 55%, #f4e6dc)'}; }
-  .bar { height: 24px; display: flex; justify-content: flex-end; align-items: center; gap: 6px; padding: 0 12px;
+  .bar { height: ${BAR_HEIGHT}px; display: flex; justify-content: flex-end; align-items: center; gap: 6px; padding: 0 12px;
     background: ${dark ? 'rgba(16, 16, 22, 0.62)' : 'rgba(255, 255, 255, 0.5)'}; color: ${dark ? '#fff' : 'rgba(0, 0, 0, 0.85)'}; }
   .item { display: flex; align-items: center; height: 22px; padding: 0 5px; border-radius: 5px; }
   .item.open { background: ${dark ? 'rgba(255, 255, 255, 0.2)' : 'rgba(0, 0, 0, 0.1)'}; }
   .clock { margin-left: 8px; }
-  .popover { position: absolute; top: 28px; width: ${POPOVER_WIDTH}px; border-radius: 10px; overflow: hidden;
+  .popover { position: absolute; top: ${BAR_HEIGHT + GAP}px; width: ${POPOVER_WIDTH}px; border-radius: 10px; overflow: hidden;
     box-shadow: 0 0 0 0.5px ${dark ? 'rgba(255, 255, 255, 0.18)' : 'rgba(0, 0, 0, 0.22)'}, 0 12px 36px rgba(0, 0, 0, ${dark ? 0.5 : 0.22}); }
   .popover img { display: block; width: ${POPOVER_WIDTH}px; }
-  .room { height: 4px; }
   </style></head><body><div class="shot">
   <div class="bar">${canvases}<span class="clock">Tue 10 Nov 14:30</span></div>
   <div class="room"></div>
@@ -110,18 +110,18 @@ async function compose(browser, theme, items, popoverPng, height, out) {
       c.getContext('2d').putImageData(new ImageData(bytes, c.width, c.height), 0, 0);
     }
     await Promise.all([...document.images].map((i) => i.decode()));
-    // The same crop in both pictures: the bar's items moved left, so the open one is where the
-    // light picture's is, and the popover lands in the same place.
+    // The same crop in both pictures: the items moved left, away from the clock, so the open one is
+    // where the light picture's is, and the popover lands in the same place.
     const centre = (el) => { const r = el.getBoundingClientRect(); return r.left + r.width / 2; };
-    const bar = document.querySelector('.bar');
+    const clock = document.querySelector('.clock');
     const shift = centre(document.querySelector('.item.open')) - centre(document.querySelector(`.item[data-res="${anchor}"]`));
-    bar.style.paddingRight = `${parseFloat(getComputedStyle(bar).paddingRight) + shift}px`;
+    clock.style.marginLeft = `${parseFloat(getComputedStyle(clock).marginLeft) + shift}px`;
     // Centred under its item and kept off the edges, as menubar.rs places it.
     const shot = document.querySelector('.shot').getBoundingClientRect();
     const open = document.querySelector('.item.open').getBoundingClientRect();
     const left = open.left + open.width / 2 - width / 2;
     document.querySelector('.popover').style.left = `${Math.min(shot.width - width - gap, Math.max(gap, left))}px`;
-    document.querySelector('.room').style.height = `${height + 4}px`;
+    document.querySelector('.room').style.height = `${height + gap}px`;
     await document.fonts.ready;
   }, { height, width: POPOVER_WIDTH, gap: GAP, anchor: OPEN.light });
   const png = join(dirname(out), `${theme}.png`);
