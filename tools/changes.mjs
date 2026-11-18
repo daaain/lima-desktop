@@ -94,6 +94,19 @@ export function bumpLevel(current, next) {
   return BUMPS[2 - i];
 }
 
+// Past this many entries, a release without a Summary is nudged to have one: the app's What's new
+// shows a release's Summary in place of its entries' leads, and few read a long list.
+const SUMMARY_PAST = 4;
+
+/** A nudge to add a Summary, for a release of many entries without one; null otherwise. Said, never
+ * asked: a release is often cut with help, and a missing Summary never stops one. */
+export function summaryNudge(fragments) {
+  if (fragments.some((f) => f.section === SUMMARY)) return null;
+  const entries = fragments.reduce((n, f) => n + f.body.split('\n').filter((l) => l.startsWith('- ')).length, 0);
+  if (entries <= SUMMARY_PAST) return null;
+  return `! ${entries} entries and no Summary: the app's What's new would list every one. A paragraph on what the release is about goes in .changes/summary.md (section: Summary, bump: patch).`;
+}
+
 export function requiredBump(fragments) {
   return fragments.reduce((most, f) => (BUMPS.indexOf(f.bump) > BUMPS.indexOf(most) ? f.bump : most), 'patch');
 }
@@ -223,6 +236,8 @@ export function prepare(target, date, { cwd = '.', warn = (m) => console.error(m
   if (!fragments.length) throw new ChangesError('nothing to release: .changes/ holds no fragments');
   if (heading(version).test(changelog)) throw new ChangesError(`CHANGELOG.md already has a '## ${version}' section: fix it by hand`);
   const ordered = inMergeOrder(cwd, fragments, gitLog);
+  const nudge = summaryNudge(fragments);
+  if (nudge) warn(nudge);
   const newToml = setCargoToml(toml, current, version);
   const newLock = setCargoLock(lock, current, version);
   for (const fr of fragments) {

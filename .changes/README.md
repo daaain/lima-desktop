@@ -14,7 +14,7 @@ bump: minor
   the bottom, with everything else solid above it, …
 ```
 
-- **`section`** is one of `Security`, `Removed`, `Deprecated`, `Changed`, `Added`, `Fixed`. A release lists them in that order, and each section's entries in the order they were merged. `Summary` is the odd one out: a paragraph of prose (not a bullet) above every section, under no heading, for the release as a whole. Usually added just before a release, if at all.
+- **`section`** is one of `Security`, `Removed`, `Deprecated`, `Changed`, `Added`, `Fixed`. A release lists them in that order, and each section's entries in the order they were merged. `Summary` is the odd one out: a paragraph of prose (not a bullet) above every section, under no heading, for the release as a whole. Usually added just before a release. Worth one for a release of more than a few entries: the app's What's new shows a release's Summary in place of the leads of its entries, and `just release` says so past four (it never asks, nor stops).
 - **`bump`** is the smallest release this change can go out in: `patch`, `minor` or `major`. `just release` warns when it's asked for a smaller step than a fragment says.
 - **The entry** is one or more `- ` bullets, written as it should read in the changelog: what changed for the person using the app, in bold, then why. It's what they read to decide whether to upgrade, and it becomes the GitHub Release's notes.
 

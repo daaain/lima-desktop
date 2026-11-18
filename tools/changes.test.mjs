@@ -20,6 +20,7 @@ import {
   setCargoToml,
   setCargoLock,
   prepare,
+  summaryNudge,
 } from './changes.mjs';
 
 const fragment = (section, bump, body) => `---\nsection: ${section}\nbump: ${bump}\n---\n\n${body}\n`;
@@ -215,6 +216,25 @@ test('a release folds the fragments in, deletes them, and bumps all four files',
   assert.match(read(dir, 'src-tauri/Cargo.lock'), /name = "lima-desktop"\nversion = "0\.5\.0"/);
   assert.equal(notes(read(dir, 'CHANGELOG.md'), '0.5.0'), '### Added\n\n- **A thing.** Why.\n');
   assert.deepEqual(readdirSync(join(dir, '.changes')), ['README.md']);
+});
+
+test("a release of many entries and no Summary is nudged to have one, as What's new shows a Summary instead", () => {
+  const entries = (n) => Array.from({ length: n }, (_, i) => parse(`e${i}.md`, fragment('Added', 'patch', `- **Entry ${i}.** Why.`)));
+  assert.equal(summaryNudge(entries(4)), null);
+  assert.match(summaryNudge(entries(5)), /5 entries and no Summary/);
+  assert.match(summaryNudge(entries(5)), /section: Summary/);
+  // Each bullet counts, however the fragments hold them.
+  assert.match(summaryNudge([parse('many.md', fragment('Fixed', 'patch', '- One.\n- Two.\n- Three.\n- Four.\n- Five.'))]), /5 entries/);
+  const summary = parse('summary.md', fragment('Summary', 'patch', 'What this release is about.'));
+  assert.equal(summaryNudge([...entries(9), summary]), null);
+});
+
+test('a release is nudged, never stopped or asked, for want of a Summary', () => {
+  const dir = repo();
+  for (const n of [1, 2, 3, 4, 5]) land(dir, `${n}.md`, 'Added', 'patch', `- **Entry ${n}.** Why.`);
+  const said = [];
+  assert.equal(prepare('patch', '2026-11-17', { cwd: dir, warn: (m) => said.push(m) }), '0.4.1');
+  assert.equal(said.filter((m) => /no Summary/.test(m)).length, 1);
 });
 
 test("a section lists its fragments in the order they landed, not by name", () => {
