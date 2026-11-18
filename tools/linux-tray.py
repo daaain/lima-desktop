@@ -21,7 +21,7 @@ from gi.repository import GdkPixbuf, GLib, Gtk  # noqa: E402
 
 RESOURCES = ["mem", "cpu", "disk"]
 # Each item's menu, as menubar.rs's popover_label has it.
-LABELS = {"mem": "Show RAM use details", "cpu": "Show CPU use details", "disk": "Show disk use details"}
+LABELS = {"mem": "Show memory use details", "cpu": "Show CPU use details", "disk": "Show disk use details"}
 
 
 def png(items, theme, res, out):

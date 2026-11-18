@@ -720,10 +720,10 @@ pub fn apply(app: &AppHandle) {
 #[cfg(any(not(target_os = "macos"), test))]
 fn popover_label(res: Option<Res>) -> &'static str {
     match res {
-        Some(Res::Mem) => "Show RAM use details",
+        Some(Res::Mem) => "Show memory use details",
         Some(Res::Cpu) => "Show CPU use details",
         Some(Res::Disk) => "Show disk use details",
-        None => "Show RAM, CPU and disk use details",
+        None => "Show memory, CPU and disk use details",
     }
 }
 
@@ -1817,11 +1817,11 @@ mod tests {
 
     #[test]
     fn an_items_menu_says_what_it_shows_details_of() {
-        assert_eq!(popover_label(Some(Res::Mem)), "Show RAM use details");
+        assert_eq!(popover_label(Some(Res::Mem)), "Show memory use details");
         assert_eq!(popover_label(Some(Res::Cpu)), "Show CPU use details");
         assert_eq!(popover_label(Some(Res::Disk)), "Show disk use details");
         // The app's own item, there when no other is: it opens on memory, with all three tabs.
-        assert_eq!(popover_label(None), "Show RAM, CPU and disk use details");
+        assert_eq!(popover_label(None), "Show memory, CPU and disk use details");
     }
 
     #[cfg(not(target_os = "macos"))]
