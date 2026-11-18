@@ -20,4 +20,4 @@ bump: minor
 
 CI and other changes nobody using the app would notice need no fragment. Like all the Markdown here, a bullet is one line, not wrapped by hand: `just format` makes it so.
 
-`just check` validates every file here (`tools/changes.test.mjs`), so a malformed one fails its PR rather than the release. Releasing: [docs/development.md](../docs/development.md#releasing).
+`just check` validates every file here (`tools/changes.test.mjs`), so a malformed one fails its PR rather than the release. Releasing: [DEVELOPMENT.md](../DEVELOPMENT.md#releasing).

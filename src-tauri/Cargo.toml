@@ -44,6 +44,11 @@ semver = "1.0.28"
 # and rustls with ring and Mozilla's roots needs nothing from the system to build or run.
 ureq = { version = "3.5.2", default-features = false, features = ["rustls"] }
 
+[target.'cfg(target_os = "linux")'.dependencies]
+# The desktop's colour scheme from its settings portal, for the tray items' ink (menubar.rs).
+# Already built for tauri-plugin-opener, with its blocking API.
+zbus = "5"
+
 # On macOS: the menu bar's items are drawn whole, their text included, in the system font
 # (CoreText), past three quarters their names in the menu bar's own colour (AppKit says which); the
 # disk's free space is read as Finder counts it (Foundation, `host_use.rs`); a warning item's image

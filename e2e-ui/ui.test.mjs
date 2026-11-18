@@ -492,6 +492,22 @@ test('Settings chooses when each menu bar item warns: memory and CPU by the perc
   await close();
 });
 
+test('On Linux, Settings offers each menu bar item\'s drawing and warning only, as a panel shows no figure or name', async () => {
+  const { page, errors, close } = await open('/settings', { init: "window.__fakePlatform = 'linux';" });
+  const memory = page.getByRole('group', { name: 'Memory drawn in the menu bar as' });
+  await memory.waitFor();
+  assert.equal(await memory.getByRole('button', { name: 'Trace' }).getAttribute('aria-pressed'), 'true');
+  assert.equal(await page.getByRole('combobox', { name: 'Disk warns' }).count(), 1);
+  assert.equal(await page.getByRole('checkbox', { name: /figure$/ }).count(), 0);
+  assert.equal(await page.getByRole('checkbox', { name: /Name each one/ }).count(), 0);
+  const note = await page.locator('section', { has: page.getByRole('heading', { name: 'In the menu bar' }) }).innerText();
+  assert.match(note, /An item drawn as None is left out/);
+  // The popover's figure warns there too; it's an item's own that isn't offered.
+  assert.doesNotMatch(note, /the figure is the percent in use|A name goes small/);
+  assert.deepEqual(errors, []);
+  await close();
+});
+
 test('Settings chooses each menu bar item\'s drawing and figure, and whether closing the window keeps recording', async () => {
   const { page, errors, close } = await open('/settings');
   const stored = () => page.evaluate(() => window.__TAURI_INTERNALS__.invoke('settings'));

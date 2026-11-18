@@ -172,7 +172,7 @@ SKILL in .claude/skills/ (the model — modes, egress, why a change didn't take)
 `fy docs` for the manual (`fy docs` lists topics; `fy docs modes`, `fy docs adr-0007`).
 
 This project is Lima Desktop: a Tauri 2 app (Rust in src-tauri/, SvelteKit + Svelte 5 in src/)
-for Lima VMs and the podman containers in them. docs/development.md is the map. The box is
+for Lima VMs and the podman containers in them. DEVELOPMENT.md is the map. The box is
 Linux, with its own node_modules and src-tauri/target (volumes, not the user's Mac copies).
 `just --list` shows the recipes; `just check` is svelte-check, vitest, the tools' tests, cargo
 test and clippy. There is no Lima in here and no access to the user's VMs, by design: real data
@@ -264,7 +264,11 @@ live test is safe against it
 # there (npm_config_store_dir), or it relocates the store inside the node_modules volume
 # and re-downloads every time.
 [box]
-packages = ["tmux"]
+# The README's Linux menu bar pictures (just readme-menubar-linux): a real panel under Xvfb
+# (xfce4-panel, whose tray is a StatusNotifierItem host as KDE's and GNOME's AppIndicator extension
+# are), the items shown in it through libayatana-appindicator (python3-gi), its clock held at the
+# README's moment (faketime), and the pictures as lossless WebP (webp).
+packages = ["tmux", "xfce4-panel", "python3-gi", "faketime", "webp"]
 # Rust + Node/pnpm + Tauri's Linux build deps + Xvfb: box.Dockerfile says what and why.
 image = { dockerfile = "box.Dockerfile", tag = "lima-desktop-box:latest" }
 # The Mac builds into these same dirs (macOS binaries, its own node_modules): the box gets its own.
