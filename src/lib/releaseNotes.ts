@@ -5,7 +5,7 @@
 // read here into plain runs of text, never into HTML, and a link is kept only to a web page.
 import type { Notes } from './api';
 
-/** A run of text: plain, bold, code, or a link to a web page. */
+/** A run of text: plain, code, or a link to a web page; any of them bold. */
 export interface Inline {
   text: string;
   strong?: boolean;
@@ -42,7 +42,8 @@ export function inline(text: string): Inline[] {
     if (m.index > at) runs.push({ text: text.slice(at, m.index) });
     const [, code, strong, label, href] = m;
     if (code != null) runs.push({ text: code, code: true });
-    else if (strong != null) runs.push({ text: strong, strong: true });
+    // Bold, with what's inside it read too: code or a link in it stays code or a link.
+    else if (strong != null) runs.push(...inline(strong).map((r) => ({ ...r, strong: true })));
     else runs.push(/^https?:\/\//.test(href) ? { text: label, href } : { text: label });
     at = m.index + m[0].length;
   }

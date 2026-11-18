@@ -1,9 +1,10 @@
 //! Whether a newer Lima Desktop is out: GitHub's latest release, asked at most once a day while
 //! Settings allows it, compared with this app's own version. Nothing is installed; the UI says a
 //! newer one is out, what it brings (each release's notes since the one running, from CHANGELOG.md
-//! at the latest's tag, asked for once per release found), and links to its release page. The request carries only a generic user agent
-//! (GitHub refuses one without), so nothing about the person or their computer leaves with it. A
-//! check that fails is logged and otherwise ignored: the notice just doesn't appear.
+//! at the latest's tag, asked for once per release found), and links to its release page. Both
+//! requests carry only a generic user agent (GitHub refuses one without), so nothing about the
+//! person or their computer leaves with them. A check that fails is logged and otherwise ignored:
+//! the notice just doesn't appear, or appears without what it brings.
 
 use semver::Version;
 use serde::{Deserialize, Serialize};
@@ -84,8 +85,8 @@ pub fn parse(json: &str) -> Result<Update, String> {
     Ok(Update { version: version.to_string(), url: r.html_url, notes: vec![] })
 }
 
-/// The notes of each release in `changelog` (CHANGELOG.md: `## 0.6.0 — 2026-11-17` headings, newest
-/// first) newer than `running`, up to `latest`, newest first. Nothing, from something else.
+/// The notes of each release in `changelog` (CHANGELOG.md: `## 0.6.0 — 2026-11-17` headings,
+/// newest first) newer than `running`, up to `latest`, newest first. Nothing, from something else.
 pub fn notes_between(changelog: &str, running: &Version, latest: &Version) -> Vec<Notes> {
     let mut found: Vec<Notes> = vec![];
     let mut taking = false;
@@ -174,7 +175,8 @@ fn save(path: &Path, c: &Checked) -> std::io::Result<()> {
     std::fs::rename(&tmp, path)
 }
 
-/// `url` from GitHub, as `accept`, asked as `lima-desktop/<version>` and nothing else about whoever asks.
+/// `url` from GitHub, as `accept`, asked as `lima-desktop/<version>` and nothing else about whoever
+/// asks.
 fn get(running: &Version, url: &str, accept: &str) -> Result<String, String> {
     let agent: ureq::Agent = ureq::Agent::config_builder()
         .timeout_global(Some(TIMEOUT))

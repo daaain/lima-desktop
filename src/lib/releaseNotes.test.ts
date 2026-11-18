@@ -17,6 +17,15 @@ describe('inline', () => {
     expect(inline('[run this](file:///etc/passwd) now')).toEqual([{ text: 'run this' }, { text: ' now' }]);
     expect(inline('[x](javascript:alert(1))')).toEqual([{ text: 'x' }, { text: ')' }]);
   });
+  it('reads code and links inside bold, as bold too', () => {
+    expect(inline('**Runs `just check` and [the guide](https://example.com/g)** after')).toEqual([
+      { text: 'Runs ', strong: true },
+      { text: 'just check', code: true, strong: true },
+      { text: ' and ', strong: true },
+      { text: 'the guide', href: 'https://example.com/g', strong: true },
+      { text: ' after' },
+    ]);
+  });
   it('leaves markers that open and never close as they are', () => {
     expect(inline('a ** b ` c')).toEqual([{ text: 'a ** b ` c' }]);
   });

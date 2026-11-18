@@ -7,7 +7,8 @@
   let { runs }: { runs: Inline[] } = $props();
 </script>
 
-{#each runs as r, i (i)}{#if r.href}<button class="link" title={r.href} onclick={() => openUrl(r.href!)}>{r.text}</button>{:else if r.strong}<strong>{r.text}</strong>{:else if r.code}<code>{r.text}</code>{:else}{r.text}{/if}{/each}
+{#snippet bare(r: Inline)}{#if r.href}<button class="link" title={r.href} onclick={() => openUrl(r.href!)}>{r.text}</button>{:else if r.code}<code>{r.text}</code>{:else}{r.text}{/if}{/snippet}
+{#each runs as r, i (i)}{#if r.strong}<strong>{@render bare(r)}</strong>{:else}{@render bare(r)}{/if}{/each}
 
 <style>
   .link { height: auto; padding: 0; border: none; border-radius: 0; background: none; font: inherit; color: var(--accent); }
