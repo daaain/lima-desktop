@@ -26,6 +26,19 @@ describe('inline', () => {
       { text: ' after' },
     ]);
   });
+  it('reads italics, in underscores as Prettier writes them or in asterisks, and what is inside them', () => {
+    expect(inline('An _italic_ word, and *see `x`*.')).toEqual([
+      { text: 'An ' },
+      { text: 'italic', em: true },
+      { text: ' word, and ' },
+      { text: 'see ', em: true },
+      { text: 'x', code: true, em: true },
+      { text: '.' },
+    ]);
+  });
+  it('leaves underscores inside a word, and a lone asterisk, as they are', () => {
+    expect(inline('snake_case_names and 5 * 3 * 2')).toEqual([{ text: 'snake_case_names and 5 * 3 * 2' }]);
+  });
   it('leaves markers that open and never close as they are', () => {
     expect(inline('a ** b ` c')).toEqual([{ text: 'a ** b ` c' }]);
   });

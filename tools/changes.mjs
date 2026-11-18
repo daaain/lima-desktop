@@ -56,15 +56,39 @@ export function parse(name, text) {
   // A release's notes end at the next `## `, wherever it is, a code block included; any other
   // heading, outside one, would nest under the release's own wrongly.
   if (/^\s*## /m.test(body)) throw new ChangesError(`${name}: a \`## \` heading line, even in a code block, would end the release's notes there`);
-  // The fence a code block opened with, if one is open: only the same kind closes it.
-  let fence = null;
   for (const line of body.split('\n')) {
-    const marker = /^\s*(```|~~~)/.exec(line)?.[1];
-    if (marker && (!fence || marker === fence)) fence = fence ? null : marker;
-    else if (!fence && /^\s*#{1,6} /.test(line)) throw new ChangesError(`${name}: no heading in an entry: the release gives it its section's`);
+    if (/^\s*#{1,6} /.test(line)) throw new ChangesError(`${name}: no heading in an entry: the release gives it its section's`);
   }
-  if (fence) throw new ChangesError(`${name}: a code block is never closed: the rest of the changelog would read as code`);
+  const unshown = unshowable(body, section);
+  if (unshown) throw new ChangesError(`${name}: ${unshown}`);
   return { name, section, bump, body };
+}
+
+/** What in an entry the app's What's new can't show, said with what to write instead; null when
+ * it can show it all. What's new (src/lib/releaseNotes.ts) reads a release as paragraphs (a
+ * Summary) and one level of `- ` entries, carried over indented lines, with bold, italics (`_x_`,
+ * as Prettier writes them, or `*x*`), code and links to web pages in them; anything else would show there as its raw characters. Code spans are
+ * set aside first: what's in one is shown as written. */
+export function unshowable(body, section) {
+  const lines = body.split('\n');
+  if (lines.some((l) => /^\s*(```|~~~)/.test(l))) return "a code block: What's new shows none, only inline `code`";
+  if (section === SUMMARY && lines.some((l) => /^\s*([-*+]|\d+[.)]) /.test(l))) return 'a list: a Summary is prose';
+  for (const l of lines) {
+    if (/^\s+[-*+] /.test(l)) return "a nested list: What's new shows one level of `- ` entries";
+    if (/^\s*\d+[.)] /.test(l)) return "a numbered list: What's new shows `- ` entries only";
+    if (/^[*+] /.test(l)) return "a bullet other than `- `: What's new reads `- ` entries only";
+    if (/^\s*> /.test(l)) return "a quote: What's new shows none";
+  }
+  const text = body.replace(/`[^`\n]*`/g, '``');
+  if (/!\[/.test(text)) return "an image: What's new shows none";
+  if (/<https?:\/\/[^>\s]+>/.test(text)) return 'an autolink: write it as [text](https://…)';
+  if (/<\/?[A-Za-z][\w-]*(\s[^<>]*)?\/?>/.test(text)) return "HTML: What's new shows it as written; put it in `code` if that's what's meant";
+  if (/(^|\W)__\S(.*?\S)?__(?!\w)/.test(text)) return 'bold in underscores: write **bold**';
+  if (/~~\S/.test(text)) return "strikethrough: What's new shows none";
+  for (const [, href] of text.matchAll(/\[[^\]]*\]\(([^)]*)\)/g)) {
+    if (!/^https?:\/\//.test(href)) return `a link to ${href}: What's new opens web pages only, so give its https:// address`;
+  }
+  return null;
 }
 
 /** Every fragment in `dir`, by name: its Markdown files bar the README. */

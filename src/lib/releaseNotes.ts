@@ -1,14 +1,16 @@
 // A release's notes as CHANGELOG.md has them (updates.rs reads them at the latest release's tag),
 // read into what the "What's new" panel shows: any summary, then each `###` section's entries, an
 // entry's bold lead apart from the rest. The Markdown is the changelog's own, which
-// tools/changes.mjs holds to a few things: paragraphs, `- ` bullets, bold, `code` and links. It's
-// read here into plain runs of text, never into HTML, and a link is kept only to a web page.
+// tools/changes.mjs holds to what this reads (its `unshowable`): paragraphs, `- ` bullets, bold,
+// italics, `code` and links. It's read here into plain runs of text, never into HTML, and a link
+// is kept only to a web page.
 import type { Notes } from './api';
 
-/** A run of text: plain, code, or a link to a web page; any of them bold. */
+/** A run of text: plain, code, or a link to a web page; any of them bold, or in italics. */
 export interface Inline {
   text: string;
   strong?: boolean;
+  em?: boolean;
   code?: boolean;
   href?: string;
 }
@@ -32,18 +34,23 @@ export interface Release {
   sections: Section[];
 }
 
-const RUN = /`([^`]+)`|\*\*(.+?)\*\*|\[([^\]]+)\]\(([^)\s]*)\)/g;
+// Code, bold, italics around whole words (`_x_`, as Prettier writes them, or `*x*`: not the
+// underscores inside snake_case, nor a lone asterisk), and links.
+const RUN =
+  /`([^`]+)`|\*\*(.+?)\*\*|(?<![\w*])\*(?!\s)([^*]*?[^\s*])\*(?![\w*])|(?<!\w)_(?!\s)([^_]*?[^\s_])_(?!\w)|\[([^\]]+)\]\(([^)\s]*)\)/g;
 
-/** `text` as runs: bold, code and links read, anything else as it is. */
+/** `text` as runs: bold, italics, code and links read, anything else as it is. */
 export function inline(text: string): Inline[] {
   const runs: Inline[] = [];
   let at = 0;
   for (const m of text.matchAll(RUN)) {
     if (m.index > at) runs.push({ text: text.slice(at, m.index) });
-    const [, code, strong, label, href] = m;
+    const [, code, strong, star, underscore, label, href] = m;
+    const em = star ?? underscore;
     if (code != null) runs.push({ text: code, code: true });
-    // Bold, with what's inside it read too: code or a link in it stays code or a link.
+    // Bold or italics, with what's inside read too: code or a link in it stays code or a link.
     else if (strong != null) runs.push(...inline(strong).map((r) => ({ ...r, strong: true })));
+    else if (em != null) runs.push(...inline(em).map((r) => ({ ...r, em: true })));
     else runs.push(/^https?:\/\//.test(href) ? { text: label, href } : { text: label });
     at = m.index + m[0].length;
   }

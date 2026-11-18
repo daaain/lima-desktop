@@ -1,5 +1,5 @@
 <script lang="ts">
-  // Runs of a release's text (releaseNotes.ts) as text: bold, code, and a link opened in the
+  // Runs of a release's text (releaseNotes.ts) as text: bold, italics, code, and a link opened in the
   // browser, as the update notice's Download is. Never HTML: a tag in the notes shows as written.
   import { openUrl } from '@tauri-apps/plugin-opener';
   import type { Inline } from './releaseNotes';
@@ -8,7 +8,8 @@
 </script>
 
 {#snippet bare(r: Inline)}{#if r.href}<button class="link" title={r.href} onclick={() => openUrl(r.href!)}>{r.text}</button>{:else if r.code}<code>{r.text}</code>{:else}{r.text}{/if}{/snippet}
-{#each runs as r, i (i)}{#if r.strong}<strong>{@render bare(r)}</strong>{:else}{@render bare(r)}{/if}{/each}
+{#snippet slanted(r: Inline)}{#if r.em}<em>{@render bare(r)}</em>{:else}{@render bare(r)}{/if}{/snippet}
+{#each runs as r, i (i)}{#if r.strong}<strong>{@render slanted(r)}</strong>{:else}{@render slanted(r)}{/if}{/each}
 
 <style>
   .link { height: auto; padding: 0; border: none; border-radius: 0; background: none; font: inherit; color: var(--accent); }

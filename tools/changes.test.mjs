@@ -49,16 +49,40 @@ for (const [why, text, complaint] of [
 test("a heading in an entry is refused: it would end the release's section early", () => {
   assert.throws(() => parse('h.md', fragment('Fixed', 'patch', '- a\n\n## Not here')), /h\.md: .*heading/);
   assert.throws(() => parse('h.md', fragment('Fixed', 'patch', '- a\n# Nor here')), /heading/);
-  // A shell comment in a code block is no heading, but a `## ` line there still ends the notes.
-  assert.equal(parse('c.md', fragment('Fixed', 'patch', '- a:\n\n  ```sh\n  # a comment\n  ```')).section, 'Fixed');
-  assert.throws(() => parse('c.md', fragment('Fixed', 'patch', '- a:\n\n  ```md\n## in a block\n  ```')), /## /);
 });
 
-test('a code block left open is refused: it would turn the rest of the changelog into code', () => {
-  assert.throws(() => parse('o.md', fragment('Fixed', 'patch', '- a:\n\n  ```sh\n  echo')), /o\.md: .*never closed/);
-  // A ~~~ inside a ``` block doesn't close it.
-  assert.throws(() => parse('o.md', fragment('Fixed', 'patch', '- a:\n\n  ```md\n  ~~~\n  # inside\n  ~~~')), /never closed/);
-  assert.equal(parse('o.md', fragment('Fixed', 'patch', '- a:\n\n  ```md\n  ~~~\n  # inside\n  ~~~\n  ```')).bump, 'patch');
+// The app's What's new (src/lib/releaseNotes.ts) shows bold, italics, code and links to web pages;
+// anything else would show as its raw characters there, so it's refused here, with what to write.
+for (const [what, section, body, complaint] of [
+  ['a code block', 'Fixed', '- a:\n\n  ```sh\n  echo\n  ```', /code block.*`code`/],
+  ['a code block of tildes', 'Fixed', '- a:\n\n  ~~~\n  echo\n  ~~~', /code block/],
+  ['an image', 'Fixed', '- See ![the menu bar](https://example.com/m.png).', /image/],
+  ['HTML', 'Fixed', '- Now <b>bold</b>.', /HTML.*`code`/],
+  ['an autolink', 'Fixed', '- At <https://example.com>.', /\[.*\]\(https:/],
+  ['bold in underscores', 'Fixed', '- It is __very__ fast.', /\*\*bold\*\*/],
+  ['strikethrough', 'Fixed', '- It was ~~slow~~.', /strikethrough/],
+  ['a link that is not to the web', 'Fixed', '- See [the guide](./docs/guide.md).', /https:\/\//],
+  ['a nested list', 'Fixed', '- A:\n  - b', /nested list/],
+  ['a numbered list', 'Fixed', '- A:\n\n1. b', /numbered list/],
+  ['a bullet of another kind', 'Fixed', '- A\n* b', /`- `/],
+  ['a quote', 'Fixed', '- A\n\n> b', /quote/],
+  ['a list in a Summary', 'Summary', 'About the release.\n\n- a', /Summary is prose/],
+]) {
+  test(`${what} is refused: What's new couldn't show it`, () => {
+    assert.throws(() => parse('m.md', fragment(section, 'patch', body)), (e) => e instanceof ChangesError && /^m\.md: /.test(e.message) && complaint.test(e.message));
+  });
+}
+
+test("what What's new shows is allowed, and so is what only looks like Markdown", () => {
+  for (const body of [
+    '- **Bold**, _italics_ (as Prettier writes them), *italics*, `code`, and [a page](https://example.com/x).',
+    '- `<b>`, `_x_`, `~~` and `![x](y)` are code, shown as written.',
+    '- snake_case_names, 5 * 3 * 2 and a ~ b are plain text.',
+    '- **A lead.** Carried over\n  a second line.',
+    '- One.\n- Two.',
+  ]) {
+    assert.equal(parse('ok.md', fragment('Fixed', 'patch', body)).body, body);
+  }
 });
 
 test('a fragment saved with CRLF, or a blank line in its frontmatter, reads as any other', () => {
