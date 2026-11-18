@@ -20,6 +20,8 @@ from gi.repository import AyatanaAppIndicator3 as AppIndicator  # noqa: E402
 from gi.repository import GdkPixbuf, GLib, Gtk  # noqa: E402
 
 RESOURCES = ["mem", "cpu", "disk"]
+# Each item's menu, as menubar.rs's popover_label has it.
+LABELS = {"mem": "Show RAM use details", "cpu": "Show CPU use details", "disk": "Show disk use details"}
 
 
 def png(items, theme, res, out):
@@ -46,7 +48,7 @@ def main():
         item.set_icon_theme_path(out)
         # An indicator with no menu isn't shown.
         menu = Gtk.Menu()
-        menu.append(Gtk.MenuItem(label="Memory, CPU and Disk…"))
+        menu.append(Gtk.MenuItem(label=LABELS[res]))
         menu.show_all()
         item.set_menu(menu)
         item.set_status(AppIndicator.IndicatorStatus.ACTIVE)

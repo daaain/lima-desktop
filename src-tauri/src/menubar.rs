@@ -715,6 +715,18 @@ pub fn apply(app: &AppHandle) {
     tauri::async_runtime::spawn_blocking(move || draw(&app));
 }
 
+/// What an item's menu calls the popover, on Linux, where a click opens the menu: the details of its
+/// own resource, the tab it opens on; the app's own item (`None`) opens on memory, with all three.
+#[cfg(any(not(target_os = "macos"), test))]
+fn popover_label(res: Option<Res>) -> &'static str {
+    match res {
+        Some(Res::Mem) => "Show RAM use details",
+        Some(Res::Cpu) => "Show CPU use details",
+        Some(Res::Disk) => "Show disk use details",
+        None => "Show RAM, CPU and disk use details",
+    }
+}
+
 fn add(app: &AppHandle, id: &str, icon: Option<Icon>) -> tauri::Result<()> {
     // The item's own tab; the app's item opens on memory.
     let res = Res::from_id(id).unwrap_or(Res::Mem);
@@ -723,7 +735,7 @@ fn add(app: &AppHandle, id: &str, icon: Option<Icon>) -> tauri::Result<()> {
     let quit = MenuItem::with_id(app, "quit", "Quit Lima Desktop", true, None::<&str>)?;
     // Linux tells of no clicks on an item, only of its menu: the popover is opened from there.
     #[cfg(not(target_os = "macos"))]
-    let popover = MenuItem::with_id(app, "popover", "Memory, CPU and Disk…", true, None::<&str>)?;
+    let popover = MenuItem::with_id(app, "popover", popover_label(Res::from_id(id)), true, None::<&str>)?;
     #[cfg(not(target_os = "macos"))]
     let items: &[&dyn tauri::menu::IsMenuItem<tauri::Wry>] = &[&popover, &open, &separator, &quit];
     #[cfg(target_os = "macos")]
@@ -806,7 +818,9 @@ pub fn shown(res: Res, p: Parts, history: &[Share], hot: bool, bar: Bar) -> Show
     let highlighted = hot.then(|| item(res, p, history, hot, bar.inverted()));
     #[cfg(not(target_os = "macos"))]
     let highlighted = None;
-    Shown { icon, template: ink(hot).1, highlighted, title, tooltip: now.map(|s| tooltip(res, s)) }
+    // AppIndicator shows no tooltip (tray-icon: "Unsupported"), so there's none to make there.
+    let tooltip = if cfg!(target_os = "macos") { now.map(|s| tooltip(res, s)) } else { None };
+    Shown { icon, template: ink(hot).1, highlighted, title, tooltip }
 }
 
 /// Redraws every item, changing only what has changed. Never on the main thread: each change
@@ -1801,6 +1815,15 @@ mod tests {
         assert_eq!(panel_bar("Budgie:GNOME", Some(1)), Bar::Dark);
     }
 
+    #[test]
+    fn an_items_menu_says_what_it_shows_details_of() {
+        assert_eq!(popover_label(Some(Res::Mem)), "Show RAM use details");
+        assert_eq!(popover_label(Some(Res::Cpu)), "Show CPU use details");
+        assert_eq!(popover_label(Some(Res::Disk)), "Show disk use details");
+        // The app's own item, there when no other is: it opens on memory, with all three tabs.
+        assert_eq!(popover_label(None), "Show RAM, CPU and disk use details");
+    }
+
     #[cfg(not(target_os = "macos"))]
     #[test]
     fn the_apps_glyph_is_painted_again_when_the_panel_changes() {
@@ -1839,6 +1862,8 @@ mod tests {
         assert_eq!((s.icon, s.title), (Some(trace(&now)), None));
         let s = shown(Res::Mem, parts_here(item(Drawing::Bar, false), true).unwrap(), &now, false, Bar::Light);
         assert_eq!((s.icon, s.title), (Some(bar(now[0])), None));
+        // Nor a tooltip: AppIndicator has none.
+        assert_eq!(s.tooltip, None);
         // Not even for a caller that asks for the figure (the preview): no panel would show it.
         let s = shown(Res::Mem, parts(item(Drawing::Trace, true), true).unwrap(), &now, false, Bar::Light);
         assert_eq!(s.title, None);
