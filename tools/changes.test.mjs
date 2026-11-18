@@ -20,6 +20,7 @@ import {
   setCargoToml,
   setCargoLock,
   prepare,
+  summaryNudge,
 } from './changes.mjs';
 
 const fragment = (section, bump, body) => `---\nsection: ${section}\nbump: ${bump}\n---\n\n${body}\n`;
@@ -48,16 +49,50 @@ for (const [why, text, complaint] of [
 test("a heading in an entry is refused: it would end the release's section early", () => {
   assert.throws(() => parse('h.md', fragment('Fixed', 'patch', '- a\n\n## Not here')), /h\.md: .*heading/);
   assert.throws(() => parse('h.md', fragment('Fixed', 'patch', '- a\n# Nor here')), /heading/);
-  // A shell comment in a code block is no heading, but a `## ` line there still ends the notes.
-  assert.equal(parse('c.md', fragment('Fixed', 'patch', '- a:\n\n  ```sh\n  # a comment\n  ```')).section, 'Fixed');
-  assert.throws(() => parse('c.md', fragment('Fixed', 'patch', '- a:\n\n  ```md\n## in a block\n  ```')), /## /);
 });
 
-test('a code block left open is refused: it would turn the rest of the changelog into code', () => {
-  assert.throws(() => parse('o.md', fragment('Fixed', 'patch', '- a:\n\n  ```sh\n  echo')), /o\.md: .*never closed/);
-  // A ~~~ inside a ``` block doesn't close it.
-  assert.throws(() => parse('o.md', fragment('Fixed', 'patch', '- a:\n\n  ```md\n  ~~~\n  # inside\n  ~~~')), /never closed/);
-  assert.equal(parse('o.md', fragment('Fixed', 'patch', '- a:\n\n  ```md\n  ~~~\n  # inside\n  ~~~\n  ```')).bump, 'patch');
+// The app's What's new (src/lib/releaseNotes.ts) shows bold, italics, code and links to web pages;
+// anything else would show as its raw characters there, so it's refused here, with what to write.
+for (const [what, section, body, complaint] of [
+  ['a code block', 'Fixed', '- a:\n\n  ```sh\n  echo\n  ```', /code block.*`code`/],
+  ['a code block of tildes', 'Fixed', '- a:\n\n  ~~~\n  echo\n  ~~~', /code block/],
+  // Said as a code block, not as the heading its shell comment, or its `## ` line, would be taken for.
+  ['a code block with a comment in it', 'Fixed', '- a:\n\n  ```sh\n  # a comment\n  ```', /: a code block:/],
+  ['a code block with a level-two heading in it', 'Fixed', '- a:\n\n  ```md\n## in a block\n  ```', /: a code block:/],
+  ['an image', 'Fixed', '- See ![the menu bar](https://example.com/m.png).', /image/],
+  ['HTML', 'Fixed', '- Now <b>bold</b>.', /HTML.*`code`/],
+  ['an autolink', 'Fixed', '- At <https://example.com>.', /\[.*\]\(https:/],
+  ['bold in underscores', 'Fixed', '- It is __very__ fast.', /\*\*bold\*\*/],
+  ['strikethrough', 'Fixed', '- It was ~~slow~~.', /strikethrough/],
+  ['a link that is not to the web', 'Fixed', '- See [the guide](./docs/guide.md).', /https:\/\//],
+  // What's new would read the address only up to its first `)`, and open a page that isn't it.
+  ['a bracket in a link\'s address', 'Fixed', '- See [the guide](https://example.com/a(b)).', /%28/],
+  // What's new reads a link only with some text, and an address with no space: a title is one.
+  ['a link with a title', 'Fixed', '- See [the guide](https://example.com "The guide").', /title/],
+  ['a space in a link\'s address', 'Fixed', '- See [the guide](https://example.com/a b).', /%20/],
+  ['a space around a link\'s address', 'Fixed', '- See [the guide]( https://example.com ).', /%20/],
+  ['a link with no text', 'Fixed', '- See [](https://example.com).', /no text/],
+  ['a nested list', 'Fixed', '- A:\n  - b', /nested list/],
+  ['a numbered list', 'Fixed', '- A:\n\n1. b', /numbered list/],
+  ['a bullet of another kind', 'Fixed', '- A\n* b', /`- `/],
+  ['a quote', 'Fixed', '- A\n\n> b', /quote/],
+  ['a list in a Summary', 'Summary', 'About the release.\n\n- a', /Summary is prose/],
+]) {
+  test(`${what} is refused: What's new couldn't show it`, () => {
+    assert.throws(() => parse('m.md', fragment(section, 'patch', body)), (e) => e instanceof ChangesError && /^m\.md: /.test(e.message) && complaint.test(e.message));
+  });
+}
+
+test("what What's new shows is allowed, and so is what only looks like Markdown", () => {
+  for (const body of [
+    '- **Bold**, _italics_ (as Prettier writes them), *italics*, `code`, and [a page](https://example.com/x).',
+    '- `<b>`, `_x_`, `~~` and `![x](y)` are code, shown as written.',
+    '- snake_case_names, 5 * 3 * 2 and a ~ b are plain text.',
+    '- **A lead.** Carried over\n  a second line.',
+    '- One.\n- Two.',
+  ]) {
+    assert.equal(parse('ok.md', fragment('Fixed', 'patch', body)).body, body);
+  }
 });
 
 test('a fragment saved with CRLF, or a blank line in its frontmatter, reads as any other', () => {
@@ -215,6 +250,25 @@ test('a release folds the fragments in, deletes them, and bumps all four files',
   assert.match(read(dir, 'src-tauri/Cargo.lock'), /name = "lima-desktop"\nversion = "0\.5\.0"/);
   assert.equal(notes(read(dir, 'CHANGELOG.md'), '0.5.0'), '### Added\n\n- **A thing.** Why.\n');
   assert.deepEqual(readdirSync(join(dir, '.changes')), ['README.md']);
+});
+
+test("a release of many entries and no Summary is nudged to have one, as What's new shows a Summary instead", () => {
+  const entries = (n) => Array.from({ length: n }, (_, i) => parse(`e${i}.md`, fragment('Added', 'patch', `- **Entry ${i}.** Why.`)));
+  assert.equal(summaryNudge(entries(4)), null);
+  assert.match(summaryNudge(entries(5)), /5 entries and no Summary/);
+  assert.match(summaryNudge(entries(5)), /section: Summary/);
+  // Each bullet counts, however the fragments hold them.
+  assert.match(summaryNudge([parse('many.md', fragment('Fixed', 'patch', '- One.\n- Two.\n- Three.\n- Four.\n- Five.'))]), /5 entries/);
+  const summary = parse('summary.md', fragment('Summary', 'patch', 'What this release is about.'));
+  assert.equal(summaryNudge([...entries(9), summary]), null);
+});
+
+test('a release is nudged, never stopped or asked, for want of a Summary', () => {
+  const dir = repo();
+  for (const n of [1, 2, 3, 4, 5]) land(dir, `${n}.md`, 'Added', 'patch', `- **Entry ${n}.** Why.`);
+  const said = [];
+  assert.equal(prepare('patch', '2026-11-17', { cwd: dir, warn: (m) => said.push(m) }), '0.4.1');
+  assert.equal(said.filter((m) => /no Summary/.test(m)).length, 1);
 });
 
 test("a section lists its fragments in the order they landed, not by name", () => {

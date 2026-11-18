@@ -1,13 +1,16 @@
 <script lang="ts">
   // A newer Lima Desktop, when there is one (update.svelte.ts): a single short line, small enough
-  // for the menu bar's popover as well as the masthead. Download opens its release page in the
-  // browser; × puts it away until a later version is out.
+  // for the menu bar's popover as well as the masthead. What's new, when its notes could be read,
+  // opens what it brings under the masthead (from the popover, in the main window); Download opens
+  // its release page in the browser; × puts it away until a later version is out.
   import { onMount } from 'svelte';
   import { openUrl } from '@tauri-apps/plugin-opener';
   import { update } from './update.svelte';
   import { outSentence } from './update';
 
-  onMount(() => update.follow());
+  let { popover = false }: { popover?: boolean } = $props();
+
+  onMount(() => update.follow(popover));
 </script>
 
 {#if update.shown}
@@ -15,6 +18,11 @@
   <p class="update" role="status">
     <span>{outSentence(u.version)}</span>
     <span aria-hidden="true">·</span>
+    {#if u.notes.length}
+      <button class="link" aria-expanded={popover ? undefined : update.notesOpen}
+        title={popover ? 'What it brings, in the main window' : 'What it brings'} onclick={() => update.toggleNotes()}>What's new</button>
+      <span aria-hidden="true">·</span>
+    {/if}
     <button class="link" title="Its release page on GitHub, in your browser" onclick={() => openUrl(u.url)}>Download</button>
     <button class="dismiss" aria-label="Dismiss" title="Hide until a later version is out" onclick={() => update.dismiss()}>×</button>
   </p>

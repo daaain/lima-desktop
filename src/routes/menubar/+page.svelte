@@ -329,7 +329,7 @@
 
   {#if error}<p class="error">{error}</p>{/if}
 
-  <div class="newer"><UpdateNotice /></div>
+  <div class="newer"><UpdateNotice popover={true} /></div>
 
   <footer>
     <span>{recordingPhrase(snapshot?.intervalSecs)}</span>

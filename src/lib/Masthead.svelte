@@ -2,7 +2,8 @@
   // The masthead: the app's name, then its two levels — Lima's VMs, and the podman things inside
   // every running one (containers, images, volumes) — and the app's settings. Under it, the time
   // range every page with history follows (range.svelte.ts), where there is any. Beside the status
-  // line, a newer version of the app when one is out (UpdateNotice.svelte).
+  // line, a newer version of the app when one is out (UpdateNotice.svelte), and under it all, what
+  // that version brings when asked for (WhatsNew.svelte).
   import { page } from '$app/state';
   import { live } from './live.svelte';
   import { bytes } from './format';
@@ -11,6 +12,8 @@
   import { RANGES } from './ranges';
   import { hasHistory, section } from './url';
   import UpdateNotice from './UpdateNotice.svelte';
+  import { update } from './update.svelte';
+  import WhatsNew from './WhatsNew.svelte';
 
   const vms = $derived(live.snapshot?.vms ?? []);
   const runningVms = $derived(vms.filter((v) => v.instance.status === 'Running').length);
@@ -48,6 +51,9 @@
     </div>
   {/if}
 </div>
+{#if update.notesOpen && update.shown?.notes.length}
+  <WhatsNew notes={update.shown.notes} />
+{/if}
 
 <style>
   header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.4rem 2rem; padding: 1.4rem 0 0.9rem; border-bottom: 1px solid var(--fg); }

@@ -53,18 +53,50 @@ export function parse(name, text) {
   if (!BUMPS.includes(bump)) throw new ChangesError(`${name}: bump '${bump}' is not one of ${BUMPS.join(', ')}`);
   if (!body) throw new ChangesError(`${name}: the entry is empty`);
   if (section !== SUMMARY && !body.startsWith('- ')) throw new ChangesError(`${name}: the entry must be a \`- \` bullet (or several)`);
-  // A release's notes end at the next `## `, wherever it is, a code block included; any other
-  // heading, outside one, would nest under the release's own wrongly.
-  if (/^\s*## /m.test(body)) throw new ChangesError(`${name}: a \`## \` heading line, even in a code block, would end the release's notes there`);
-  // The fence a code block opened with, if one is open: only the same kind closes it.
-  let fence = null;
+  // What What's new couldn't show first: a code block is said as one, not as the heading its shell
+  // comment or `## ` line would otherwise be taken for.
+  const unshown = unshowable(body, section);
+  if (unshown) throw new ChangesError(`${name}: ${unshown}`);
+  // A release's notes end at the next `## `; any other heading would nest under the release's own.
+  if (/^\s*## /m.test(body)) throw new ChangesError(`${name}: a \`## \` heading line would end the release's notes there`);
   for (const line of body.split('\n')) {
-    const marker = /^\s*(```|~~~)/.exec(line)?.[1];
-    if (marker && (!fence || marker === fence)) fence = fence ? null : marker;
-    else if (!fence && /^\s*#{1,6} /.test(line)) throw new ChangesError(`${name}: no heading in an entry: the release gives it its section's`);
+    if (/^\s*#{1,6} /.test(line)) throw new ChangesError(`${name}: no heading in an entry: the release gives it its section's`);
   }
-  if (fence) throw new ChangesError(`${name}: a code block is never closed: the rest of the changelog would read as code`);
   return { name, section, bump, body };
+}
+
+/** What in an entry the app's What's new can't show, said with what to write instead; null when
+ * it can show it all. What's new (src/lib/releaseNotes.ts) reads a release as paragraphs (a
+ * Summary) and one level of `- ` entries, carried over indented lines, with bold, italics (`_x_`,
+ * as Prettier writes them, or `*x*`), code and links to web pages in them; anything else would show there as its raw characters. Code spans are
+ * set aside first: what's in one is shown as written. */
+export function unshowable(body, section) {
+  const lines = body.split('\n');
+  if (lines.some((l) => /^\s*(```|~~~)/.test(l))) return "a code block: What's new shows none, only inline `code`";
+  if (section === SUMMARY && lines.some((l) => /^\s*([-*+]|\d+[.)]) /.test(l))) return 'a list: a Summary is prose';
+  for (const l of lines) {
+    if (/^\s+[-*+] /.test(l)) return "a nested list: What's new shows one level of `- ` entries";
+    if (/^\s*\d+[.)] /.test(l)) return "a numbered list: What's new shows `- ` entries only";
+    if (/^[*+] /.test(l)) return "a bullet other than `- `: What's new reads `- ` entries only";
+    if (/^\s*> /.test(l)) return "a quote: What's new shows none";
+  }
+  const text = body.replace(/`[^`\n]*`/g, '``');
+  if (/!\[/.test(text)) return "an image: What's new shows none";
+  if (/<https?:\/\/[^>\s]+>/.test(text)) return 'an autolink: write it as [text](https://…)';
+  if (/<\/?[A-Za-z][\w-]*(\s[^<>]*)?\/?>/.test(text)) return "HTML: What's new shows it as written; put it in `code` if that's what's meant";
+  if (/(^|\W)__\S(.*?\S)?__(?!\w)/.test(text)) return 'bold in underscores: write **bold**';
+  if (/~~\S/.test(text)) return "strikethrough: What's new shows none";
+  // Any link, as What's new would or wouldn't read it: it reads one with some text, and an address
+  // to a web page, with no space (so no title) and no bracket.
+  for (const [, label, href] of text.matchAll(/\[([^\]]*)\]\(([^)]*)\)/g)) {
+    if (!label.trim()) return `a link with no text, to ${href}: What's new would show it as written`;
+    if (/^\S+\s+["'(]/.test(href.trim())) return `a title on the link to ${href.trim().split(/\s/)[0]}: drop it, as What's new shows none`;
+    if (/\s/.test(href)) return `a space in the link to ${href.trim()}: write it as %20, with none around it`;
+    if (!/^https?:\/\//.test(href)) return `a link to ${href}: What's new opens web pages only, so give its https:// address`;
+    // What's new reads an address up to its first `)`, so one with brackets would open another page.
+    if (href.includes('(')) return `a bracket in the link to ${href}…: write ( as %28 and ) as %29`;
+  }
+  return null;
 }
 
 /** Every fragment in `dir`, by name: its Markdown files bar the README. */
@@ -92,6 +124,19 @@ export function bumpLevel(current, next) {
   const i = a.findIndex((x, k) => x !== b[k]);
   if (i < 0 || b[i] < a[i]) return null;
   return BUMPS[2 - i];
+}
+
+// Past this many entries, a release without a Summary is nudged to have one: the app's What's new
+// shows a release's Summary in place of its entries' leads, and few read a long list.
+const SUMMARY_PAST = 4;
+
+/** A nudge to add a Summary, for a release of many entries without one; null otherwise. Said, never
+ * asked: a release is often cut with help, and a missing Summary never stops one. */
+export function summaryNudge(fragments) {
+  if (fragments.some((f) => f.section === SUMMARY)) return null;
+  const entries = fragments.reduce((n, f) => n + f.body.split('\n').filter((l) => l.startsWith('- ')).length, 0);
+  if (entries <= SUMMARY_PAST) return null;
+  return `! ${entries} entries and no Summary: the app's What's new would list every one. A paragraph on what the release is about goes in .changes/summary.md (section: Summary, bump: patch).`;
 }
 
 export function requiredBump(fragments) {
@@ -223,6 +268,8 @@ export function prepare(target, date, { cwd = '.', warn = (m) => console.error(m
   if (!fragments.length) throw new ChangesError('nothing to release: .changes/ holds no fragments');
   if (heading(version).test(changelog)) throw new ChangesError(`CHANGELOG.md already has a '## ${version}' section: fix it by hand`);
   const ordered = inMergeOrder(cwd, fragments, gitLog);
+  const nudge = summaryNudge(fragments);
+  if (nudge) warn(nudge);
   const newToml = setCargoToml(toml, current, version);
   const newLock = setCargoLock(lock, current, version);
   for (const fr of fragments) {
