@@ -742,7 +742,6 @@ fn add(app: &AppHandle, id: &str, icon: Option<Icon>) -> tauri::Result<()> {
     let items: &[&dyn tauri::menu::IsMenuItem<tauri::Wry>] = &[&open, &separator, &quit];
     let menu = Menu::with_items(app, items)?;
     let mut b = TrayIconBuilder::with_id(id)
-        .tooltip("Lima Desktop")
         .menu(&menu)
         .show_menu_on_left_click(false)
         .on_menu_event(move |app, e| match e.id().as_ref() {
@@ -764,6 +763,10 @@ fn add(app: &AppHandle, id: &str, icon: Option<Icon>) -> tauri::Result<()> {
                 toggle_popover(tray.app_handle(), res, rect);
             }
         });
+    // Until its first measurement says more; AppIndicator shows no tooltip (tray-icon: "Unsupported").
+    if cfg!(target_os = "macos") {
+        b = b.tooltip("Lima Desktop");
+    }
     if let Some(i) = icon {
         b = b.icon(Image::new_owned(i.rgba, i.width, i.height)).icon_as_template(true);
     }
