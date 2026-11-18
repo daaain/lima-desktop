@@ -67,6 +67,11 @@ for (const [what, section, body, complaint] of [
   ['a link that is not to the web', 'Fixed', '- See [the guide](./docs/guide.md).', /https:\/\//],
   // What's new would read the address only up to its first `)`, and open a page that isn't it.
   ['a bracket in a link\'s address', 'Fixed', '- See [the guide](https://example.com/a(b)).', /%28/],
+  // What's new reads a link only with some text, and an address with no space: a title is one.
+  ['a link with a title', 'Fixed', '- See [the guide](https://example.com "The guide").', /title/],
+  ['a space in a link\'s address', 'Fixed', '- See [the guide](https://example.com/a b).', /%20/],
+  ['a space around a link\'s address', 'Fixed', '- See [the guide]( https://example.com ).', /%20/],
+  ['a link with no text', 'Fixed', '- See [](https://example.com).', /no text/],
   ['a nested list', 'Fixed', '- A:\n  - b', /nested list/],
   ['a numbered list', 'Fixed', '- A:\n\n1. b', /numbered list/],
   ['a bullet of another kind', 'Fixed', '- A\n* b', /`- `/],

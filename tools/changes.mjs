@@ -86,7 +86,12 @@ export function unshowable(body, section) {
   if (/<\/?[A-Za-z][\w-]*(\s[^<>]*)?\/?>/.test(text)) return "HTML: What's new shows it as written; put it in `code` if that's what's meant";
   if (/(^|\W)__\S(.*?\S)?__(?!\w)/.test(text)) return 'bold in underscores: write **bold**';
   if (/~~\S/.test(text)) return "strikethrough: What's new shows none";
-  for (const [, href] of text.matchAll(/\[[^\]]*\]\(([^)]*)\)/g)) {
+  // Any link, as What's new would or wouldn't read it: it reads one with some text, and an address
+  // to a web page, with no space (so no title) and no bracket.
+  for (const [, label, href] of text.matchAll(/\[([^\]]*)\]\(([^)]*)\)/g)) {
+    if (!label.trim()) return `a link with no text, to ${href}: What's new would show it as written`;
+    if (/^\S+\s+["'(]/.test(href.trim())) return `a title on the link to ${href.trim().split(/\s/)[0]}: drop it, as What's new shows none`;
+    if (/\s/.test(href)) return `a space in the link to ${href.trim()}: write it as %20, with none around it`;
     if (!/^https?:\/\//.test(href)) return `a link to ${href}: What's new opens web pages only, so give its https:// address`;
     // What's new reads an address up to its first `)`, so one with brackets would open another page.
     if (href.includes('(')) return `a bracket in the link to ${href}…: write ( as %28 and ) as %29`;
