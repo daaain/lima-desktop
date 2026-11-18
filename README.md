@@ -49,7 +49,7 @@ Nothing is installed in the guests: the app reads them over Lima's own ssh and t
 **The menu bar**: memory, CPU and disk at a glance, and the popover under each.
 
 <p>
-  <img src="./docs/img/menubar.webp" alt="The menu bar's items for memory (45 %), CPU (86 %, in orange as it's past its warning) and disk (63 %), each a small drawing of its recent use with the VMs' part pale under everything else, and the popover open under memory: the computer's memory in use as a stacked chart of each VM, wired memory and everything else over the last hour, then each VM with its containers and its peak, and the busiest apps outside the VMs" width="380">
+  <img src="./docs/img/menubar.webp" alt="The menu bar's items for memory (61 %), CPU (86 %, in orange as it's past its warning) and disk (63 %), each a small drawing of its recent use with the VMs' part pale under everything else, and the popover open under memory: the computer's memory in use as a stacked chart of each VM, wired memory and everything else over the last hour, then each VM with its containers and its peak, and the busiest apps outside the VMs" width="380">
   <img src="./docs/img/menubar-dark.webp" alt="The same menu bar items and popover on a dark menu bar" width="380">
 </p>
 

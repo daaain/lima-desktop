@@ -1697,8 +1697,9 @@ mod tests {
     }
 
     /// The README's menu bar (`just readme-menubar`, tools/menubar-readme.mjs): Settings' default
-    /// items, memory at the popover screenshot's 45 % and CPU past its warning, on a light and a dark
-    /// menu bar, as `{light,dark}-{mem,cpu,disk}.rgba` in `LD_MENUBAR_README`.
+    /// items, memory at the popover screenshot's 61 % (the VMs 57.1 of its 128 GiB) and CPU past its
+    /// warning, on a light and a dark menu bar, as `{light,dark}-{mem,cpu,disk}.rgba` in
+    /// `LD_MENUBAR_README`.
     #[cfg(target_os = "macos")]
     #[test]
     #[ignore]
@@ -1716,8 +1717,8 @@ mod tests {
                 })
                 .collect()
         };
-        let mut mem = history(0.43, 0.27, 0.0);
-        *mem.last_mut().unwrap() = used(0.45, 0.278);
+        let mut mem = history(0.59, 0.43, 0.0);
+        *mem.last_mut().unwrap() = used(0.61, 0.446);
         let chosen = crate::settings::MenuBar::default();
         for (res, h, hot) in
             [(Res::Mem, mem, false), (Res::Cpu, history(0.3, 0.18, 0.55), true), (Res::Disk, history(0.62, 0.35, 0.0), false)]
