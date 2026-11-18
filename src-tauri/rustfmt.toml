@@ -1,0 +1,4 @@
+# Wide, dense lines: a call chain, struct or argument list stays on one line while it fits in the width.
+# `just format` applies it; `just check` (and so CI) fails on a file it would change.
+max_width = 120
+use_small_heuristics = "Max"
