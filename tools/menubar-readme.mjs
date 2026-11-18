@@ -2,7 +2,8 @@
 // draws them (`cargo test menubar_readme -- --ignored`, macOS only, as CoreText sets their text),
 // on a menu bar, with the popover open under one of them, as the built UI draws it against the fake
 // backend (e2e-ui/). One picture on a light menu bar, open under memory, and one on a dark, open under
-// CPU, so the two show both tabs. As lossless WebP.
+// CPU, so the two show both tabs. Both as tall as the taller popover needs, so they line up side by
+// side. As lossless WebP.
 //
 //   node tools/menubar-readme.mjs <items dir> [out dir, default docs/img]
 //
@@ -61,7 +62,8 @@ async function popover(browser, theme) {
   await page.evaluate(() => document.fonts.ready);
   const png = await page.screenshot({ fullPage: true, animations: 'disabled' });
   await context.close();
-  return png.toString('base64');
+  // Its height in points, from the PNG's header, so both pictures can be made as tall as the taller.
+  return { png: png.toString('base64'), height: png.readUInt32BE(20) / SCALE };
 }
 
 /** The menu bar, its items and the popover open under one, on a wallpaper. */
@@ -93,11 +95,12 @@ function scene(theme, items, popoverPng) {
   </div></body></html>`;
 }
 
-async function compose(browser, theme, items, popoverPng, out) {
+/** The picture, `height` points of room under the bar (the taller popover's), so the two side by side in the README line up. */
+async function compose(browser, theme, items, popoverPng, height, out) {
   const context = await browser.newContext({ viewport: { width: 560, height: 400 }, deviceScaleFactor: SCALE, locale: 'en-GB' });
   const page = await context.newPage();
   await page.setContent(scene(theme, items, popoverPng));
-  await page.evaluate(async () => {
+  await page.evaluate(async (height) => {
     for (const c of document.querySelectorAll('canvas')) {
       const bytes = Uint8ClampedArray.from(atob(c.dataset.rgba), (ch) => ch.charCodeAt(0));
       c.getContext('2d').putImageData(new ImageData(bytes, c.width, c.height), 0, 0);
@@ -108,9 +111,9 @@ async function compose(browser, theme, items, popoverPng, out) {
     const open = document.querySelector('.item.open').getBoundingClientRect();
     const pop = document.querySelector('.popover');
     pop.style.left = `${Math.min(shot.width - 364, Math.max(4, open.left + open.width / 2 - 180))}px`;
-    document.querySelector('.room').style.height = `${pop.getBoundingClientRect().height + 4}px`;
+    document.querySelector('.room').style.height = `${height + 4}px`;
     await document.fonts.ready;
-  });
+  }, height);
   const png = join(dirname(out), `${theme}.png`);
   await page.locator('.shot').screenshot({ path: png, animations: 'disabled' });
   await context.close();
@@ -127,9 +130,13 @@ try {
     if (i > 100 || server.exitCode != null) throw new Error("vite preview didn't come up (run pnpm build first)");
     await new Promise((r) => setTimeout(r, 200));
   }
-  for (const theme of ['light', 'dark']) {
+  const themes = ['light', 'dark'];
+  const popovers = {};
+  for (const theme of themes) popovers[theme] = await popover(browser, theme);
+  const height = Math.max(...themes.map((theme) => popovers[theme].height));
+  for (const theme of themes) {
     const items = await Promise.all(RESOURCES.map((res) => item(theme, res)));
-    const png = await compose(browser, theme, items, await popover(browser, theme), join(work, 'x'));
+    const png = await compose(browser, theme, items, popovers[theme].png, height, join(work, 'x'));
     const out = join(outDir, theme === 'dark' ? 'menubar-dark.webp' : 'menubar.webp');
     execFileSync('cwebp', ['-quiet', '-lossless', '-z', '9', png, '-o', out]);
     console.log(out);
