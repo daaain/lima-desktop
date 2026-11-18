@@ -143,7 +143,7 @@ Review the changes for, in this order:
 - Test coverage
 - Code quality, conventions and performance
 
-`docs/development.md` is the guide: the backend and frontend maps (each module's job and the reasons behind it), the test tiers, releasing, and the snapshot → replay → fixture loop. How the UI looks and speaks is `docs/design/ui.md`; the history's storage is `docs/design/metrics-storage.md`; the managed-by marker is `docs/design/managed-by.md`. A change that contradicts one of these either updates it in the same PR or is a finding. Use `Read`, `Glob`, `Grep`, `WebSearch`, and `WebFetch` to investigate the codebase or library behaviour (Lima, libpod's REST API, Tauri 2, Svelte 5) when you need more context. If `--focus` was given, weight the review toward those areas (but don't ignore the rest).
+`DEVELOPMENT.md` is the guide: the backend and frontend maps (each module's job and the reasons behind it), the test tiers, releasing, and the snapshot → replay → fixture loop. How the UI looks and speaks is `docs/design/ui.md`; the history's storage is `docs/design/metrics-storage.md`; the managed-by marker is `docs/design/managed-by.md`. A change that contradicts one of these either updates it in the same PR or is a finding. Use `Read`, `Glob`, `Grep`, `WebSearch`, and `WebFetch` to investigate the codebase or library behaviour (Lima, libpod's REST API, Tauri 2, Svelte 5) when you need more context. If `--focus` was given, weight the review toward those areas (but don't ignore the rest).
 
 ### Correctness — would the figure, the drawing and the sentence be right?
 
@@ -175,7 +175,7 @@ The app runs as the user. Guests and containers are not trusted: a container's n
 ### The other invariants most often missed
 
 - **Tests:** a bug fix comes with a test that fails without it. Pure frontend logic has a `.test.ts` beside it; the Rust has unit tests and fixtures; the UI has browser tests on fake data (`just ui-e2e`). No test is skipped, `#[ignore]`d (beyond the documented live tests) or loosened to get green.
-- **Docs:** a new module, or one whose job changes, updates its row in `docs/development.md`'s maps; a user-visible change keeps the README's claims true.
+- **Docs:** a new module, or one whose job changes, updates its row in `DEVELOPMENT.md`'s maps; a user-visible change keeps the README's claims true.
 - **Comments:** short, saying why, with no narration of what the code does.
 
 **Verify before you report.** Each bug finding names a concrete failure: these inputs or this state lead to this wrong result. Check it against the surrounding code, not just the diff hunk. If you can't make it concrete, drop it or ask it as a question. Prefer a few findings you're sure of over a long list. A security finding names where the hostile input comes from (a container's name or labels, a guest's output, a file in a volume) and what it gains. One you can't fully confirm still goes in, as a question with the path you traced.

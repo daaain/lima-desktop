@@ -1,5 +1,5 @@
 # Lima Desktop's everyday commands (`just --list`). Real data without access to the VMs:
-# snapshot (on the Mac) → replay (anywhere) → fixture (anonymised, committed). See docs/development.md.
+# snapshot (on the Mac) → replay (anywhere) → fixture (anonymised, committed). See DEVELOPMENT.md.
 
 set shell := ["bash", "-euo", "pipefail", "-c"]
 
@@ -86,7 +86,7 @@ ui-e2e:
     pnpm build
     node --test e2e-ui/ui.test.mjs
 
-# Does the UI keep memory it should give back? A page (default: the overview) in headless WebKit against the fake backend, a poll a tick; fails above 25 MB per 1000 ticks (docs/development.md)
+# Does the UI keep memory it should give back? A page (default: the overview) in headless WebKit against the fake backend, a poll a tick; fails above 25 MB per 1000 ticks (DEVELOPMENT.md)
 ui-leak path="/" *args:
     pnpm build
     pnpm exec playwright install webkit
@@ -139,7 +139,7 @@ test:
     node --test 'tools/*.test.mjs'
     cd src-tauri && cargo test
 
-# Releasing (docs/development.md): `just release patch` (or minor, major, or 0.2.0) folds .changes/
+# Releasing (DEVELOPMENT.md): `just release patch` (or minor, major, or 0.2.0) folds .changes/
 # into CHANGELOG.md as the new version's section, bumps the version in tauri.conf.json, Cargo.toml
 # (and Cargo.lock) and package.json (tools/changes.mjs), commits and tags v<version>, all local —
 # `git tag -d v<version> && git reset --hard HEAD~1` undoes it. `just release-push` then starts the

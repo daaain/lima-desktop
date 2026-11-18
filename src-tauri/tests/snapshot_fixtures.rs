@@ -1,6 +1,6 @@
 //! Every committed snapshot fixture (`tests/fixtures/*/`: real data recorded with `just snapshot`,
 //! anonymised with `just fixture`) through the app's real parsers: Lima's list, the probe's blocks,
-//! the kernel journal reader's output and libpod's bodies. See docs/development.md.
+//! the kernel journal reader's output and libpod's bodies. See DEVELOPMENT.md.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};

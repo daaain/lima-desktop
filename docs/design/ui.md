@@ -6,7 +6,7 @@
 
 <img src="https://daaain.github.io/lima-desktop/overview.png" alt="The VM overview" width="720">
 
-The pictures in this guide and the README are drawn from invented data by the UI's browser tests (`just ui-e2e`) and published by CI ([development.md](../development.md#the-ui-in-a-browser-on-fake-data-just-ui-e2e)).
+The pictures in this guide and the README are drawn from invented data by the UI's browser tests (`just ui-e2e`) and published by CI ([DEVELOPMENT.md](../../DEVELOPMENT.md#the-ui-in-a-browser-on-fake-data-just-ui-e2e)).
 
 ## Words
 

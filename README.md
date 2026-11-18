@@ -55,7 +55,7 @@ Nothing is installed in the guests: the app reads them over Lima's own ssh and t
 
 Orange is a warning. The disk item is orange because the disk has passed the warning level set in Settings. `ember` is orange because the VM has stopped answering, most likely because it's out of memory, so its figures are the last it reported.
 
-The screenshots are of invented data: CI draws them from the UI's browser tests ([e2e-ui/](./e2e-ui/)) after each merge to main and publishes them [here](https://daaain.github.io/lima-desktop/). The menu bar's pictures are the exception, as only macOS can draw its items: `just readme-menubar` redraws them on a Mac, into [docs/img/](./docs/img/), to commit. The look is described in [docs/design/ui.md](./docs/design/ui.md).
+The screenshots are of invented VMs and containers, and there are [more of them here](https://daaain.github.io/lima-desktop/).
 
 ## Install
 
@@ -67,19 +67,6 @@ The macOS build isn't signed with an Apple Developer ID yet. macOS quarantines a
 xattr -dr com.apple.quarantine "/Applications/Lima Desktop.app"
 ```
 
-## Build it
+## Develop
 
-You can also build it yourself. On macOS you need Xcode's command-line tools (`xcode-select --install`), a current stable [Rust](https://rustup.rs), and Node 24 with pnpm 10 (`corepack enable pnpm`). Then:
-
-```bash
-git clone https://github.com/daaain/lima-desktop.git && cd lima-desktop
-pnpm install
-pnpm tauri build --bundles app
-cp -R "src-tauri/target/release/bundle/macos/Lima Desktop.app" /Applications/
-```
-
-The first build takes a few minutes. You built it on your own Mac, so Gatekeeper opens it without asking about signing. It needs `limactl` (Lima 2) on the Mac, and it finds it even when you launch the app from Finder.
-
-On Linux, first install WebKitGTK and the other things Tauri builds against (`libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev`, as listed in [Tauri's prerequisites](https://v2.tauri.app/start/prerequisites/)). Then build a `.deb` with `pnpm tauri build --bundles deb` or an AppImage with `pnpm tauri build --bundles appimage`.
-
-See [docs/development.md](./docs/development.md) to develop and test, and [docs/research/podman-desktop/](./docs/research/podman-desktop/) for the Podman Desktop survey this started from.
+To build it yourself, or to work on it, see [DEVELOPMENT.md](./DEVELOPMENT.md).

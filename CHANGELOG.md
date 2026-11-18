@@ -1,6 +1,6 @@
 # Changelog
 
-Notable changes, per release. Follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow [SemVer](https://semver.org/). What's merged but not yet released waits in [`.changes/`](./.changes/README.md), one file per change, until a release folds it in here. How a release is cut: [docs/development.md](./docs/development.md#releasing).
+Notable changes, per release. Follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow [SemVer](https://semver.org/). What's merged but not yet released waits in [`.changes/`](./.changes/README.md), one file per change, until a release folds it in here. How a release is cut: [DEVELOPMENT.md](./DEVELOPMENT.md#releasing).
 
 ## 0.6.0 — 2026-11-17
 
