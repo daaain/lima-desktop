@@ -60,11 +60,18 @@ gtk_theme=Adwaita
 # Whether the tray shows all three items: the shapes in ink at least half the panel's height (the
 # clock's letters are shorter) hold three. The panel fits each item in a square, so a trace is
 # about 22x17 and the disk's bar 6x22, and traces side by side touch: a shape holds as many as fit
-# across it at a trace's 4:3, and one at least.
+# across it at a trace's 4:3, and one at least. A shape touching the picture's edge is the
+# background (a capture with no panel in it is all background), never an item.
 all_shown() { # png
   n=$(magick "$1" -colorspace gray -threshold 50% $([ "$theme" = light ] && echo -negate) \
     -define connected-components:verbose=true -connected-components 8 null: |
-    awk -v min=$((SIZE * SCALE / 2)) '$NF ~ /gray\(255\)/ { split($2, a, /[x+]/); if (a[2] >= min) { k = int(a[1] / (a[2] * 4 / 3) + 0.5); n += k > 1 ? k : 1 } } END { print n + 0 }')
+    awk -v min=$((SIZE * SCALE / 2)) -v w=$((width * SCALE)) -v h=$((SIZE * SCALE)) '
+      $NF ~ /gray\(255\)/ {
+        split($2, a, /[x+]/)  # width, height, x, y
+        if (a[3] == 0 || a[4] == 0 || a[3] + a[1] >= w || a[4] + a[2] >= h) next
+        if (a[2] >= min) { k = int(a[1] / (a[2] * 4 / 3) + 0.5); n += k > 1 ? k : 1 }
+      }
+      END { print n + 0 }')
   [ "$n" -ge 3 ] || { echo "The panel shows $n of the 3 items." >&2; return 1; }
 }
 

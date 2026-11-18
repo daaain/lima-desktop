@@ -135,7 +135,7 @@
       <p class="note">
         Each item is the whole computer's memory, CPU or disk in use, with the VMs' part drawn pale at the bottom and
         everything else solid above it, so its top edge is the total. A trace draws it moving over time, a bar as it is
-        now; pointing at one says it in numbers. Its menu opens the VMs' part over time. An item drawn as None is left
+        now. Its menu opens the VMs' part over time, with the figures. An item drawn as None is left
         out, and with all three left out, the app's own icon stays in the panel as the way back in.
       </p>
     {:else}

@@ -116,15 +116,15 @@ readme-menubar:
     pnpm build
     node tools/menubar-readme.mjs "$items" docs/img
 
-# The README's Linux menu bar pictures (docs/img/menubar-linux*.webp, committed): the items as the app draws them for a light and a dark panel, in a real panel's tray (xfce4-panel under Xvfb, tools/linux-panel.sh), with the popover where Linux opens it. Drawn in the dev box, started if it's down; on Linux, here
+# The README's Linux menu bar pictures (docs/img/menubar-linux*.webp, committed): the items as the app draws them for a light and a dark panel, in a real panel's tray (xfce4-panel under Xvfb, tools/linux-panel.sh), with the popover where Linux opens it. Drawn in the dev box (started if it's down), which has what it needs; on Linux with no fy, here
 readme-menubar-linux:
     #!/usr/bin/env bash
     set -euo pipefail
-    if [ "$(uname)" != Linux ]; then
-      command -v fy >/dev/null || { echo "Drawn in foldyard's dev box, and there's no fy here: run this on Linux." >&2; exit 1; }
+    if [ -z "${IN_DEVBOX:-}" ] && command -v fy >/dev/null; then
       fy box ps 2>/dev/null | grep -q ' Up ' || fy box up
       exec fy box exec -- just readme-menubar-linux
     fi
+    [ "$(uname)" = Linux ] || { echo "Drawn in foldyard's dev box, and there's no fy here: run this on Linux." >&2; exit 1; }
     items=$(mktemp -d)
     trap 'rm -rf "$items"' EXIT
     (cd src-tauri && LD_MENUBAR_README="$items" cargo test -q --lib menubar_readme -- --ignored)
@@ -193,7 +193,7 @@ release version_or_bump:
     else
       echo "Not on a Mac: the README's menu bar pictures (docs/img) aren't redrawn. Run just readme-menubar on one if the popover changed." >&2
     fi
-    # The Linux ones are drawn in a real panel: in the dev box (started if it's down), or here on Linux.
+    # The Linux ones are drawn in a real panel: in the dev box (started if it's down), or with no fy, here on Linux.
     if [ "$(uname)" = Linux ] || command -v fy >/dev/null; then
       just readme-menubar-linux || { git checkout -q HEAD -- "${paths[@]}"; echo "The Linux redraw failed: nothing is changed." >&2; exit 1; }
     else

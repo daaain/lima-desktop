@@ -165,11 +165,6 @@ pub fn figure(now: Option<Share>) -> String {
     }
 }
 
-/// The title where the figure can't be drawn into the image (not macOS): the name before it.
-pub fn title(res: Res, now: Option<Share>, names: bool) -> String {
-    if names { format!("{} {}", res.id(), figure(now)) } else { figure(now) }
-}
-
 pub fn tooltip(res: Res, now: Share) -> String {
     format!("{}: this computer {:.0} % in use, the VMs {:.0} %", res.id(), now.whole * 100.0, now.vms * 100.0)
 }
@@ -625,6 +620,9 @@ pub struct State {
     /// Whether the menu bar could be used here (Linux needs an app indicator library): without it,
     /// closing the window mustn't leave an app with no way back in.
     available: AtomicBool,
+    /// The panel the app's glyph was last painted for (Linux).
+    #[cfg(not(target_os = "macos"))]
+    glyph: Mutex<Option<Bar>>,
 }
 
 /// Whether closing the window should leave the app running.
@@ -798,12 +796,11 @@ pub fn shown(res: Res, p: Parts, history: &[Share], hot: bool, bar: Bar) -> Show
     let now = history.last().copied();
     #[cfg(target_os = "macos")]
     let (icon, title) = (Some(item(res, p, history, hot, bar)), None);
+    // Elsewhere the drawing alone, with no title: a Linux panel shows one only with GNOME's
+    // AppIndicator extension. The app's own glyph stands in for no drawing, which only a caller
+    // passing `parts` rather than `parts_here` asks for (the preview).
     #[cfg(not(target_os = "macos"))]
-    let (icon, title) = (
-        // Linux shows no title without an image: one with only its figure has the app's.
-        drawing_in(p.drawing, history, bar.paint(hot)).or_else(|| Some(glyph_on(bar))),
-        p.figure.then(|| title(res, now, p.name_under)),
-    );
+    let (icon, title) = (drawing_in(p.drawing, history, bar.paint(hot)).or_else(|| Some(glyph_on(bar))), None);
     // Highlighted, macOS inverts a template image itself; one that warns is drawn again, inverted.
     #[cfg(target_os = "macos")]
     let highlighted = hot.then(|| item(res, p, history, hot, bar.inverted()));
@@ -860,6 +857,16 @@ fn draw(app: &AppHandle) {
             Err(e) => log::warn!("can't redraw {} in the menu bar: {e}", res.id()),
         }
     }
+    // The app's glyph, there when no item is, painted for the panel as it is now.
+    #[cfg(not(target_os = "macos"))]
+    if let Some(tray) = app.tray_by_id(APP_ITEM) {
+        let mut last = state.glyph.lock().expect("menu bar lock");
+        if let Some(g) = glyph_repaint(&mut last, desktop_bar())
+            && let Err(e) = tray.set_icon(Some(Image::new_owned(g.rgba, g.width, g.height)))
+        {
+            log::warn!("can't repaint the app's glyph in the menu bar: {e}");
+        }
+    }
 }
 
 /// The appearance of the menu bar `tray` is in: its button's, which follows the menu bar's (dark
@@ -894,12 +901,25 @@ fn app_glyph() -> Icon {
     glyph_on(desktop_bar())
 }
 
+/// The app's glyph to paint its item in, when the panel isn't what it was last painted for (`last`,
+/// then updated): it follows a change of light and dark, as the other items do.
+#[cfg(not(target_os = "macos"))]
+fn glyph_repaint(last: &mut Option<Bar>, now: Bar) -> Option<Icon> {
+    (*last != Some(now)).then(|| {
+        *last = Some(now);
+        glyph_on(now)
+    })
+}
+
 /// The panel a Linux desktop shows its tray items on, from its name (`XDG_CURRENT_DESKTOP`, as
 /// "ubuntu:GNOME") and the colour scheme its portal says (1 dark, 2 light, 0 no preference; None
-/// with no portal). Dark unless it says light, as most panels are; GNOME's top bar is dark in both.
+/// with no portal). Dark unless it says light, as most panels are; GNOME's top bar, and Ubuntu's, is
+/// dark in both. Only when it's the desktop's first name: one built on GNOME ("GNOME-Classic:GNOME",
+/// "Budgie:GNOME") themes its own panel, and GNOME Classic's is light.
 #[cfg(any(not(target_os = "macos"), test))]
 fn panel_bar(desktop: &str, scheme: Option<u32>) -> Bar {
-    if desktop.split(':').any(|d| d.eq_ignore_ascii_case("GNOME")) {
+    let first = desktop.split(':').next().unwrap_or_default();
+    if first.eq_ignore_ascii_case("GNOME") || first.eq_ignore_ascii_case("ubuntu") {
         return Bar::Dark;
     }
     match scheme {
@@ -1429,10 +1449,7 @@ mod tests {
         let s = used(0.704, 0.5);
         assert_eq!(figure(Some(s)), "70%");
         assert_eq!(figure(None), "–");
-        assert_eq!(title(Res::Mem, Some(s), false), "70%");
-        assert_eq!(title(Res::Cpu, Some(s), true), "cpu 70%");
-        assert_eq!(title(Res::Disk, Some(used(1.0, 0.0)), true), "disk 100%");
-        assert_eq!(title(Res::Disk, None, true), "disk –");
+        assert_eq!(figure(Some(used(1.0, 0.0))), "100%");
     }
 
     fn item(drawing: Drawing, figure: bool) -> Item {
@@ -1778,6 +1795,20 @@ mod tests {
         // GNOME's top bar is dark in both modes, Ubuntu's too.
         assert_eq!(panel_bar("GNOME", Some(2)), Bar::Dark);
         assert_eq!(panel_bar("ubuntu:GNOME", Some(2)), Bar::Dark);
+        // Desktops built on GNOME theme their own panel: GNOME Classic's is light.
+        assert_eq!(panel_bar("GNOME-Classic:GNOME", Some(2)), Bar::Light);
+        assert_eq!(panel_bar("Budgie:GNOME", Some(2)), Bar::Light);
+        assert_eq!(panel_bar("Budgie:GNOME", Some(1)), Bar::Dark);
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn the_apps_glyph_is_painted_again_when_the_panel_changes() {
+        let mut last = None;
+        assert_eq!(glyph_repaint(&mut last, Bar::Dark), Some(glyph_on(Bar::Dark)));
+        assert_eq!(glyph_repaint(&mut last, Bar::Dark), None);
+        assert_eq!(glyph_repaint(&mut last, Bar::Light), Some(glyph_on(Bar::Light)));
+        assert_eq!(last, Some(Bar::Light));
     }
 
     #[test]
@@ -1808,7 +1839,9 @@ mod tests {
         assert_eq!((s.icon, s.title), (Some(trace(&now)), None));
         let s = shown(Res::Mem, parts_here(item(Drawing::Bar, false), true).unwrap(), &now, false, Bar::Light);
         assert_eq!((s.icon, s.title), (Some(bar(now[0])), None));
-        assert_eq!(s.tooltip.as_deref(), Some(tooltip(Res::Mem, now[0]).as_str()));
+        // Not even for a caller that asks for the figure (the preview): no panel would show it.
+        let s = shown(Res::Mem, parts(item(Drawing::Trace, true), true).unwrap(), &now, false, Bar::Light);
+        assert_eq!(s.title, None);
     }
 
     #[cfg(not(target_os = "macos"))]

@@ -53,14 +53,14 @@ Nothing is installed in the guests: the app reads them over Lima's own ssh and t
   <img src="./docs/img/menubar-dark.webp" alt="The same menu bar items on a dark menu bar, with the popover open under CPU: the computer's cores in use as a stacked chart of each VM and everything else over the last hour, then each VM with its containers, its peak and the cores it's allocated, and the busiest apps outside the VMs" width="380">
 </p>
 
-**On Linux**, the items sit in the panel's tray, and their menu opens the popover. GNOME shows them only with the [AppIndicator extension](https://extensions.gnome.org/extension/615/appindicator-support/), which Ubuntu has switched on, and most panels show the drawings without their figures.
+**On Linux**, the items sit in the panel's tray, and their menu opens the popover. GNOME shows them only with the [AppIndicator extension](https://extensions.gnome.org/extension/615/appindicator-support/), which Ubuntu has switched on. A panel shows each item's drawing alone, and the popover has the figures.
 
 <p>
   <img src="./docs/img/menubar-linux.webp" alt="The same menu bar items in a light Linux panel's tray, beside its clock, drawn without their figures: memory and CPU as small drawings of their recent use, the disk as an orange bar past its warning; and the popover at the top right of the screen under the panel, open on memory" width="380">
   <img src="./docs/img/menubar-linux-dark.webp" alt="The same on a dark Linux panel, the drawings in white, with the popover open on CPU" width="380">
 </p>
 
-Orange is a warning. The disk item is orange because the disk has passed the warning level set in Settings. `ember` is orange because the VM has stopped answering, most likely because it's out of memory, so its figures are the last it reported.
+Orange is a warning. The disk item is orange because the disk has less space free than the warning set in Settings. `ember` is orange because the VM has stopped answering, most likely because it's out of memory, so its figures are the last it reported.
 
 The screenshots are of invented VMs and containers, and there are [more of them here](https://daaain.github.io/lima-desktop/).
 
