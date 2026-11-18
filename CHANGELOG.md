@@ -2,6 +2,23 @@
 
 Notable changes, per release. Follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow [SemVer](https://semver.org/). What's merged but not yet released waits in [`.changes/`](./.changes/README.md), one file per change, until a release folds it in here. How a release is cut: [DEVELOPMENT.md](./DEVELOPMENT.md#releasing).
 
+## 0.7.0 — 2026-11-18
+
+The update notice now says what a new version brings, and on Linux the menu bar's items can be seen on a dark panel and offer only what a panel shows. The menu bar's traces also hold twice the history.
+
+### Changed
+
+- **On Linux, Settings offers each menu bar item's drawing only.** Most panels show a tray item's image alone (its label only with GNOME's AppIndicator extension), so the figure and the names never showed there, and an item set to show only its figure appeared as the app's icon. Now there's no figure or name to choose on Linux, and an item drawn as None is left out of the panel. Each item's menu now says what it opens, as "Show memory use details" and so on.
+- **The menu bar's traces hold twice the history.** Each column is now a point wide instead of two, so a trace shows the last 22 measurements at the same width, in finer detail.
+
+### Added
+
+- **The update notice says what a new version brings.** From this version on, when a newer one is out, What's new beside it opens each release's notes since the one you have, newest first: its summary, or a line per change, with the rest under More. In the menu bar's popover it opens the main window with them. They're the changelog, asked of GitHub once when a new version is found, with nothing about you sent.
+
+### Fixed
+
+- **On Linux the menu bar's items can be seen on a dark panel.** They were always drawn in black, which nearly disappears on the dark panels most desktops have. Now they're white, or black where the desktop's settings portal says its theme is light (GNOME's and Ubuntu's top bars are dark either way; with no portal to ask, they're white), and a warning is a deeper orange on a light panel, as on a Mac.
+
 ## 0.6.0 — 2026-11-17
 
 ### Changed
