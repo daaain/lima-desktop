@@ -49,8 +49,8 @@ Nothing is installed in the guests: the app reads them over Lima's own ssh and t
 **The menu bar**: memory, CPU and disk at a glance, and the popover under each.
 
 <p>
-  <img src="./docs/img/menubar.webp" alt="The menu bar's items for memory (61 %), CPU (86 %, in orange as it's past its warning) and disk (63 %), each a small drawing of its recent use with the VMs' part pale under everything else, and the popover open under memory: the computer's memory in use as a stacked chart of each VM, wired memory and everything else over the last hour, then each VM with its containers and its peak, and the busiest apps outside the VMs" width="380">
-  <img src="./docs/img/menubar-dark.webp" alt="The same menu bar items and popover on a dark menu bar" width="380">
+  <img src="./docs/img/menubar.webp" alt="The menu bar's items for memory (61 %), CPU (48 %) and disk (63 %, in orange as it's past its warning), each a small drawing of its recent use with the VMs' part pale under everything else, and the popover open under memory: the computer's memory in use as a stacked chart of each VM, wired memory and everything else over the last hour, then each VM with its containers and its peak, and the busiest apps outside the VMs" width="380">
+  <img src="./docs/img/menubar-dark.webp" alt="The same menu bar items on a dark menu bar, with the popover open under CPU: the computer's cores in use as a stacked chart of each VM and everything else over the last hour, then each VM with its containers, its peak and the cores it's allocated, and the busiest apps outside the VMs" width="380">
 </p>
 
 The screenshots are of invented data: CI draws them from the UI's browser tests ([e2e-ui/](./e2e-ui/)) after each merge to main and publishes them [here](https://daaain.github.io/lima-desktop/). The menu bar's pictures are the exception, as only macOS can draw its items: `just readme-menubar` redraws them on a Mac, into [docs/img/](./docs/img/), to commit. The look is described in [docs/design/ui.md](./docs/design/ui.md).

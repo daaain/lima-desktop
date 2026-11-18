@@ -1,7 +1,8 @@
 // The README's picture of the menu bar (`just readme-menubar`): Settings' default items, as the app
 // draws them (`cargo test menubar_readme -- --ignored`, macOS only, as CoreText sets their text),
-// on a menu bar, with the popover open under the memory item, as the built UI draws it against the
-// fake backend (e2e-ui/). One picture on a light menu bar and one on a dark, as lossless WebP.
+// on a menu bar, with the popover open under one of them, as the built UI draws it against the fake
+// backend (e2e-ui/). One picture on a light menu bar, open under memory, and one on a dark, open under
+// CPU, so the two show both tabs. As lossless WebP.
 //
 //   node tools/menubar-readme.mjs <items dir> [out dir, default docs/img]
 //
@@ -22,6 +23,8 @@ const base = `http://127.0.0.1:${PORT}`;
 const NOW = new Date('2026-11-10T14:30:00Z');
 const SCALE = 2; // the items' own: they're drawn at twice the menu bar's points
 const RESOURCES = ['mem', 'cpu', 'disk'];
+/** The tab each picture's popover is open on. */
+const OPEN = { light: 'mem', dark: 'cpu' };
 
 /** An item's image (see `write_rgba` in menubar.rs), a template one in the menu bar's text colour. */
 async function item(theme, res) {
@@ -42,28 +45,31 @@ async function item(theme, res) {
   return { width, height, rgba: rgba.toString('base64') };
 }
 
-async function popover(browser, dark) {
+async function popover(browser, theme) {
+  const dark = theme === 'dark';
   const context = await browser.newContext({
     viewport: { width: 396, height: 560 }, deviceScaleFactor: SCALE, colorScheme: dark ? 'dark' : 'light', locale: 'en-GB', timezoneId: 'UTC',
   });
   const page = await context.newPage();
   await page.clock.setFixedTime(NOW);
   await page.addInitScript({ path: join(root, 'e2e-ui/fake-backend.js') });
-  await page.goto(`${base}/menubar?tab=mem`);
+  await page.goto(`${base}/menubar?tab=${OPEN[theme]}`);
   await page.locator('.legend .row[data-vm]').first().waitFor();
-  await page.waitForFunction(() => /peak \d+\.\d GiB in 1 h/.test(document.querySelector('.legend').innerText));
+  // The history in (each VM's peak over it), and on CPU the busiest apps measured.
+  await page.waitForFunction(() => /peak .+ in 1 h/.test(document.querySelector('.legend').innerText));
+  if (OPEN[theme] === 'cpu') await page.locator('.row[data-app]').first().waitFor();
   await page.evaluate(() => document.fonts.ready);
   const png = await page.screenshot({ fullPage: true, animations: 'disabled' });
   await context.close();
   return png.toString('base64');
 }
 
-/** The menu bar, its items and the popover open under memory, on a wallpaper. */
+/** The menu bar, its items and the popover open under one, on a wallpaper. */
 function scene(theme, items, popoverPng) {
   const dark = theme === 'dark';
   const canvases = RESOURCES.map((res, i) => {
     const it = items[i];
-    return `<span class="item${res === 'mem' ? ' open' : ''}" data-res="${res}"><canvas width="${it.width}" height="${it.height}"
+    return `<span class="item${res === OPEN[theme] ? ' open' : ''}" data-res="${res}"><canvas width="${it.width}" height="${it.height}"
       style="width:${it.width / SCALE}px;height:${it.height / SCALE}px" data-rgba="${it.rgba}"></canvas></span>`;
   }).join('');
   return `<!doctype html><html><head><meta charset="utf-8"><style>
@@ -97,11 +103,11 @@ async function compose(browser, theme, items, popoverPng, out) {
       c.getContext('2d').putImageData(new ImageData(bytes, c.width, c.height), 0, 0);
     }
     await Promise.all([...document.images].map((i) => i.decode()));
-    // Centred under the memory item, as menubar.rs places it, and the picture as tall as it.
+    // Centred under its item, as menubar.rs places it, and the picture as tall as it.
     const shot = document.querySelector('.shot').getBoundingClientRect();
-    const mem = document.querySelector('[data-res="mem"]').getBoundingClientRect();
+    const open = document.querySelector('.item.open').getBoundingClientRect();
     const pop = document.querySelector('.popover');
-    pop.style.left = `${Math.min(shot.width - 364, Math.max(4, mem.left + mem.width / 2 - 180))}px`;
+    pop.style.left = `${Math.min(shot.width - 364, Math.max(4, open.left + open.width / 2 - 180))}px`;
     document.querySelector('.room').style.height = `${pop.getBoundingClientRect().height + 4}px`;
     await document.fonts.ready;
   });
@@ -123,7 +129,7 @@ try {
   }
   for (const theme of ['light', 'dark']) {
     const items = await Promise.all(RESOURCES.map((res) => item(theme, res)));
-    const png = await compose(browser, theme, items, await popover(browser, theme === 'dark'), join(work, 'x'));
+    const png = await compose(browser, theme, items, await popover(browser, theme), join(work, 'x'));
     const out = join(outDir, theme === 'dark' ? 'menubar-dark.webp' : 'menubar.webp');
     execFileSync('cwebp', ['-quiet', '-lossless', '-z', '9', png, '-o', out]);
     console.log(out);

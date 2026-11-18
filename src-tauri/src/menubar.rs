@@ -1717,12 +1717,16 @@ mod tests {
                 })
                 .collect()
         };
-        let mut mem = history(0.59, 0.43, 0.0);
-        *mem.last_mut().unwrap() = used(0.61, 0.446);
+        // Memory and CPU end where the popovers under them (light and dark) start, at the fake backend's
+        // figures; the disk, under neither, shows the warning colour.
+        let ending = |mut h: Vec<Share>, last: Share| {
+            *h.last_mut().unwrap() = last;
+            h
+        };
+        let mem = ending(history(0.59, 0.43, 0.0), used(0.61, 0.446));
+        let cpu = ending(history(0.44, 0.32, 0.0), used(0.48, 0.35));
         let chosen = crate::settings::MenuBar::default();
-        for (res, h, hot) in
-            [(Res::Mem, mem, false), (Res::Cpu, history(0.3, 0.18, 0.55), true), (Res::Disk, history(0.62, 0.35, 0.0), false)]
-        {
+        for (res, h, hot) in [(Res::Mem, mem, false), (Res::Cpu, cpu, false), (Res::Disk, history(0.62, 0.35, 0.0), true)] {
             let p = parts(res.item(&chosen), chosen.names).unwrap();
             for (theme, bar) in [("light", Bar::Light), ("dark", Bar::Dark)] {
                 write_rgba(&dir, &format!("{theme}-{}", res.id()), &shown(res, p, &h, hot, bar));

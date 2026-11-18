@@ -19,7 +19,7 @@ A debug build (`pnpm tauri dev`, `tauri build --debug`) is a different app to th
 
 The icon is drawn by `tools/app-icon.mjs` (the masthead's serif L on a white tile, in Playwright's Chromium); `just icon` draws it again and makes every size in `src-tauri/icons/`.
 
-The README's menu bar pictures (`docs/img/menubar*.webp`) are the one set of screenshots committed, as only macOS can draw the items (CoreText sets their text) and CI draws the rest on Linux. `just readme-menubar` redraws them on a Mac when the items or the popover change: the items from `cargo test menubar_readme -- --ignored` (Settings' default items, on a light and a dark menu bar), set by `tools/menubar-readme.mjs` with the popover under memory as the browser tests draw it, as lossless WebP (cwebp).
+The README's menu bar pictures (`docs/img/menubar*.webp`) are the one set of screenshots committed, as only macOS can draw the items (CoreText sets their text) and CI draws the rest on Linux. `just readme-menubar` redraws them on a Mac when the items or the popover change: the items from `cargo test menubar_readme -- --ignored` (Settings' default items, on a light and a dark menu bar), set by `tools/menubar-readme.mjs` with the popover as the browser tests draw it (under memory on the light one, CPU on the dark, so they show both tabs), as lossless WebP (cwebp).
 
 Linux needs WebKitGTK to build: `libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev` (see Tauri's prerequisites). macOS needs Xcode's command-line tools.
 
