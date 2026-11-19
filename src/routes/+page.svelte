@@ -17,11 +17,16 @@
   import { BY_NAME, sortRunning, sortStopped, VM_COLUMNS, VM_SORTS, type VmSort } from '$lib/vmSort';
 
   const vms = $derived(live.snapshot?.vms ?? []);
+  const MEMORY_PARTS_TIP = [
+    "Containers: their processes' own memory (podman's figure, on their lines, also counts file cache the VM counts as available).",
+    "Other processes: the VM's own processes outside its containers, which a VM running only containers should have next to none of.",
+    "Kernel and cache: what the guest's kernel holds and doesn't count as available: its own structures, page tables, and cache it can't drop at once.",
+  ].join('\n');
   /** A bar's label goes on with its parts, where it has them. */
   function partLabel(what: 'memory' | 'cpu', p: Part | undefined): string {
     if (!p) return '';
     const said = partSaid(what, p);
-    return `: ${said.inside}, ${said.outside}`;
+    return `: ${[said.inside, said.others, said.outside].filter(Boolean).join(', ')}`;
   }
   // By name unless a column head was chosen; the choice is kept for next time. A live order (the
   // fullest memory first, say) can change at every measurement: the rows glide to their places.
@@ -113,8 +118,10 @@
            what runs outside them hatched. -->
       {#snippet part(what: 'memory' | 'cpu', p: Part)}
         {@const said = partSaid(what, p)}
-        <p class="label part" title={what === 'memory' ? "Containers count their processes' own memory, which the VM's in-use figure counts too; podman's figure takes in file cache the VM counts as available, so is larger" : undefined}>
-          <span><span class="sw in"></span>{said.inside}</span><span><span class="sw out"></span>{said.outside}</span>
+        <p class="label part" title={what === 'memory' ? MEMORY_PARTS_TIP : undefined}>
+          <span><span class="sw in"></span>{said.inside}</span>
+          {#if said.others}<span><span class="sw others"></span>{said.others}</span>{/if}
+          <span><span class="sw out"></span>{said.outside}</span>
         </p>
       {/snippet}
       {#each running as vm (vm.instance.name)}
@@ -137,7 +144,7 @@
             <span class="label narrow">Memory</span>
             <p class="figure"><strong class:hot={g.memory.hot}>{bytes(g.memory.used)}</strong> <span class="muted">of {bytes(g.memory.size)}</span></p>
             <Sketch sketch={sketch(band(h, 'mem_used'), g.memory.size)} hot={g.memory.hot} label="Memory" />
-            <Bar pct={g.memory.pct} inside={parts.memory && share(parts.memory.inside, g.memory.size)} label={`Memory: ${g.memory.pct.toFixed(0)} % of the allocation${partLabel('memory', parts.memory)}`} />
+            <Bar pct={g.memory.pct} inside={parts.memory && share(parts.memory.inside, g.memory.size)} others={parts.memory?.others != null ? share(parts.memory.others, g.memory.size) : undefined} label={`Memory: ${g.memory.pct.toFixed(0)} % of the allocation${partLabel('memory', parts.memory)}`} />
             <p class="label" title="Pressure (Linux's PSI): the share of the last measurement in which at least one task waited for memory">{g.memory.pct.toFixed(0)} % · waiting {permille(l.psi_mem_some)}</p>
             {#if parts.memory}{@render part('memory', parts.memory)}{/if}
           </div>
@@ -231,6 +238,7 @@
   .part > span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .sw { display: inline-block; width: 9px; height: 9px; margin-right: 0.3rem; vertical-align: -1px; }
   .sw.in { background: var(--bar); }
+  .sw.others { background: var(--soft); }
   .sw.out { background: repeating-linear-gradient(135deg, var(--bar) 0 2px, transparent 2px 4px); box-shadow: inset 0 0 0 1px var(--bar); }
   .narrow { display: none; }
   .dots { display: flex; flex-wrap: wrap; gap: 4px; padding-top: 0.6rem; }

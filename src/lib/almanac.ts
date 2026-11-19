@@ -53,20 +53,27 @@ export function gauges(vm: VmLive): { memory: Gauge; cpu: Gauge; disk: Gauge } {
   };
 }
 
-/** Of what a VM uses now, the part its running containers account for, and the rest. */
+/** Of what a VM uses now, the part its running containers account for, and the rest; of the
+ * memory's rest, where the VM's own is read, its other processes' own (`others`), leaving the
+ * kernel's and cache (`outside`). */
 export interface Part {
   inside: number;
+  others?: number;
   outside: number;
 }
 
 /**
- * A VM's memory and CPU in use now, split into its running containers' part and what runs outside
- * them (the guest agent, podman starting and stopping containers, the kernel, a build run in the VM
- * itself). Memory counts the containers' processes' own (anon and shmem), which the VM's in-use
- * figure counts too: podman's figure takes in file cache the VM counts as available, and on a busy
- * VM adds up to more than it uses. Neither is split for a VM running no containers, where it would
- * all be outside them, nor where it has no reading; memory not where a running container's own
- * isn't read. The containers are read a moment apart from the VM, so their part is held to its whole.
+ * A VM's memory and CPU in use now, split into its running containers' part and the rest. CPU's
+ * rest is what runs outside them (the guest agent, podman starting and stopping containers, the
+ * kernel, a build run in the VM itself). Memory counts the containers' processes' own (anon and
+ * shmem), which the VM's in-use figure counts too: podman's figure takes in file cache the VM counts
+ * as available, and on a busy VM adds up to more than it uses. Where the VM's own processes' memory
+ * is read (its anon and shmem), the rest is parted again: its other processes' own, which a VM
+ * running only containers should have next to none of, and the kernel's and cache the guest can't
+ * give back at once. Neither is split for a VM running no
+ * containers, where it would all be outside them, nor where it has no reading; memory not where a
+ * running container's own isn't read. The VM and its containers are read a moment apart, so each
+ * part is held to what is left of the whole.
  */
 export function containersPart(vm: VmLive): { memory?: Part; cpu?: Part } {
   const up = vm.containers.filter((c) => c.state === 'running');
@@ -76,15 +83,23 @@ export function containersPart(vm: VmLive): { memory?: Part; cpu?: Part } {
     const inside = Math.min(total, each.reduce<number>((sum, n) => sum + (n ?? 0), 0));
     return { inside, outside: total - inside };
   };
-  const memory = part(vm.latest.mem_used, up.map((c) => c.latest.mem_own));
+  let memory = part(vm.latest.mem_used, up.map((c) => c.latest.mem_own));
+  const own = vm.latest.mem_own;
+  if (memory && own != null) {
+    const others = Math.max(0, Math.min(own, memory.inside + memory.outside) - memory.inside);
+    memory = { inside: memory.inside, others, outside: memory.outside - others };
+  }
   const cpu = part(vm.latest.cpu_mc, up.map((c) => c.latest.cpu_mc ?? 0));
   return { ...(memory ? { memory } : {}), ...(cpu ? { cpu } : {}) };
 }
 
-/** Each part, as figures: "0.40 in containers", "5.9 outside them". */
-export function partSaid(what: 'memory' | 'cpu', p: Part): { inside: string; outside: string } {
+/** Each part, as figures: "0.40 in containers", "5.9 outside them"; memory's rest, where it's
+ * parted, "0.6 GiB in other processes" and "2.3 GiB kernel and cache". */
+export function partSaid(what: 'memory' | 'cpu', p: Part): { inside: string; others?: string; outside: string } {
   const say = what === 'memory' ? (n: number) => bytes(n) : cores;
-  return { inside: `${say(p.inside)} in containers`, outside: `${say(p.outside)} outside them` };
+  const inside = `${say(p.inside)} in containers`;
+  if (p.others == null) return { inside, outside: `${say(p.outside)} outside them` };
+  return { inside, others: `${say(p.others)} in other processes`, outside: `${say(p.outside)} kernel and cache` };
 }
 
 /**

@@ -519,6 +519,22 @@ describe('containersPart', () => {
     const p = containersPart(tangible([up('a', { mem: 9 * GiB, mem_own: 8 * GiB }), up('b', { mem: 5 * GiB, mem_own: 2.8 * GiB })]));
     expect(p.memory!.inside / GiB).toBeCloseTo(10.8);
     expect(p.memory!.outside / GiB).toBeCloseTo(2.8);
+    expect(p.memory!.others).toBeUndefined();
+  });
+  it("parts the rest of the memory into other processes' own and the kernel's and cache, from the VM's own", () => {
+    const vmOwn = { mem_used: 13.7 * GiB, mem_own: 11.4 * GiB, cpu_mc: 6300 };
+    const p = containersPart(tangible([up('a', { mem_own: 8 * GiB }), up('b', { mem_own: 2.8 * GiB })], vmOwn));
+    expect(p.memory!.inside / GiB).toBeCloseTo(10.8);
+    expect(p.memory!.others! / GiB).toBeCloseTo(0.6);
+    expect(p.memory!.outside / GiB).toBeCloseTo(2.3);
+    // CPU has no such part.
+    expect(p.cpu!.others).toBeUndefined();
+  });
+  it('holds the other processes to what is left, as the VM and its containers are read a moment apart', () => {
+    const behind = { mem_used: 10 * GiB, mem_own: 7 * GiB, cpu_mc: 100 };
+    expect(containersPart(tangible([up('a', { mem_own: 8 * GiB })], behind)).memory).toEqual({ inside: 8 * GiB, others: 0, outside: 2 * GiB });
+    const over = { mem_used: 10 * GiB, mem_own: 12 * GiB, cpu_mc: 100 };
+    expect(containersPart(tangible([up('a', { mem_own: 8 * GiB })], over)).memory).toEqual({ inside: 8 * GiB, others: 2 * GiB, outside: 0 });
   });
   it("leaves the memory unsplit where a running container's own memory isn't read", () => {
     expect(containersPart(tangible([up('a', { mem: GiB, mem_own: GiB }), up('b', { mem: GiB })])).memory).toBeUndefined();
@@ -543,5 +559,9 @@ describe('partSaid', () => {
   it('says each part, in the figures of the meter it splits', () => {
     expect(partSaid('cpu', { inside: 400, outside: 5900 })).toEqual({ inside: '0.40 in containers', outside: '5.9 outside them' });
     expect(partSaid('memory', { inside: 10.8 * 1024 ** 3, outside: 2.8 * 1024 ** 3 })).toEqual({ inside: '10.8 GiB in containers', outside: '2.8 GiB outside them' });
+  });
+  it("names the memory's rest for what it is once other processes are told apart from it", () => {
+    expect(partSaid('memory', { inside: 10.8 * 1024 ** 3, others: 0.6 * 1024 ** 3, outside: 2.3 * 1024 ** 3 }))
+      .toEqual({ inside: '10.8 GiB in containers', others: '614.4 MiB in other processes', outside: '2.3 GiB kernel and cache' });
   });
 });

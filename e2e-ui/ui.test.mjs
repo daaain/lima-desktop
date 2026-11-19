@@ -913,9 +913,21 @@ test("A VM's memory and CPU bars on the overview split what its containers use f
     assert.match(await bar.locator('.fill').evaluate((el) => getComputedStyle(el).backgroundImage), /^repeating-linear-gradient\(135deg/, what);
     const [inside, fill] = await bar.evaluate((el) => ['.inside', '.fill'].map((s) => el.querySelector(s).getBoundingClientRect().width));
     assert.ok(inside > 0 && inside <= fill, `${what}: ${inside} within ${fill}`);
-    // Said under it, and in the bar's label.
-    assert.match(await meter.locator('.part').innerText(), /^.+ in containers\n.+ outside them$/, what);
-    assert.match(await bar.getAttribute('aria-label'), /: .+ in containers, .+ outside them$/, what);
+    // Said under it, and in the bar's label: CPU's rest is what runs outside its containers; memory's
+    // is parted again into its other processes' own, a paler solid part, and the kernel's and cache.
+    if (what === 'CPU') {
+      assert.match(await meter.locator('.part').innerText(), /^.+ in containers\n.+ outside them$/);
+      assert.match(await bar.getAttribute('aria-label'), /: .+ in containers, .+ outside them$/);
+      assert.equal(await bar.locator('.others').count(), 0);
+    } else {
+      assert.match(await meter.locator('.part').innerText(), /^.+ in containers\n.+ in other processes\n.+ kernel and cache$/);
+      assert.match(await bar.getAttribute('aria-label'), /: .+ in containers, .+ in other processes, .+ kernel and cache$/);
+      const [inEnd, othersStart, othersEnd, fillEnd] = await bar.evaluate((el) => {
+        const r = (s) => el.querySelector(s).getBoundingClientRect();
+        return [r('.inside').right, r('.others').left, r('.others').right, r('.fill').right];
+      });
+      assert.ok(Math.abs(othersStart - inEnd) < 1 && othersEnd <= fillEnd + 0.5, `others from ${othersStart} to ${othersEnd}, after ${inEnd}, within ${fillEnd}`);
+    }
   }
   // A VM whose containers can't be read isn't split: it would all be "outside".
   const ember = page.locator('article', { has: page.locator('a.name', { hasText: /^ember$/ }) });

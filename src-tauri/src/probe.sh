@@ -3,7 +3,8 @@
 # The app puts `interval=<seconds>` on the second line (probe::script); without it, one second.
 # POSIX sh (dash, bash, busybox ash); builtins only on the per-block path except df and sleep.
 #   U <uptime s>                      C cpu <user> <nice> <system> <idle> <iowait> <irq> <softirq> <steal> ...
-#   M <MemTotal:|MemAvailable:|SwapTotal:|SwapFree:> <kB>
+#   M <MemTotal:|MemAvailable:|SwapTotal:|SwapFree:|AnonPages:|Shmem:> <kB>
+#     AnonPages + Shmem: the guest's processes' own memory, as G's is a container's.
 #   P <memory|cpu> <some|full> total=<us>         O <oom_kill count>
 #   D <size kB> <used kB>   (first /, then the rootless container store)
 #   G <container id> <memory.peak|-> <oom_kill|-> <anon+shmem|->  (cgroup v2 only, per podman container)
@@ -25,7 +26,7 @@ while :; do
   read -r line < /proc/stat
   echo "C $line"
   while read -r k v _; do
-    case $k in MemTotal:|MemAvailable:|SwapTotal:|SwapFree:) echo "M $k $v" ;; esac
+    case $k in MemTotal:|MemAvailable:|SwapTotal:|SwapFree:|AnonPages:|Shmem:) echo "M $k $v" ;; esac
   done < /proc/meminfo
   for r in memory cpu; do
     if [ -r "/proc/pressure/$r" ]; then
