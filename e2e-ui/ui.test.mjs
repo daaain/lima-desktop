@@ -118,7 +118,7 @@ for (const dark of [false, true]) {
     await page.getByRole('heading', { level: 1, name: 'harbor needs more memory and CPU, judging by the last 6 h.' }).waitFor();
     // On vz, what it costs the computer, what its guest needs, and that a restart gives back most of the rest.
     assert.match(
-      await page.locator('figcaption.note', { hasText: 'On vz' }).innerText(),
+      await page.locator('figure p.note', { hasText: 'On vz' }).innerText(),
       /^On vz, guest memory is only backed as it's touched, and isn't given back when the guest frees it: right now this VM costs your computer [\d.]+ GiB of RAM, and its guest needs [\d.]+ GiB\. Restarting the VM gives back most of the rest\.$/,
     );
     assert.match(
@@ -994,6 +994,24 @@ test("A VM's page lists where its memory and CPU go under their bars, as their c
   assert.match(await bar.getAttribute('aria-description'), /^harbor's memory: /);
   assert.deepEqual(await cpu.locator('.rows .name').allInnerTexts(), ['In containers', 'Outside them']);
   assert.equal(await cpu.locator('.bar .inside').count(), 1);
+  assert.deepEqual(errors, []);
+  await close();
+});
+
+test("Side by side, a VM's memory and CPU charts start level, the vz note above memory's", async () => {
+  const { page, errors, close } = await open('/vm/harbor');
+  const figure = (name) => page.locator('figure', { has: page.locator('h2', { hasText: new RegExp(`^${name}$`) }) });
+  await figure('Memory').locator('.rows').waitFor();
+  // Their tops: a legend that wraps (memory's, here) only adds to what's under its chart.
+  const top = (name) => figure(name).locator('.chart').evaluate((el) => Math.round(el.getBoundingClientRect().top));
+  assert.equal(await top('Memory'), await top('CPU'));
+  assert.equal(await top('Pressure'), await top('Disk'));
+  // Memory's says more above its chart than CPU's does: they're level all the same.
+  const above = (name) => figure(name).locator('.above').evaluate((el) => el.lastElementChild.getBoundingClientRect().bottom - el.getBoundingClientRect().top);
+  assert.ok(await above('Memory') > (await above('CPU')) + 100);
+  // The note on what vz holds comes before the chart, with the figures it's about.
+  assert.equal(await figure('Memory').locator('.above > p.note', { hasText: /^On vz/ }).count(), 1);
+  assert.equal(await figure('Memory').evaluate((el) => el.lastElementChild.classList.contains('chart')), true);
   assert.deepEqual(errors, []);
   await close();
 });
