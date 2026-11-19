@@ -205,6 +205,14 @@ export function bandPeak(band: Band | undefined): number | undefined {
   return peak;
 }
 
+/** A VM's heading over its containers: its memory in use now against what it has, as the overview
+ * says it, and its peak in the range (`history`, its `mem_used` band) once the history has one. */
+export function vmHeadMemory(vm: VmLive, history: Band | undefined, over: RangeKey) {
+  const g = gauges(vm).memory;
+  const peak = bandPeak(history);
+  return { figure: bytes(g.used), of: `of ${bytes(g.size)}`, pct: g.pct, hot: g.hot, peakSaid: peak == null ? '' : `peak ${bytes(peak)} ${inRange(over)}` };
+}
+
 /** How far a counter's band went up across it (a VM's OOM kills); undefined without a sample. */
 export function bandRise(band: Band | undefined): number | undefined {
   const peak = bandPeak(band);

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   bandPeak, bandRise, containersHeadline, containersSentence, countWord, projectSaid, exitedSentence, fullWindow, holdsSentence, intervalPhrase, ownLimit, pressureSentence, rowMemory,
-  restartNote, runsSentence, fleetHeadline, hostBar, hostRamSentence, quarters, selfMemory, vzMemoryNote, share, shareChart, shareTip, sketch, unusedHeadline, unusedLede, vmHeadline, vmSentence,
+  restartNote, runsSentence, vmHeadMemory, fleetHeadline, hostBar, hostRamSentence, quarters, selfMemory, vzMemoryNote, share, shareChart, shareTip, sketch, unusedHeadline, unusedLede, vmHeadline, vmSentence,
 } from './almanac';
 import type { Hint } from './rightsize';
 import { container, vm } from './testing';
@@ -501,5 +501,27 @@ describe("what a VM holds beyond its guest's need, and that restarting gives it 
     // reporting), and the tooltip says so: on another VM type it isn't known to hold.
     expect(restartNote('qemu', 47.5 * GiB, 7.5 * GiB)).toBe('');
     expect(restartNote(undefined, 47.5 * GiB, 7.5 * GiB)).toBe('');
+  });
+});
+
+describe('vmHeadMemory', () => {
+  const GiB = 1024 ** 3;
+  const tangible = { ...vm({ name: 'tangible', memory: 48 * GiB }), latest: { mem_used: 15.6 * GiB, mem_total: 46.9 * GiB } };
+  it("says the VM's memory in use against what it has, as the overview does", () => {
+    const m = vmHeadMemory(tangible, undefined, '24h');
+    expect([m.figure, m.of]).toEqual(['15.6 GiB', 'of 46.9 GiB']);
+    expect(m.pct).toBeCloseTo((15.6 / 46.9) * 100);
+    expect(m.hot).toBe(false);
+  });
+  it("says its peak in the range once the history has one, and nothing until then", () => {
+    expect(vmHeadMemory(tangible, undefined, '24h').peakSaid).toBe('');
+    const band = { min: [10 * GiB, 12 * GiB], max: [18.7 * GiB, 16 * GiB], avg: [11 * GiB, 14 * GiB] };
+    expect(vmHeadMemory(tangible, band as never, '24h').peakSaid).toBe('peak 18.7 GiB in 24 h');
+  });
+  it('warns past three quarters', () => {
+    expect(vmHeadMemory({ ...tangible, latest: { mem_used: 40 * GiB, mem_total: 46.9 * GiB } }, undefined, '1h').hot).toBe(true);
+  });
+  it('is a dash without a reading yet', () => {
+    expect(vmHeadMemory({ ...tangible, latest: {} }, undefined, '1h').figure).toBe('–');
   });
 });

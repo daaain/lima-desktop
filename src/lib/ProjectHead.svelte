@@ -11,6 +11,7 @@
   import { bytes, cores } from './format';
   import { range } from './range.svelte';
   import Bar from './Bar.svelte';
+  import FoldMark from './FoldMark.svelte';
   import MemoryShare from './MemoryShare.svelte';
   import Sketch from './Sketch.svelte';
 
@@ -32,9 +33,9 @@
 <!-- The whole row folds, as a whole line opens its detail; its name is the button a keyboard or a
      screen reader uses, and a click there reaches the row as any other. -->
 <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions -->
-<div class="project num" class:folded role="group" aria-label={`Compose project ${project}`} onclick={ontoggle}>
+<div class="project num" role="group" aria-label={`Compose project ${project}`} onclick={ontoggle}>
   <div class="who">
-    <h3 class="name serif"><button class="fold" aria-expanded={!folded} title={folded ? 'Show its containers' : 'Fold its containers away'}><svg class="mark" viewBox="0 0 10 10" aria-hidden="true"><path d="M2 3.5 5 6.5 8 3.5" /></svg><span class="text">{project}</span></button></h3>
+    <h3 class="name serif"><button class="fold" aria-expanded={!folded} title={folded ? 'Show its containers' : 'Fold its containers away'}><FoldMark {folded} /><span class="text">{project}</span></button></h3>
     <span class="second">{projectSaid(t)}</span>
   </div>
   <div class="drawn">
@@ -67,10 +68,7 @@
   /* The name as it was, a button only in what it does. */
   .fold { all: unset; display: flex; align-items: baseline; gap: 0.35rem; max-width: 100%; cursor: pointer; }
   .fold:focus-visible { outline: 2px solid var(--fg); outline-offset: 2px; }
-  .mark { flex: none; align-self: center; width: 0.6em; height: 0.6em; fill: none; stroke: var(--muted); stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; transition: transform 0.2s ease-out; }
-  .folded .mark { transform: rotate(-90deg); }
   .text { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-  @media (prefers-reduced-motion: reduce) { .mark { transition: none; } }
   .name { margin: 0; font-size: 1.4rem; font-weight: 500; line-height: 1.15; letter-spacing: -0.01em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .second { font-size: 0.82rem; color: var(--muted); }
   /* As a container's line draws them (ContainerLine.svelte), so the columns read alike. */

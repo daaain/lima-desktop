@@ -934,6 +934,55 @@ test("An OOM kill opens its container's detail even in a folded project, unfoldi
   await close();
 });
 
+test("A VM's heading on Containers draws its memory and CPU in the lines' columns, stays in view, and folds", async () => {
+  const { page, errors, close } = await open('/containers', { height: 700 });
+  const atlas = page.locator('section', { has: page.locator('h2 a', { hasText: 'atlas' }) });
+  const head = atlas.getByRole('group', { name: 'VM atlas' });
+  await head.getByRole('img', { name: /^atlas's memory: .+ of 47\.8 GiB, \d+ %$/ }).waitFor();
+  assert.match(await head.innerText(), /^atlas\s+runs twelve, all in atlas, and one has exited\./);
+  assert.match(await head.innerText(), /of 8 cores/);
+  // In the columns of its lines.
+  const columns = (el) => el.evaluate((n) => [...n.children].slice(1, 5).map((c) => Math.round(c.getBoundingClientRect().left)));
+  const line = atlas.locator('.compose .line').first();
+  assert.deepEqual(await columns(head), await columns(line));
+  // Scrolled down its lines, it stays at the top of the window.
+  await atlas.locator('.line').last().scrollIntoViewIfNeeded();
+  assert.equal(Math.round(await head.evaluate((el) => el.getBoundingClientRect().top)), 0);
+  // Its chevron folds its lines away, for next time too; the heading keeps its figures.
+  const fold = head.getByRole('button', { name: "Fold atlas's containers away" });
+  await fold.click();
+  await atlas.locator('.line').first().waitFor({ state: 'detached' });
+  assert.equal(await head.getByRole('button', { name: "Show atlas's containers" }).getAttribute('aria-expanded'), 'false');
+  assert.match(await head.innerText(), /of 8 cores/);
+  await page.reload();
+  await page.locator('.line').first().waitFor();
+  assert.equal(await atlas.locator('.line').count(), 0);
+  // Narrowed to it, or searched, its lines are listed, as its heading alone would answer nothing.
+  await page.getByPlaceholder(/^Search/).fill('postgres');
+  await atlas.locator('.line').first().waitFor();
+  await page.getByPlaceholder(/^Search/).fill('');
+  await atlas.locator('.line').first().waitFor({ state: 'detached' });
+  await page.goto(page.url() + '?vm=atlas');
+  await atlas.locator('.line').first().waitFor();
+  // Its name is still the way to its page, not a fold.
+  await atlas.locator('h2 a').click();
+  await page.waitForURL(/\/vm\/atlas$/);
+  assert.deepEqual(errors, []);
+  await close();
+});
+
+test("A VM's folds are each page's own: folded on Containers, its images are still listed", async () => {
+  const { page, errors, close } = await open('/containers', { init: () => localStorage.setItem('folded-vms:containers', '["harbor"]') });
+  const harbor = page.locator('section', { has: page.locator('h2 a', { hasText: 'harbor' }) });
+  await harbor.getByRole('group', { name: 'VM harbor' }).waitFor();
+  assert.equal(await harbor.locator('.line').count(), 0);
+  await page.locator('nav').getByRole('link', { name: 'Images' }).click();
+  const images = page.locator('section', { has: page.locator('h2 a', { hasText: 'harbor' }) });
+  await images.locator('.line', { hasText: 'valkey' }).waitFor();
+  assert.deepEqual(errors, []);
+  await close();
+});
+
 test("A project's lines hang in a bracket in the gutter, in the columns of the lines in no project", async () => {
   const { page, errors, close } = await open('/containers');
   const atlas = page.locator('section', { has: page.locator('h2 a', { hasText: 'atlas' }) });

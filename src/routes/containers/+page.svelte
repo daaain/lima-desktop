@@ -13,13 +13,14 @@
   import ContainerLine from '$lib/ContainerLine.svelte';
   import ContainerDetail from '$lib/ContainerDetail.svelte';
   import ProjectGroup from '$lib/ProjectGroup.svelte';
+  import VmHead from '$lib/VmHead.svelte';
   import UnlistedVms from '$lib/UnlistedVms.svelte';
   import VmSelect from '$lib/VmSelect.svelte';
   import OrderPicker from '$lib/OrderPicker.svelte';
   import SortHead from '$lib/SortHead.svelte';
   import { glide, unfold } from '$lib/motion';
   import { Ordering } from '$lib/ordering.svelte';
-  import { folds } from '$lib/folds.svelte';
+  import { folds, vmFolds } from '$lib/folds.svelte';
   import { listsLines } from '$lib/folds';
 
   let query = $state('');
@@ -34,7 +35,8 @@
   const scope = $derived(podmanScope(live.snapshot));
   const all = $derived(containerRows(live.snapshot));
   const rows = $derived(filterContainers(all, { ...urlFilter, query }));
-  // A folded project lists its lines while a search is typed: what it finds is never hidden.
+  // A folded VM or project lists its lines while a search is typed: what it finds is never hidden.
+  // A VM's are listed too when the list is narrowed to it, which would otherwise be its heading alone.
   const searching = $derived(query.trim() !== '');
   // Every container of each compose project, keyed `vm/project`, whatever the filter: a project's
   // heading describes the whole project, as its range (compose_series) does, and the filter only
@@ -141,21 +143,26 @@
   <div class="lines">
     {#each groups as g (g.vm)}
       <section animate:glide>
-        <h2 class="head"><a href={`/vm/${encodeURIComponent(g.vm)}`}>{g.vm}</a> {runsSentence(g.rows.map((r) => r.c))}</h2>
-        {#each g.projects as p (p.project)}
-          <div animate:glide>
-            {#if p.project}
-              {@const project = p.project}
-              <ProjectGroup {project} containers={projectContainers.get(keyOf(g.vm, project)) ?? []} history={history.get({ vm: g.vm, project })}
-                vmHistory={history.get(g.live?.entity)} vmMemory={g.live?.instance.memory ?? 0} vmCpus={g.live?.instance.cpus ?? 1}
-                folded={folds.has(g.vm, project)} ontoggle={() => folds.toggle(g.vm, project)} listed={listsLines({ folded: folds.has(g.vm, project), searching })}>
-                {@render lines(g, p.rows)}
-              </ProjectGroup>
-            {:else}
-              <div class="rows">{@render lines(g, p.rows)}</div>
-            {/if}
-          </div>
-        {/each}
+        <VmHead vm={g.vm} live={g.live} sentence={runsSentence(g.rows.map((r) => r.c))} history={history.get(g.live?.entity)}
+          folded={vmFolds.containers.has(g.vm)} ontoggle={() => vmFolds.containers.toggle(g.vm)} />
+        {#if listsLines({ folded: vmFolds.containers.has(g.vm), searching: searching || urlFilter.vm != null })}
+        <div class="vm-lines" transition:unfold>
+          {#each g.projects as p (p.project)}
+            <div animate:glide>
+              {#if p.project}
+                {@const project = p.project}
+                <ProjectGroup {project} containers={projectContainers.get(keyOf(g.vm, project)) ?? []} history={history.get({ vm: g.vm, project })}
+                  vmHistory={history.get(g.live?.entity)} vmMemory={g.live?.instance.memory ?? 0} vmCpus={g.live?.instance.cpus ?? 1}
+                  folded={folds.has(g.vm, project)} ontoggle={() => folds.toggle(g.vm, project)} listed={listsLines({ folded: folds.has(g.vm, project), searching })}>
+                  {@render lines(g, p.rows)}
+                </ProjectGroup>
+              {:else}
+                <div class="rows">{@render lines(g, p.rows)}</div>
+              {/if}
+            </div>
+          {/each}
+        </div>
+        {/if}
       </section>
     {/each}
   </div>
@@ -176,9 +183,11 @@
   .lines, .containers-grid { --container-columns: minmax(13rem, 1.3fr) minmax(9rem, 1fr) 9.5rem minmax(7rem, 0.6fr) 5.5rem 6.5rem 10rem; }
   .containers-grid { grid-template-columns: var(--container-columns); column-gap: 1.4rem; margin-top: 0.3rem; } /* 0.3rem less: SortHead's min-height */
   .lines { display: grid; gap: 2.2rem; }
-  section { border-top: 1px solid var(--fg); padding-top: 0.8rem; border-bottom: 1px solid var(--border); }
+  section { border-top: 1px solid var(--fg); border-bottom: 1px solid var(--border); }
   section:first-child { border-top: 0; }
-  .head a { color: var(--fg); font-weight: 600; }
+  /* The VM's heading has the rule over its first line or project. */
+  .vm-lines > div:first-child > .rows > div:first-child > :global(.line),
+  .vm-lines > div:first-child > :global(.compose) > :global(.project) { border-top: 0; }
   .narrow-order { display: none; }
   @media (max-width: 860px) {
     .column-heads { display: none; }

@@ -84,7 +84,8 @@ Two levels, kept apart in the masthead (`lib/Masthead.svelte`): **VMs** (`routes
 | `lib/order.ts`, `lib/ordering.svelte.ts` | ordering a list by a column, the natural way or reversed, and a list's order as a page holds it (kept in the webview's storage) |
 | `lib/vmSort.ts`, `lib/itemOrder.ts`, `containers.ts` | each list's columns and how they compare: the VMs; images and volumes; containers |
 | `lib/ProjectHead.svelte`, `lib/ProjectGroup.svelte` | a compose project's heading row (its sums in the lines' columns; a click folds it), and the project as a group: the heading, its lines unless folded, and the bracket down their left, hung in the gutter |
-| `lib/folds.ts`, `lib/folds.svelte.ts` | which compose projects are folded on Containers and a VM's page (one set for both, by VM and project, kept in the webview's storage), and that a search lists a folded project's lines |
+| `lib/folds.ts`, `lib/folds.svelte.ts`, `lib/FoldMark.svelte` | what is folded, kept in the webview's storage: compose projects (one set for Containers and a VM's page, by VM and project) and VMs (a set per page); that a search lists a folded group's lines; the chevron |
+| `lib/VmHead.svelte` | a VM's heading on Containers: its name and sentence, its memory and CPU in the lines' columns, pinned at the top of the window while its lines scroll; a click folds it |
 | `lib/SortHead.svelte`, `lib/OrderPicker.svelte` | a column head that orders its list; the same in words where the heads are hidden |
 | `lib/perVm.ts` | which VMs a podman-wide view lists (and the sentences about those it leaves out); asking each VM with `Promise.allSettled`, so one broken VM doesn't blank a list |
 | `lib/perVmList.svelte.ts`, `lib/podmanLists.svelte.ts` | images and volumes aren't in the snapshot: fetched from the start (the layout follows them, and measures each VM once), kept for the app's life so their views open on what's known, again after actions, on Refresh and every 15 s |

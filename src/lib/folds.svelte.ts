@@ -1,30 +1,30 @@
-// The compose projects folded on Containers and a VM's page, one set for both, kept for next time.
+// What is folded, kept for next time: compose projects (one set for Containers and a VM's page) and
+// VMs (a set per page, as Containers, Images and Volumes ask different things of the same VM).
 import { foldKey, formatFolds, parseFolds } from './folds';
 
-const STORE = 'folded-projects';
-
-function load(): Set<string> {
-  try {
-    return parseFolds(localStorage.getItem(STORE));
-  } catch {
-    return new Set(); // Not readable: all unfolded.
-  }
-}
-
 class Folds {
-  #folded = $state(load());
+  #folded: Set<string> = $state(new Set());
 
-  has(vm: string, project: string) {
-    return this.#folded.has(foldKey(vm, project));
+  constructor(private store: string) {
+    try {
+      this.#folded = parseFolds(localStorage.getItem(store));
+    } catch {
+      // Not readable: all unfolded.
+    }
   }
 
-  toggle(vm: string, project: string) {
-    const key = foldKey(vm, project);
+  /** Whether it's folded: a VM by its name, a project by its VM and its name. */
+  has(...parts: string[]) {
+    return this.#folded.has(foldKey(...parts));
+  }
+
+  toggle(...parts: string[]) {
+    const key = foldKey(...parts);
     const next = new Set(this.#folded);
     if (!next.delete(key)) next.add(key);
     this.#folded = next;
     try {
-      localStorage.setItem(STORE, formatFolds(next));
+      localStorage.setItem(this.store, formatFolds(next));
     } catch {
       // Not kept: the fold still holds until the app closes.
     }
@@ -32,4 +32,11 @@ class Folds {
 }
 
 /** Shared, so folding a project on one page folds it on the other. */
-export const folds = new Folds();
+export const folds = new Folds('folded-projects');
+
+/** Each page's own folded VMs. */
+export const vmFolds = {
+  containers: new Folds('folded-vms:containers'),
+  images: new Folds('folded-vms:images'),
+  volumes: new Folds('folded-vms:volumes'),
+};

@@ -2,6 +2,9 @@ import { describe, expect, it } from 'vitest';
 import { foldKey, formatFolds, listsLines, parseFolds } from './folds';
 
 describe('foldKey', () => {
+  it('names a VM by itself, as each page keeps its own folded VMs', () => {
+    expect(foldKey('tangible')).toBe('tangible');
+  });
   it('names a project by its VM, as two VMs can each run a project of the same name', () => {
     expect(foldKey('tangible', 'shop')).toBe('tangible/shop');
     expect(foldKey('quill', 'shop')).not.toBe(foldKey('tangible', 'shop'));

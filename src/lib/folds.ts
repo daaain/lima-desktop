@@ -1,7 +1,8 @@
-// Folded compose projects: which ones, as kept in the webview's storage, and when their lines are listed.
+// Folded VMs and compose projects: which ones, as kept in the webview's storage, and when their lines are listed.
 
-/** A project as its fold is kept: by its VM too, as two VMs can each run a project of one name. */
-export const foldKey = (vm: string, project: string) => `${vm}/${project}`;
+/** What is folded, as its fold is kept: a VM by its name; a project by its VM too, as two VMs can
+ * each run a project of one name. */
+export const foldKey = (...parts: string[]) => parts.join('/');
 
 /** The folds kept last time (a JSON list of `foldKey`s); none from anything else. */
 export function parseFolds(saved: string | null): Set<string> {
