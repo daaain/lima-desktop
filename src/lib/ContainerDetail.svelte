@@ -64,15 +64,23 @@
     <button onclick={onclose} aria-label="Close">✕</button>
   </div>
   {#if ports.length}
-    <p class="ports">
+    <div class="ports num">
       <span class="muted">ports</span>
-      {#each ports as p}
-        <span class="port num">
-          {#if p.href && running}<button class="link" title="Open {p.href} in your browser" onclick={() => openUrl(p.href!)}>{p.host}</button>{:else}{p.host}{/if}
-          <span class="muted">→ {p.inside}</span>
-        </span>
-      {/each}
-    </p>
+      <ul>
+        {#each ports as p}
+          <li>
+            {p.inside} <span class="muted">→</span>
+            {#if p.urls.length && running}
+              {#each p.urls as url, i}
+                {#if i}{" "}<span class="muted">|</span>{" "}{/if}
+                <button class="link" title="Open {url} in your browser" onclick={() => openUrl(url)}>{url}</button>
+              {/each}
+              {#if p.spans}<span class="muted">(of {p.host})</span>{/if}
+            {:else}{p.host}{/if}
+          </li>
+        {/each}
+      </ul>
+    </div>
   {/if}
   {#if error}<p class="error">{error}</p>{/if}
   {#if tab === 'metrics'}
@@ -117,7 +125,8 @@
   .spacer { flex: 1; }
   .ports .link { height: auto; padding: 0; border: none; border-radius: 0; background: none; font: inherit; color: var(--accent); }
   .ports .link:hover { text-decoration: underline; }
-  .ports { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.3rem 1rem; margin: 0; font-size: 0.85rem; }
+  .ports { display: flex; align-items: baseline; gap: 0.75rem; font-size: 0.85rem; }
+  .ports ul { display: grid; gap: 0.15rem; margin: 0; padding: 0; list-style: none; }
   .muted { color: var(--muted); font-size: 0.8rem; }
   .head button { height: 1.9rem; padding: 0 0.8rem; font-size: 0.82rem; }
   .self { display: grid; gap: 0.2rem; max-width: 36rem; --bar-height: 7px; }

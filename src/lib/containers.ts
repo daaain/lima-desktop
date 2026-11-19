@@ -64,30 +64,32 @@ export const CONTAINER_ORDER: Record<ContainerSort, Compare<ContainerLive>> = {
   up: most(up, lineName),
 };
 
-/** A published port as the detail says it: where on this machine (`host`), what in the container
- *  (`inside`), and what to open in the browser, if anything can be. */
+/** A published port as the detail says it: what in the container (`inside`), where on this
+ *  machine (`host`; several ports when it `spans` a range), and what to open in the browser: its
+ *  first port by either scheme, as nothing here says which one it speaks. None when it can't be. */
 export interface PortLink {
-  host: string;
   inside: string;
-  href: string | null;
+  host: string;
+  spans: boolean;
+  urls: string[];
 }
 
 // The guest addresses Lima's default rule forwards to this machine's localhost, at the same port.
 const FORWARDED = new Set(['', '0.0.0.0', '::', '127.0.0.1']);
 const span = (from: number, n: number) => (n > 1 ? `${from}–${from + n - 1}` : `${from}`);
 
-/** `ports` as links, in host port order. A port bound to another guest address isn't forwarded,
- *  and a browser can only open TCP, so those are said but not linked. */
+/** `ports` as links, in the container's port order. A port bound to another guest address isn't
+ *  forwarded, and a browser can only open TCP, so those are said but not linked. */
 export const portLinks = (ports: Port[]): PortLink[] =>
   [...ports]
-    .sort((a, b) => a.hostPort - b.hostPort)
+    .sort((a, b) => a.containerPort - b.containerPort || a.hostPort - b.hostPort)
     .map((p) => {
       const forwarded = FORWARDED.has(p.hostIp);
-      const at = forwarded ? 'localhost' : p.hostIp;
       return {
-        host: `${at}:${span(p.hostPort, p.range)}`,
         inside: `${span(p.containerPort, p.range)}/${p.protocol}`,
-        href: forwarded && p.protocol === 'tcp' ? `http://localhost:${p.hostPort}` : null,
+        host: `${forwarded ? 'localhost' : p.hostIp}:${span(p.hostPort, p.range)}`,
+        spans: p.range > 1,
+        urls: forwarded && p.protocol === 'tcp' ? ['http', 'https'].map((s) => `${s}://localhost:${p.hostPort}`) : [],
       };
     });
 
