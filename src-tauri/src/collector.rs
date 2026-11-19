@@ -965,9 +965,6 @@ pub fn container_row(
     ]
 }
 
-/// Whether the probe's cgroup readings, from its block at `at`, still stand at `now`: within three
-/// of its intervals (at least 5 s). A probe that has stopped, or stalled, would otherwise have its
-/// last readings stored again with every stats tick, as if they were new.
 /// What a container podman's stats don't list (it isn't running) still holds, as its `latest`: a
 /// paused one keeps its memory, so its own (anon + shmem) from the probe's reading of its cgroup,
 /// for the overview's split to count with the containers'; a stopped one holds nothing.
@@ -978,6 +975,9 @@ fn latest_not_running(state: &str, cgroup: Option<&Cgroup>) -> HashMap<String, i
     }
 }
 
+/// Whether the probe's cgroup readings, from its block at `at`, still stand at `now`: within three
+/// of its intervals (at least 5 s). A probe that has stopped, or stalled, would otherwise have its
+/// last readings stored again with every stats tick, as if they were new.
 fn cgroups_fresh(at: Option<Instant>, now: Instant, interval_secs: u64) -> bool {
     let within = Duration::from_secs((3 * interval_secs).max(5));
     at.is_some_and(|at| now.saturating_duration_since(at) <= within)
@@ -1007,6 +1007,11 @@ fn project_sums<P: Into<String>>(rows: impl IntoIterator<Item = (P, Vec<i64>)>) 
 
 #[cfg(test)]
 mod tests {
+    use super::{ABSENT, CT_METRICS, cgroups_fresh, latest_not_running, project_sums};
+    use crate::probe::Cgroup;
+    use std::collections::HashMap;
+    use std::time::{Duration, Instant};
+
     #[test]
     fn a_paused_container_keeps_its_own_memory_from_the_probe_and_a_stopped_one_nothing() {
         let cg = Cgroup { peak: Some(9), oom_kills: Some(0), own: Some(2048) };
@@ -1015,9 +1020,6 @@ mod tests {
         assert!(latest_not_running("paused", None).is_empty(), "no fresh reading");
         assert!(latest_not_running("paused", Some(&Cgroup { own: None, ..cg })).is_empty(), "an older probe");
     }
-
-    use super::{ABSENT, CT_METRICS, cgroups_fresh, project_sums};
-    use std::time::{Duration, Instant};
 
     #[test]
     fn a_probe_s_cgroup_readings_go_stale_when_its_blocks_stop() {

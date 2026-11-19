@@ -92,7 +92,8 @@ export interface Running {
  *
  * Neither is split for a VM with no containers holding any, where it would all be outside them, nor
  * where the VM has no reading, nor while podman can't be read (its containers' readings are the
- * last it gave). A paused container's own memory is the probe's, as podman's stats leave it out. Memory isn't where one of them has no reading of its own. CPU isn't
+ * last it gave). A paused container's own memory is the probe's, as podman's stats leave it out.
+ * Memory isn't split where one of them has no reading of its own. CPU isn't split
  * while none of the running ones has a reading (just after the app starts); one with none yet while
  * others have (it just started, or was recreated, as a container that keeps restarting mostly is)
  * counts as using nothing, which is near enough. The VM and its containers are read a moment apart,
