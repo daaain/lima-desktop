@@ -213,6 +213,7 @@
         }),
         service('harbor', 'app', 'docker.io/library/node:24-trixie-slim', {
           memMiB: 900, limitMiB: 1024, peak: 1.13, oomKills: 1, cpu: shapes.bursty(0.2, 1.1, 0.4), upHours: 3, silent: HARBOR_SILENT,
+          ports: [{ hostIp: '', hostPort: 5199, containerPort: 8080, range: 1, protocol: 'tcp' }],
         }),
         service('harbor', 'cache', 'docker.io/library/valkey:8', { memMiB: 64, silent: HARBOR_SILENT }),
       ],

@@ -966,10 +966,11 @@ test("A container's detail says what it publishes, and opens a TCP port in the b
     [
       '53/udp → localhost:5353',
       '3000/tcp → http://localhost:3000 | https://localhost:3000',
-      '5199/tcp → http://localhost:5199 | https://localhost:5199',
+      '5199/tcp → localhost:5199 (harbor publishes it too)',
     ],
   );
   assert.equal(await ports.first().getByRole('button').count(), 0, 'a UDP port is said, not linked');
+  assert.equal(await ports.nth(2).getByRole('button').count(), 0, "one another VM publishes too isn't linked");
   await ports.nth(1).getByRole('button', { name: 'https://localhost:3000' }).click();
   await page.waitForFunction(() => window.__fakeCalls.some((c) => c.cmd === 'open_url'));
   assert.equal((await page.evaluate(() => window.__fakeCalls.find((c) => c.cmd === 'open_url'))).args.url, 'https://localhost:3000');

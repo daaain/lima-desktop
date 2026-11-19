@@ -3,7 +3,8 @@
   import { bytes, cpuLabel } from './format';
   import { band, ownLimit, selfMemory } from './almanac';
   import { inOrder } from './inOrder';
-  import { portLinks } from './containers';
+  import { portLinks, portsElsewhere } from './containers';
+  import { live } from './live.svelte';
   import { openUrl } from '@tauri-apps/plugin-opener';
   import type { RangeKey } from './ranges';
   import Bar from './Bar.svelte';
@@ -19,7 +20,7 @@
     oomMarkers?: { ts: number; label: string }[];
     onclose: () => void;
   } = $props();
-  const ports = $derived(portLinks(c.ports));
+  const ports = $derived(portLinks(c.ports, portsElsewhere(live.snapshot, vm)));
   // A stopped container's ports are only what it would publish: nothing answers there to open.
   const running = $derived(c.state === 'running');
   const limit = $derived(ownLimit(c.latest.mem_limit, vmMemory));
@@ -76,7 +77,9 @@
                 <button class="link" title="Open {url} in your browser" onclick={() => openUrl(url)}>{url}</button>
               {/each}
               {#if p.spans}<span class="muted">(of {p.host})</span>{/if}
-            {:else}{p.host}{/if}
+            {:else}{p.host}
+              {#if p.alsoOn}<span class="muted" title="Only one VM can hold a port on this machine, so a link might open {p.alsoOn}'s service">({p.alsoOn} publishes it too)</span>{/if}
+            {/if}
           </li>
         {/each}
       </ul>
