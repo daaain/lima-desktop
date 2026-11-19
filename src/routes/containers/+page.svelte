@@ -6,19 +6,22 @@
   import { History } from '$lib/history.svelte';
   import { range, rangeWindow } from '$lib/range.svelte';
   import { theLast } from '$lib/ranges';
-  import { BY_MEMORY, CONTAINER_COLUMNS, CONTAINER_SORTS, containerRows, filterContainers, groupContainers, lineHistory, readContainerFilter, type ContainerSort } from '$lib/containers';
+  import { BY_MEMORY, CONTAINER_COLUMNS, CONTAINER_SORTS, containerRows, filterContainers, groupContainers, lineHistory, readContainerFilter, type ContainerRow, type ContainerSort } from '$lib/containers';
   import type { ContainerLive } from '$lib/api';
   import { podmanFailures, podmanScope } from '$lib/perVm';
   import { withParam } from '$lib/url';
   import ContainerLine from '$lib/ContainerLine.svelte';
   import ContainerDetail from '$lib/ContainerDetail.svelte';
-  import ProjectHead from '$lib/ProjectHead.svelte';
+  import ProjectGroup from '$lib/ProjectGroup.svelte';
+  import VmHead from '$lib/VmHead.svelte';
   import UnlistedVms from '$lib/UnlistedVms.svelte';
   import VmSelect from '$lib/VmSelect.svelte';
   import OrderPicker from '$lib/OrderPicker.svelte';
   import SortHead from '$lib/SortHead.svelte';
   import { glide, unfold } from '$lib/motion';
   import { Ordering } from '$lib/ordering.svelte';
+  import { folds, vmFolds } from '$lib/folds.svelte';
+  import { listsLines } from '$lib/folds';
 
   let query = $state('');
   let actionError = $state<string | null>(null);
@@ -32,6 +35,9 @@
   const scope = $derived(podmanScope(live.snapshot));
   const all = $derived(containerRows(live.snapshot));
   const rows = $derived(filterContainers(all, { ...urlFilter, query }));
+  // A folded VM or project lists its lines while a search is typed: what it finds is never hidden.
+  // A VM's are listed too when the list is narrowed to it, which would otherwise be its heading alone.
+  const searching = $derived(query.trim() !== '');
   // Every container of each compose project, keyed `vm/project`, whatever the filter: a project's
   // heading describes the whole project, as its range (compose_series) does, and the filter only
   // decides which of its lines are listed under it.
@@ -120,30 +126,44 @@
     <span></span>
   </div>
   <div class="narrow-order"><OrderPicker columns={CONTAINER_COLUMNS} {ordering} /></div>
+  {#snippet lines(g: (typeof groups)[number], rows: ContainerRow[])}
+    {#each rows as { vm, c } (c.id)}
+      {@const key = keyOf(vm, c.id)}
+      <div animate:glide>
+        <ContainerLine {vm} {c} history={history.get(lineHistory(vm, c))} vmHistory={history.get(g.live?.entity)} vmCpus={g.live?.instance.cpus ?? 1} vmMemory={g.live?.instance.memory ?? 0} second="image"
+          now={live.snapshot?.updated} selected={key in open} onselect={() => toggle(key)} onerror={(e) => (actionError = e)} />
+        {#if open[key] != null}
+          <div transition:unfold>
+            <ContainerDetail {vm} {c} from={span.from} to={span.to} over={range.key} vmMemory={g.live?.instance.memory ?? 0} onclose={() => close(key)} />
+          </div>
+        {/if}
+      </div>
+    {/each}
+  {/snippet}
   <div class="lines">
     {#each groups as g (g.vm)}
+      {@const listed = listsLines({ folded: vmFolds.containers.has(g.vm), searching: searching || urlFilter.vm != null })}
       <section animate:glide>
-        <h2 class="head"><a href={`/vm/${encodeURIComponent(g.vm)}`}>{g.vm}</a> {runsSentence(g.rows.map((r) => r.c))}</h2>
-        {#each g.projects as p (p.project)}
-          <div animate:glide>
-            {#if p.project}
-              <ProjectHead project={p.project} containers={projectContainers.get(keyOf(g.vm, p.project)) ?? []} history={history.get({ vm: g.vm, project: p.project })}
-                vmHistory={history.get(g.live?.entity)} vmMemory={g.live?.instance.memory ?? 0} vmCpus={g.live?.instance.cpus ?? 1} />
-            {/if}
-            {#each p.rows as { vm, c } (c.id)}
-              {@const key = keyOf(vm, c.id)}
-              <div animate:glide>
-                <ContainerLine {vm} {c} history={history.get(lineHistory(vm, c))} vmHistory={history.get(g.live?.entity)} vmCpus={g.live?.instance.cpus ?? 1} vmMemory={g.live?.instance.memory ?? 0} second="image"
-                  now={live.snapshot?.updated} selected={key in open} onselect={() => toggle(key)} onerror={(e) => (actionError = e)} />
-                {#if open[key] != null}
-                  <div transition:unfold>
-                    <ContainerDetail {vm} {c} from={span.from} to={span.to} over={range.key} vmMemory={g.live?.instance.memory ?? 0} onclose={() => close(key)} />
-                  </div>
-                {/if}
-              </div>
-            {/each}
-          </div>
-        {/each}
+        <VmHead vm={g.vm} live={g.live} sentence={runsSentence(g.rows.map((r) => r.c))} history={history.get(g.live?.entity)}
+          folded={vmFolds.containers.has(g.vm)} listed={listed} now={live.snapshot?.updated} ontoggle={() => vmFolds.containers.toggle(g.vm)} />
+        {#if listed}
+        <div class="vm-lines" transition:unfold>
+          {#each g.projects as p (p.project)}
+            <div animate:glide>
+              {#if p.project}
+                {@const project = p.project}
+                <ProjectGroup {project} containers={projectContainers.get(keyOf(g.vm, project)) ?? []} history={history.get({ vm: g.vm, project })}
+                  vmHistory={history.get(g.live?.entity)} vmMemory={g.live?.instance.memory ?? 0} vmCpus={g.live?.instance.cpus ?? 1}
+                  folded={folds.has(g.vm, project)} ontoggle={() => folds.toggle(g.vm, project)} listed={listsLines({ folded: folds.has(g.vm, project), searching })}>
+                  {@render lines(g, p.rows)}
+                </ProjectGroup>
+              {:else}
+                <div class="rows">{@render lines(g, p.rows)}</div>
+              {/if}
+            </div>
+          {/each}
+        </div>
+        {/if}
       </section>
     {/each}
   </div>
@@ -164,9 +184,11 @@
   .lines, .containers-grid { --container-columns: minmax(13rem, 1.3fr) minmax(9rem, 1fr) 9.5rem minmax(7rem, 0.6fr) 5.5rem 6.5rem 10rem; }
   .containers-grid { grid-template-columns: var(--container-columns); column-gap: 1.4rem; margin-top: 0.3rem; } /* 0.3rem less: SortHead's min-height */
   .lines { display: grid; gap: 2.2rem; }
-  section { border-top: 1px solid var(--fg); padding-top: 0.8rem; border-bottom: 1px solid var(--border); }
+  section { border-top: 1px solid var(--fg); border-bottom: 1px solid var(--border); }
   section:first-child { border-top: 0; }
-  .head a { color: var(--fg); font-weight: 600; }
+  /* The VM's heading has the rule over its first line or project. */
+  .vm-lines > div:first-child > .rows > div:first-child > :global(.line),
+  .vm-lines > div:first-child > :global(.compose) > :global(.project) { border-top: 0; }
   .narrow-order { display: none; }
   @media (max-width: 860px) {
     .column-heads { display: none; }

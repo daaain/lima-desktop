@@ -158,10 +158,10 @@ for (const dark of [false, true]) {
     assert.match(await page.locator('p.lede').innerText(), /^quill's disk is past three quarters\. Three unused images are dangling/);
     // The fullest disk leads, and within it what no container uses.
     const quill = page.locator('section').first();
-    assert.match(await quill.locator('h2').innerText(), /^quill holds four images; two aren't used\.$/);
+    assert.match(await quill.locator('h2').innerText(), /^quill\s+holds four images; two aren't used\.$/);
     assert.match(await quill.locator('.line').first().innerText(), /untagged[\s\S]*no container/);
     // An old podman's VM: no containers in the snapshot, but its engine counts the one on alpine.
-    assert.match(await page.locator('section', { hasText: 'ember' }).innerText(), /ember holds one image, in use\./);
+    assert.match(await page.locator('section', { hasText: 'ember' }).innerText(), /ember\s+holds one image, in use\./);
     // Measured as the app starts, it says what removing the unused would free.
     await page.getByText('would free at least').waitFor();
     assert.match(await page.locator('p.lede').innerText(), /Removing the unused ones would free at least 6\.3 GiB\./);
@@ -182,7 +182,7 @@ for (const dark of [false, true]) {
     assert.equal(await page.getByRole('heading', { level: 1 }).innerText(), "Four of 11 volumes aren't used by any container.");
     assert.equal(await page.locator('p.lede').innerText(), "quill's disk is past three quarters. Removing the unused ones would free 8.1 GiB.");
     const quill = page.locator('section').first();
-    assert.match(await quill.locator('h2').innerText(), /^quill holds three volumes; two aren't used\.$/);
+    assert.match(await quill.locator('h2').innerText(), /^quill\s+holds three volumes; two aren't used\.$/);
     assert.match(await quill.locator('.line').first().innerText(), /quill_target[\s\S]*6\.2 GiB[\s\S]*no container/);
     assert.equal((await sizeCell().boundingBox()).x, (await sizeHead.boundingBox()).x);
     await shoot(page, `volumes${suffix}`);
@@ -881,25 +881,216 @@ test("A project's heading describes the whole project whatever the filter leaves
   await close();
 });
 
-for (const dark of [false, true]) {
-  test(`A project's heading sits on a faint hatch, its charts on the page's own ground${dark ? ' (dark)' : ''}`, async () => {
-    const { page, errors, close } = await open('/containers', { dark });
-    const project = page.getByRole('group', { name: 'Compose project atlas' });
-    await project.locator('.share').waitFor();
-    // The popover's "everything else" diagonals, faint: it stands out from its lines as the list is scrolled.
-    assert.match(await project.evaluate((el) => getComputedStyle(el).backgroundImage), /^repeating-linear-gradient\(135deg/);
-    // Behind its charts, the page itself, so their shapes read as they do on a line.
-    const bg = await page.evaluate(() => getComputedStyle(document.body).backgroundColor);
-    for (const chart of ['.share', '.sketch']) {
-      assert.equal(await project.locator(chart).first().evaluate((el) => getComputedStyle(el).backgroundColor), bg, `${chart} on the page's ground`);
-    }
-    // Its first line hangs from it, and a line's hover stays the plain wash.
-    const line = project.locator('xpath=following-sibling::div[1]').locator('.line').first();
-    assert.equal(await line.evaluate((el) => getComputedStyle(el).backgroundImage), 'none');
-    assert.deepEqual(errors, []);
-    await close();
+test("A project's heading folds its lines away, kept for next time and on its VM's page too", async () => {
+  const { page, errors, close } = await open('/containers');
+  await page.locator('.line').first().waitFor();
+  const atlas = page.locator('section', { has: page.locator('h2 a', { hasText: 'atlas' }) });
+  const project = atlas.getByRole('group', { name: 'Compose project atlas' });
+  const fold = project.getByRole('button', { name: 'atlas' });
+  const lines = atlas.locator('.project + .rows .line');
+  assert.equal(await fold.getAttribute('aria-expanded'), 'true');
+  assert.equal(await lines.count(), 12);
+  // A click anywhere on the heading folds it; its sentence and sums stay.
+  await project.locator('.said').first().click();
+  await lines.first().waitFor({ state: 'detached' });
+  assert.equal(await fold.getAttribute('aria-expanded'), 'false');
+  assert.match(await project.innerText(), /^atlas\s+twelve running\b/);
+  // What is in no project is never folded.
+  assert.match(await atlas.locator('.line').first().innerText(), /^atlas-devbox/);
+  // A search lists what it finds in a folded project, and folds it again once cleared.
+  await page.getByPlaceholder(/^Search/).fill('postgres');
+  await lines.first().waitFor();
+  assert.equal(await lines.count(), 1);
+  await page.getByPlaceholder(/^Search/).fill('');
+  await lines.first().waitFor({ state: 'detached' });
+  // Kept for next time.
+  await page.reload();
+  await atlas.locator('.line').first().waitFor();
+  assert.equal(await fold.getAttribute('aria-expanded'), 'false');
+  assert.equal(await lines.count(), 0);
+  // Folded on the VM's page too, and unfolded there from the keyboard.
+  await atlas.locator('h2 a').click();
+  await page.waitForURL(/\/vm\/atlas$/);
+  const onVm = page.getByRole('group', { name: 'Compose project atlas' }).getByRole('button', { name: 'atlas' });
+  assert.equal(await onVm.getAttribute('aria-expanded'), 'false');
+  await onVm.focus();
+  await page.keyboard.press('Enter');
+  await page.locator('.project + .rows .line').first().waitFor();
+  assert.equal(await onVm.getAttribute('aria-expanded'), 'true');
+  assert.deepEqual(errors, []);
+  await close();
+});
+
+test("An OOM kill opens its container's detail even in a folded project, unfolding it", async () => {
+  const { page, errors, close } = await open('/vm/harbor', { init: () => localStorage.setItem('folded-projects', '["harbor/harbor"]') });
+  const fold = page.getByRole('group', { name: 'Compose project harbor' }).getByRole('button', { name: 'harbor' });
+  await fold.waitFor();
+  assert.equal(await fold.getAttribute('aria-expanded'), 'false');
+  // The kill in harbor's app (the stall's row is the devbox, in no project).
+  await page.locator('#oom tbody tr.clickable', { has: page.locator('.cname', { hasText: /^app$/ }) }).click();
+  await page.locator('[id^="detail-"]').waitFor();
+  assert.equal(await fold.getAttribute('aria-expanded'), 'true');
+  assert.deepEqual(errors, []);
+  await close();
+});
+
+test("A VM's heading on Containers draws its memory and CPU in the lines' columns, stays in view, and folds", async () => {
+  const { page, errors, close } = await open('/containers', { height: 700 });
+  const atlas = page.locator('section', { has: page.locator('h2 a', { hasText: 'atlas' }) });
+  const head = atlas.getByRole('group', { name: 'VM atlas' });
+  await head.getByRole('img', { name: /^atlas's memory: .+ of 47\.8 GiB, \d+ %$/ }).waitFor();
+  assert.match(await head.innerText(), /^atlas\s+runs twelve, all in atlas, and one has exited\./);
+  assert.match(await head.innerText(), /of 8 cores/);
+  // In the columns of its lines.
+  const columns = (el) => el.evaluate((n) => [...n.children].slice(1, 5).map((c) => Math.round(c.getBoundingClientRect().left)));
+  const line = atlas.locator('.compose .line').first();
+  assert.deepEqual(await columns(head), await columns(line));
+  // Scrolled down its lines, it stays at the top of the window.
+  await atlas.locator('.line').last().scrollIntoViewIfNeeded();
+  assert.equal(Math.round(await head.evaluate((el) => el.getBoundingClientRect().top)), 0);
+  // Its chevron folds its lines away, for next time too; the heading keeps its figures.
+  const fold = head.getByRole('button', { name: "Fold atlas's containers away" });
+  await fold.click();
+  await atlas.locator('.line').first().waitFor({ state: 'detached' });
+  assert.equal(await head.getByRole('button', { name: "Show atlas's containers" }).getAttribute('aria-expanded'), 'false');
+  assert.match(await head.innerText(), /of 8 cores/);
+  await page.reload();
+  await page.locator('.line').first().waitFor();
+  assert.equal(await atlas.locator('.line').count(), 0);
+  // Narrowed to it, or searched, its lines are listed, as its heading alone would answer nothing.
+  await page.getByPlaceholder(/^Search/).fill('postgres');
+  await atlas.locator('.line').first().waitFor();
+  await page.getByPlaceholder(/^Search/).fill('');
+  await atlas.locator('.line').first().waitFor({ state: 'detached' });
+  await page.goto(page.url() + '?vm=atlas');
+  await atlas.locator('.line').first().waitFor();
+  // Its name is still the way to its page, not a fold.
+  await atlas.locator('h2 a').click();
+  await page.waitForURL(/\/vm\/atlas$/);
+  assert.deepEqual(errors, []);
+  await close();
+});
+
+test("A VM's folds are each page's own: folded on Containers, its images are still listed", async () => {
+  const { page, errors, close } = await open('/containers', { init: () => localStorage.setItem('folded-vms:containers', '["harbor"]') });
+  const harbor = page.locator('section', { has: page.locator('h2 a', { hasText: 'harbor' }) });
+  await harbor.getByRole('group', { name: 'VM harbor' }).waitFor();
+  assert.equal(await harbor.locator('.line').count(), 0);
+  await page.locator('nav').getByRole('link', { name: 'Images' }).click();
+  const images = page.locator('section', { has: page.locator('h2 a', { hasText: 'harbor' }) });
+  await images.locator('.line', { hasText: 'valkey' }).waitFor();
+  assert.deepEqual(errors, []);
+  await close();
+});
+
+test("A VM's group on Images folds from its heading, but not from its clean-up, and Volumes keeps its own", async () => {
+  const { page, errors, close } = await open('/images');
+  const harbor = page.locator('section', { has: page.locator('h2 a', { hasText: 'harbor' }) });
+  await harbor.locator('.line', { hasText: 'valkey' }).waitFor();
+  const head = harbor.getByRole('group', { name: 'VM harbor' });
+  // Its clean-up acts on its own: opening it doesn't fold the group.
+  await head.getByRole('button', { name: /^Remove unused/ }).click();
+  await page.keyboard.press('Escape');
+  assert.ok(await harbor.locator('.line').count() > 0);
+  await head.getByRole('button', { name: "Fold harbor's images away" }).click();
+  await harbor.locator('.line').first().waitFor({ state: 'detached' });
+  assert.match(await head.innerText(), /of 59\.9 GiB disk/);
+  // Volumes folds its own VMs: harbor's volumes are still listed there.
+  await page.locator('nav').getByRole('link', { name: 'Volumes' }).click();
+  const volumes = page.locator('section', { has: page.locator('h2 a', { hasText: 'harbor' }) });
+  await volumes.locator('.line').first().waitFor();
+  assert.equal(await volumes.getByRole('button', { name: "Fold harbor's volumes away" }).getAttribute('aria-expanded'), 'true');
+  // And back on Images, still folded.
+  await page.locator('nav').getByRole('link', { name: 'Images' }).click();
+  await page.getByRole('group', { name: 'VM harbor' }).getByRole('button', { name: "Show harbor's images" }).waitFor();
+  assert.deepEqual(errors, []);
+  await close();
+});
+
+test("A stalled VM's heading on Containers says its figures are from before, and draws them quiet", async () => {
+  const { page, errors, close } = await open('/containers', { init: `window.__fakeStalled = { harbor: ${NOW.getTime() - 4 * 60_000} };` });
+  const head = page.getByRole('group', { name: 'VM harbor' });
+  await head.locator('.bar').first().waitFor();
+  assert.equal(await head.locator('.stalled').innerText(), "It hasn't answered for 4 min, though Lima still says it's running. Its figures are from before.");
+  assert.equal(await head.locator('.bar.quiet').count(), 2);
+  // One that answers is drawn as before.
+  const atlas = page.getByRole('group', { name: 'VM atlas' });
+  assert.equal(await atlas.locator('.stalled').count(), 0);
+  assert.equal(await atlas.locator('.bar.quiet').count(), 0);
+  assert.deepEqual(errors, []);
+  await close();
+});
+
+test("A folded group's chevron says it's listed while a search or the filter lists its lines, and folded again after", async () => {
+  const { page, errors, close } = await open('/containers', {
+    init: () => { localStorage.setItem('folded-projects', '["atlas/atlas"]'); localStorage.setItem('folded-vms:containers', '["harbor"]'); },
   });
-}
+  await page.locator('.line').first().waitFor();
+  const project = page.getByRole('group', { name: 'Compose project atlas' }).getByRole('button', { name: 'atlas' });
+  const harbor = page.getByRole('group', { name: 'VM harbor' }).locator('button.fold');
+  assert.equal(await project.getAttribute('aria-expanded'), 'false');
+  assert.equal(await harbor.getAttribute('aria-expanded'), 'false');
+  // A search lists atlas's postgres and harbor's valkey: both say so, and that they're folded.
+  await page.getByPlaceholder(/^Search/).fill('postgres');
+  await page.locator('.compose .line').first().waitFor();
+  assert.equal(await project.getAttribute('aria-expanded'), 'true');
+  assert.equal(await project.getAttribute('title'), 'Keep its containers shown: folded, listed for now');
+  assert.equal(await project.locator('.mark.folded').count(), 0);
+  await page.getByPlaceholder(/^Search/).fill('valkey');
+  await page.getByRole('group', { name: 'VM harbor' }).locator('xpath=following-sibling::*').locator('.line').first().waitFor();
+  assert.equal(await harbor.getAttribute('aria-expanded'), 'true');
+  assert.equal(await harbor.getAttribute('aria-label'), "Keep harbor's containers shown: folded, listed for now");
+  // Cleared, both are folded as they were kept.
+  await page.getByPlaceholder(/^Search/).fill('');
+  await page.locator('.compose .line').first().waitFor({ state: 'detached' });
+  assert.equal(await project.getAttribute('aria-expanded'), 'false');
+  assert.equal(await harbor.getAttribute('aria-expanded'), 'false');
+  assert.equal(await harbor.getAttribute('aria-label'), "Show harbor's containers");
+  // Images narrowed to a folded VM lists its images, and says so.
+  await page.evaluate(() => localStorage.setItem('folded-vms:images', '["harbor"]'));
+  await page.goto(page.url().replace(/\/containers.*$/, '/images?vm=harbor'));
+  const images = page.getByRole('group', { name: 'VM harbor' }).locator('button.fold');
+  await page.locator('.line', { hasText: 'valkey' }).waitFor();
+  assert.equal(await images.getAttribute('aria-expanded'), 'true');
+  assert.equal(await images.getAttribute('aria-label'), "Keep harbor's images shown: folded, listed for now");
+  assert.deepEqual(errors, []);
+  await close();
+});
+
+test("A project's lines hang in a bracket in the gutter, in the columns of the lines in no project", async () => {
+  const { page, errors, close } = await open('/containers');
+  const atlas = page.locator('section', { has: page.locator('h2 a', { hasText: 'atlas' }) });
+  const project = atlas.getByRole('group', { name: 'Compose project atlas' });
+  await project.locator('.share').waitFor();
+  // No texture: the heading is told apart by its name and the bracket.
+  assert.equal(await project.evaluate((el) => getComputedStyle(el).backgroundImage), 'none');
+  const bracket = await project.evaluate((el) => {
+    const b = getComputedStyle(el.parentElement, '::before');
+    return { left: parseFloat(b.borderLeftWidth) > 0, top: parseFloat(b.borderTopWidth) > 0, bottom: parseFloat(b.borderBottomWidth) > 0, right: parseFloat(b.borderRightWidth) > 0 };
+  });
+  // Open to the right: a bracket, not a box.
+  assert.deepEqual(bracket, { left: true, top: true, bottom: true, right: false });
+  // Hung in the gutter: a project's heading and lines start their columns where harbor-devbox's do,
+  // a running line in no project.
+  const harbor = page.locator('section', { has: page.locator('h2 a', { hasText: 'harbor' }) });
+  const columns = (line) => line.evaluate((el) => [...el.children].slice(0, 5).map((c) => Math.round(c.getBoundingClientRect().left)));
+  const loose = await columns(harbor.locator('.line', { hasText: 'harbor-devbox' }));
+  assert.deepEqual(await columns(harbor.locator('.compose .line').first()), loose);
+  assert.deepEqual(await columns(harbor.getByRole('group', { name: 'Compose project harbor' })), loose);
+  assert.deepEqual(errors, []);
+  await close();
+});
+
+test('On a narrow window a project indents its lines rather than hang its bracket in the thin gutter', async () => {
+  const { page, errors, close } = await open('/containers', { width: 420, height: 900 });
+  const group = page.locator('.compose').first();
+  await group.waitFor();
+  const [groupLeft, mainLeft] = await group.evaluate((el) => [el.getBoundingClientRect().left, document.querySelector('main').getBoundingClientRect().left]);
+  assert.equal(Math.round(groupLeft), Math.round(mainLeft));
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth), 420);
+  assert.deepEqual(errors, []);
+  await close();
+});
 
 test("A VM's memory and CPU bars on the overview split what its containers use from what runs outside them", async () => {
   const { page, errors, close } = await open('/');
@@ -965,7 +1156,8 @@ test("A VM's memory bar shows a card: its parts, what runs the VM parted, and wh
   // A container's memory bar has its card too, in place of the paragraph it had.
   await page.goto(page.url().replace(/\/$/, '/containers'));
   const line = page.locator('.line', { hasText: 'harbor-devbox' });
-  await line.locator('.bar').first().scrollIntoViewIfNeeded();
+  // In the middle of the window: just scrolled into view, it would sit under its VM's pinned heading.
+  await line.locator('.bar').first().evaluate((el) => el.scrollIntoView({ block: 'center' }));
   await page.waitForTimeout(100); // scrolling hides a tooltip: let it settle
   const bar = await line.locator('.bar').first().boundingBox();
   await page.mouse.move(bar.x + 1, bar.y + bar.height / 2);

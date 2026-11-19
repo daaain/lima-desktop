@@ -343,6 +343,8 @@
     return {
       vms: fleet.map((v) => ({
         ...v,
+        // A test can have a VM stop answering: { harbor: since }.
+        stalledSince: window.__fakeStalled?.[v.instance.name] ?? v.stalledSince,
         latest: v.entity ? latest(v.entity, t) : v.latest,
         containers: v.containers.map((c) => ({ ...c, latest: c.state === 'running' ? latest(c.entity, t) : {} })),
       })),

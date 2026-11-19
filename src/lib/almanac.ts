@@ -213,6 +213,10 @@ export function partsLabel(what: 'memory' | 'cpu', p: Part | undefined): string 
 }
 
 
+/** A VM that has stopped answering, said wherever its last figures are drawn: they're from before. */
+export const stalledSaid = (since: number, now: number = Date.now()) =>
+  `It hasn't answered for ${uptime(since / 1000, now)}, though Lima still says it's running. Its figures are from before.`;
+
 /**
  * One sentence about a running VM: its memory in quarters, then what else is worth a look. What
  * is now is said as now; processes killed are those in the range (`kills`, from its history), and
@@ -220,9 +224,7 @@ export function partsLabel(what: 'memory' | 'cpu', p: Part | undefined): string 
  */
 export function vmSentence(vm: VmLive, over: RangeKey, kills?: number, now: number = Date.now()): string {
   // Silent, its last reading says nothing about now: say so rather than describe it.
-  if (vm.stalledSince != null) {
-    return `It hasn't answered for ${uptime(vm.stalledSince / 1000, now)}, though Lima still says it's running. Its figures are from before.`;
-  }
+  if (vm.stalledSince != null) return stalledSaid(vm.stalledSince, now);
   const g = gauges(vm);
   const parts = [g.memory.used == null ? 'No memory reading yet.' : `${quarters(g.memory.pct)} of its memory is in use.`];
   if (g.disk.hot) parts.push('Its disk is past three quarters too.');
@@ -363,6 +365,14 @@ export function bandPeak(band: Band | undefined): number | undefined {
   let peak: number | undefined;
   for (const v of band?.max ?? []) if (v != null && (peak == null || v > peak)) peak = v;
   return peak;
+}
+
+/** A VM's heading over its containers: its memory in use now against what it has, as the overview
+ * says it, and its peak in the range (`history`, its `mem_used` band) once the history has one. */
+export function vmHeadMemory(vm: VmLive, history: Band | undefined, over: RangeKey) {
+  const g = gauges(vm).memory;
+  const peak = bandPeak(history);
+  return { figure: bytes(g.used), of: `of ${bytes(g.size)}`, pct: g.pct, hot: g.hot, peakSaid: peak == null ? '' : `peak ${bytes(peak)} ${inRange(over)}` };
 }
 
 /** How far a counter's band went up across it (a VM's OOM kills); undefined without a sample. */

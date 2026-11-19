@@ -46,9 +46,6 @@
     --accent: #1d4ed8; --warn: #a8430a; --alert: #b3261e; --ok: #14171c;
     --track: #e4e7ec; --bar: #4b5563; --soft: #aeb6c2; --grid: #eceef1; --panel: var(--bg);
     --series-1: #1d4ed8; --series-2: #a8430a; --series-3: #7a5fb5; --series-4: #4b5563;
-    /* The menu bar's "everything else" stroke mixed most of the way into the page: a texture, not a
-       stripe (a compose project's heading). Fainter on a dark page, where a texture stands out more. */
-    --hatch: color-mix(in srgb, var(--soft) 26%, var(--bg));
     --serif: 'Newsreader Variable', Georgia, 'Times New Roman', serif;
     --sans: 'Inter Variable', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
     color-scheme: light dark;
@@ -63,7 +60,6 @@
       --accent: #93b4ff; --warn: #ff9a52; --alert: #ff8a80; --ok: #eceef1;
       --track: #2a3038; --bar: #b4bcc8; --soft: #5b6573; --grid: #20252b;
       --series-1: #93b4ff; --series-2: #ff9a52; --series-3: #b9a4ee; --series-4: #b4bcc8;
-      --hatch: color-mix(in srgb, var(--soft) 20%, var(--bg));
     }
   }
   :global(:root[data-theme='dark']) {
@@ -71,7 +67,6 @@
     --accent: #93b4ff; --warn: #ff9a52; --alert: #ff8a80; --ok: #eceef1;
     --track: #2a3038; --bar: #b4bcc8; --soft: #5b6573; --grid: #20252b;
     --series-1: #93b4ff; --series-2: #ff9a52; --series-3: #b9a4ee; --series-4: #b4bcc8;
-    --hatch: color-mix(in srgb, var(--soft) 20%, var(--bg));
     color-scheme: dark;
   }
   :global(:root[data-theme='light']) { color-scheme: light; }
