@@ -160,7 +160,7 @@
 
   // Where its memory and CPU go now, as the overview's bars say it (almanac.containersPart).
   const parts = $derived(vm ? containersPart(vm) : {});
-  const memoryParts = $derived(vm && parts.memory ? memoryTip(name, gauges(vm).memory, parts.memory) : undefined);
+  const memoryParts = $derived(vm && parts.memory ? memoryTip(name, gauges(vm).memory, parts.memory, vm.instance.vmType) : undefined);
   const cpuParts = $derived(vm && parts.cpu ? cpuTip(name, gauges(vm).cpu, parts.cpu, vm.instance.cpus) : undefined);
 
   const ordering = new Ordering('vm-containers', CONTAINER_SORTS, BY_MEMORY);

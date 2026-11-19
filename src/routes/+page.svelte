@@ -126,7 +126,7 @@
         {@const ctRunning = vm.containers.filter((c) => c.state === 'running').length}
         {@const issues = problems(vm)}
         {@const parts = containersPart(vm)}
-        {@const memTip = parts.memory && memoryTip(i.name, g.memory, parts.memory)}
+        {@const memTip = parts.memory && memoryTip(i.name, g.memory, parts.memory, i.vmType)}
         {@const cpuCard = parts.cpu && cpuTip(i.name, g.cpu, parts.cpu, i.cpus)}
         <article class="row vm" animate:glide>
           <div class="who">

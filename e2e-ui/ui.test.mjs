@@ -986,6 +986,10 @@ test("A VM's page lists where its memory and CPU go under their bars, as their c
   // What's worth a look is in the warning colour, as in the card.
   assert.deepEqual(await memory.locator('.rows .name.flag').allInnerTexts(), ['SSH sessions']);
   assert.match(await memory.locator('.rows').innerText(), /64 open: Lima's own/);
+  // A hairline between rows, so each figure reads with its own name and line: from the indent for
+  // what runs the VM, under its own row.
+  const rules = await memory.locator('.rows .row').evaluateAll((rows) => rows.map((r) => [getComputedStyle(r).borderTopWidth, Math.round(r.getBoundingClientRect().left - r.parentElement.getBoundingClientRect().left) > 0]));
+  assert.deepEqual(rules, [['0px', false], ['1px', false], ['1px', true], ['1px', true], ['1px', true], ['1px', true], ['1px', false]]);
   // The bar is split as the overview's is, keeping its tick at the peak.
   const bar = memory.locator('.bar').first();
   assert.equal(await bar.locator('.inside').count(), 1);

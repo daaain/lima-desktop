@@ -139,34 +139,38 @@ export function partSaid(what: 'memory' | 'cpu', p: Part): { inside: string; oth
   return { inside, others: `${say(p.others)} running the VM`, outside: `${say(p.outside)} kernel and cache` };
 }
 
-/** SSH sessions holding more than a few do (Lima's own and the app's use one or two, a few MiB
- * each); other processes holding a lot, in a VM that otherwise runs containers. */
+/** SSH sessions worth a look: many of them (Lima's own and the app's use one or two, and a few
+ * shells are ordinary) holding more than a few do (a few MiB each). What a shell runs counts as its
+ * session's, so one busy shell is work, not a leak: a leak shows as many sessions. Other processes
+ * holding a lot, in a VM that otherwise runs containers. */
 export const SSH_FLAG = 64 * MiB;
+export const SSH_SESSIONS_FLAG = 4;
 export const OTHER_FLAG = 256 * MiB;
+const sshFlagged = (r: Running) => r.sessions > SSH_SESSIONS_FLAG && r.ssh >= SSH_FLAG;
 
 /** What in a VM's memory is worth a look, as a line each: "247 MiB in 64 ssh sessions". */
 export function memoryFlags(p: Part): string[] {
   const r = p.running;
   if (!r) return [];
   return [
-    ...(r.ssh >= SSH_FLAG ? [`${bytes(r.ssh)} in ${r.sessions} ssh sessions`] : []),
+    ...(sshFlagged(r) ? [`${bytes(r.ssh)} in ${r.sessions} ssh sessions`] : []),
     ...(r.other >= OTHER_FLAG ? [`${bytes(r.other)} in other processes`] : []),
   ];
 }
 
 /** The card for a VM's memory bar: the figure, the bar again, a row per part, and what runs the VM
  * parted under its own row where the probe parts it. */
-export function memoryTip(vm: string, g: Gauge, p: Part): RichTip {
+export function memoryTip(vm: string, g: Gauge, p: Part, vmType?: string): RichTip {
   const r = p.running;
   const rows: TipRow[] = [{ name: 'Containers', value: bytes(p.inside), sub: "their processes' own memory", swatch: 'solid' }];
   if (p.others != null) {
     rows.push({ name: 'Running the VM', value: bytes(p.others), sub: r ? undefined : 'its processes outside the containers', swatch: 'soft' });
     if (r) {
       rows.push(
-        { name: 'Podman and your services', value: bytes(r.runtime), sub: 'API server, a port forwarder per published port, networking', indent: true },
+        { name: 'Podman and your services', value: bytes(r.runtime), sub: 'API server, a port forwarder for each container that publishes ports, networking', indent: true },
         { name: "The VM's system", value: bytes(r.system), sub: "Lima's guest agent, systemd and its services", indent: true },
-        { name: 'SSH sessions', value: bytes(r.ssh), sub: `${r.sessions} open: Lima's own and the app's use one or two; more are usually left behind by clients that didn't close them`, indent: true, flag: r.ssh >= SSH_FLAG },
-        { name: 'Other processes', value: bytes(r.other), sub: 'anything else run in the VM itself', indent: true, flag: r.other >= OTHER_FLAG },
+        { name: 'SSH sessions', value: bytes(r.ssh), sub: `${r.sessions} open: Lima's own and the app's use one or two, and what a shell runs counts here; many more are usually left behind by clients that didn't close them`, indent: true, flag: sshFlagged(r) },
+        { name: 'Other processes', value: bytes(r.other), sub: 'anything else run in the VM, outside a shell, and files in its tmpfs', indent: true, flag: r.other >= OTHER_FLAG },
       );
     }
   }
@@ -176,7 +180,11 @@ export function memoryTip(vm: string, g: Gauge, p: Part): RichTip {
     figure: `${bytes(g.used)} of ${bytes(g.size)} in use`,
     bar: { pct: g.pct, inside: share(p.inside, g.size), ...(p.others != null ? { others: share(p.others, g.size) } : {}), hot: g.hot },
     rows,
-    foot: "In use is what the guest doesn't count as available. Its file cache, which it does, isn't counted here; on this Mac it can still hold memory until a restart.",
+    // On vz, what a guest has touched stays held on the Mac until a restart (vzMemoryNote); for
+    // another type, or a Linux host, that isn't known to hold, so it isn't said.
+    foot: vmType === 'vz'
+      ? "In use is what the guest doesn't count as available. Its file cache, which it does, isn't counted here; on this Mac it can still hold memory until a restart."
+      : "In use is what the guest doesn't count as available.",
   };
 }
 

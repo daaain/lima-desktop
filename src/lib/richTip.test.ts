@@ -28,3 +28,33 @@ describe('tipText', () => {
     expect(tipText({ title: 'CPU', rows: [{ name: 'In containers', value: '0.40' }] })).toBe('CPU.\nIn containers 0.40.');
   });
 });
+
+describe('the richTip action', () => {
+  // The element methods the action uses, and nothing else.
+  function element() {
+    const attrs = new Map<string, string>();
+    return {
+      attrs, dataset: {} as Record<string, string>,
+      setAttribute: (k: string, v: string) => void attrs.set(k, v),
+      removeAttribute: (k: string) => void attrs.delete(k),
+      hasAttribute: (k: string) => attrs.has(k),
+    };
+  }
+  it("gives the element the card's text, for hovering and screen readers", async () => {
+    const { richTip, richOf } = await import('./richTip.svelte');
+    const el = element();
+    richTip(el as unknown as HTMLElement, tip);
+    expect(el.dataset.tip).toBe(tipText(tip));
+    expect(el.attrs.get('aria-description')).toBe(tipText(tip));
+    expect(richOf(el as unknown as HTMLElement)).toBe(tip);
+  });
+  it('takes the text away with the card, so a screen reader stops reading it', async () => {
+    const { richTip, richOf } = await import('./richTip.svelte');
+    const el = element();
+    const action = richTip(el as unknown as HTMLElement, tip);
+    action.update(undefined);
+    expect(el.dataset.tip).toBeUndefined();
+    expect(el.attrs.has('aria-description')).toBe(false);
+    expect(richOf(el as unknown as HTMLElement)).toBeUndefined();
+  });
+});

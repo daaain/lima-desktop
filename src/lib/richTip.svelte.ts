@@ -13,7 +13,11 @@ export const richOf = (el: Element | null | undefined): RichTip | undefined => (
 export function richTip(node: HTMLElement | SVGElement, tip: RichTip | undefined) {
   function set(t: RichTip | undefined) {
     if (!t) {
-      cards.delete(node);
+      // Its text goes with it, or a screen reader would go on reading a card no longer there.
+      if (cards.delete(node)) {
+        delete node.dataset.tip;
+        node.removeAttribute('aria-description');
+      }
       return;
     }
     cards.set(node, t);

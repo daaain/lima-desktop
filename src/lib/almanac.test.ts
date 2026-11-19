@@ -612,6 +612,13 @@ describe('what runs the VM', () => {
     expect(containersPart({ ...tangible, latest: older }).memory!.running).toBeUndefined();
   });
 
+  it("doesn't flag one busy shell: what a shell runs counts as its session's, and a leak shows as many sessions", () => {
+    const shell = { ...tangible, latest: { ...latest, mem_ssh: 300 * MiB, ssh_sessions: 1, mem_own: 11.8 * GiB } };
+    expect(memoryFlags(containersPart(shell).memory!)).toEqual([]);
+    const t = memoryTip('tangible', { used: 13.6 * GiB, size: 45.8 * GiB, pct: 29.7, hot: false }, containersPart(shell).memory!, 'vz');
+    expect(t.rows.find((r) => r.name === 'SSH sessions')!.flag).toBe(false);
+    expect(t.rows.find((r) => r.name === 'SSH sessions')!.sub).toMatch(/^1 open: .*what a shell runs counts here/);
+  });
   it('flags ssh sessions holding more than a few, and other processes holding a lot', () => {
     expect(memoryFlags(containersPart(tangible).memory!)).toEqual([]);
     const leaky = { ...tangible, latest: { ...latest, mem_ssh: 247 * MiB, ssh_sessions: 64, mem_own: 11.7 * GiB } };
@@ -621,7 +628,7 @@ describe('what runs the VM', () => {
   });
 
   it("cards the VM's memory: the figure, the bar again, a row per part and what runs the VM parted under its own", () => {
-    const t = memoryTip('tangible', { used: 13.6 * GiB, size: 45.8 * GiB, pct: 29.7, hot: false }, containersPart(tangible).memory!);
+    const t = memoryTip('tangible', { used: 13.6 * GiB, size: 45.8 * GiB, pct: 29.7, hot: false }, containersPart(tangible).memory!, 'vz');
     expect(t.title).toBe("tangible's memory");
     expect(t.figure).toBe('13.6 GiB of 45.8 GiB in use');
     expect(t.bar!.pct).toBeCloseTo(29.7);
@@ -635,11 +642,19 @@ describe('what runs the VM', () => {
       ['Kernel and cache', '2.1 GiB', false],
     ]);
     expect(t.rows.find((r) => r.name === 'SSH sessions')!.sub).toMatch(/^2 open: /);
-    expect(t.foot).toMatch(/file cache/);
+    expect(t.rows.find((r) => r.name === 'Podman and your services')!.sub).toBe('API server, a port forwarder for each container that publishes ports, networking');
+    expect(t.rows.find((r) => r.name === 'Other processes')!.sub).toMatch(/tmpfs/);
+    expect(t.foot).toMatch(/on this Mac it can still hold memory until a restart/);
+  });
+  it("says what this computer holds until a restart only for vz, where that's known to hold", () => {
+    for (const type of ['qemu', undefined]) {
+      const t = memoryTip('tangible', { used: 13.6 * GiB, size: 45.8 * GiB, pct: 29.7, hot: false }, containersPart(tangible).memory!, type);
+      expect(t.foot).toBe("In use is what the guest doesn't count as available.");
+    }
   });
   it('flags the row worth a look', () => {
     const leaky = { ...tangible, latest: { ...latest, mem_ssh: 247 * MiB, ssh_sessions: 64, mem_own: 11.7 * GiB } };
-    const t = memoryTip('tangible', { used: 13.6 * GiB, size: 45.8 * GiB, pct: 29.7, hot: false }, containersPart(leaky).memory!);
+    const t = memoryTip('tangible', { used: 13.6 * GiB, size: 45.8 * GiB, pct: 29.7, hot: false }, containersPart(leaky).memory!, 'vz');
     expect(t.rows.filter((r) => r.flag).map((r) => r.name)).toEqual(['SSH sessions']);
   });
   it("cards the VM's CPU: its containers' part and what runs outside them", () => {
