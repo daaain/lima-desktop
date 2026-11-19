@@ -105,7 +105,7 @@ export const portLinks = (ports: Port[], elsewhere: Map<number, string> = new Ma
       const alsoOn = opens(p) ? (each(p).map((n) => elsewhere.get(n)).find((v) => v != null) ?? null) : null;
       return {
         inside: `${span(p.containerPort, p.range)}/${p.protocol}`,
-        host: `${forwarded ? 'localhost' : p.hostIp}:${span(p.hostPort, p.range)}`,
+        host: `${forwarded ? 'localhost' : p.hostIp.includes(':') ? `[${p.hostIp}]` : p.hostIp}:${span(p.hostPort, p.range)}`,
         spans: p.range > 1,
         urls: opens(p) && !alsoOn ? ['http', 'https'].map((s) => `${s}://localhost:${p.hostPort}`) : [],
         alsoOn,

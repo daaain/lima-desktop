@@ -174,6 +174,9 @@ describe('portLinks', () => {
   it("doesn't link one published on another guest address, which Lima doesn't forward", () => {
     expect(portLinks([port({ hostIp: '192.168.5.15' })])).toEqual([{ inside: '3000/tcp', host: '192.168.5.15:3000', spans: false, urls: [], alsoOn: null }]);
   });
+  it('brackets an IPv6 guest address, so its port reads apart from it', () => {
+    expect(portLinks([port({ hostIp: 'fd00::5' })])[0].host).toBe('[fd00::5]:3000');
+  });
   it("doesn't link a UDP port: a browser can't open it", () => {
     expect(portLinks([port({ hostPort: 5353, containerPort: 53, protocol: 'udp' })])).toEqual([
       { inside: '53/udp', host: 'localhost:5353', spans: false, urls: [], alsoOn: null },
@@ -184,7 +187,7 @@ describe('portLinks', () => {
       { inside: '80–82/tcp', host: 'localhost:8000–8002', spans: true, urls: urls(8000), alsoOn: null },
     ]);
   });
-  it("puts them in the container's port order, as they're read", () => {
+  it('puts them in the container\'s port order, then the host\'s', () => {
     const ps = [port({ containerPort: 4443, hostPort: 9123 }), port({ containerPort: 8000, hostPort: 8100 }), port({ containerPort: 4443, hostPort: 9100 })];
     expect(portLinks(ps).map((l) => l.host)).toEqual(['localhost:9100', 'localhost:9123', 'localhost:8100']);
   });
