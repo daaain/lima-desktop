@@ -4,21 +4,26 @@
   // own columns against the same scales (the VM's memory, the VM's cores). Above each bar, the
   // project over the app's range, its containers added up moment by moment by the backend (those
   // removed or recreated included, each for the part of the range it ran). Read-only: a project
-  // isn't acted on whole.
+  // isn't acted on whole. A click on it folds its lines away under it, or unfolds them (`folds`).
   import type { ContainerLive, Series } from './api';
   import { band, projectSaid, rowMemory, share, sketch } from './almanac';
   import { projectTotals } from './containers';
   import { bytes, cores } from './format';
   import { range } from './range.svelte';
   import Bar from './Bar.svelte';
+  import FoldMark from './FoldMark.svelte';
+  import { foldAction } from './folds';
   import MemoryShare from './MemoryShare.svelte';
   import Sketch from './Sketch.svelte';
 
-  let { project, containers, history, vmHistory, vmMemory, vmCpus }: {
+  let { project, containers, history, vmHistory, vmMemory, vmCpus, folded, listed, ontoggle }: {
     project: string; containers: readonly ContainerLive[];
     /** The project's range (api.composeSeries), and its VM's (history.svelte.ts). */
     history: Series | undefined; vmHistory: Series | undefined;
     vmMemory: number; vmCpus: number;
+    /** Its lines folded away, as kept; `ontoggle` folds or unfolds them. `listed`: its lines are
+     * shown, unfolded or for now (a search finds them), which its chevron and `aria-expanded` say. */
+    folded: boolean; listed: boolean; ontoggle: () => void;
   } = $props();
 
   const t = $derived(projectTotals(containers));
@@ -27,9 +32,12 @@
   const memory = $derived(rowMemory({ mem: t.mem, ...(t.own == null ? {} : { mem_own: t.own }) }, { vmMemory, over: range.key, history: band(history, 'mem'), startedAt: null }));
 </script>
 
-<div class="project num" role="group" aria-label={`Compose project ${project}`}>
+<!-- The whole row folds, as a whole line opens its detail; its name is the button a keyboard or a
+     screen reader uses, and a click there reaches the row as any other. -->
+<!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions -->
+<div class="project num" role="group" aria-label={`Compose project ${project}`} onclick={ontoggle}>
   <div class="who">
-    <h3 class="name serif">{project}</h3>
+    <h3 class="name serif"><button class="fold" aria-expanded={listed} title={foldAction({ folded, listed }, 'its containers')}><FoldMark folded={!listed} /><span class="text">{project}</span></button></h3>
     <span class="second">{projectSaid(t)}</span>
   </div>
   <div class="drawn">
@@ -51,26 +59,24 @@
 </div>
 
 <style>
-  /* On the menu bar's "everything else" diagonals, faint (`--hatch`), so a busy VM's projects stand
-     out from their lines as the list is scrolled; `--wash` stays a line's hover. The band reaches
-     0.9rem past the columns on each side (the page's gutter is wider), so its content keeps their
-     alignment and the texture never meets a letter's edge. */
+  /* A heading in the lines' own columns, told apart by its name (a step over a line's, under the
+     VM's) and its smaller drawings, and by the bracket its group hangs in the gutter (ProjectGroup). */
   .project {
     display: grid; grid-template-columns: var(--container-columns); column-gap: 1.4rem; align-items: end;
-    margin: 1.1rem -0.9rem 0; padding: 0.9rem 0.9rem 0.6rem; border-top: 1px solid var(--muted);
-    background: repeating-linear-gradient(135deg, var(--hatch) 0 2px, transparent 2px 4px);
+    padding: 0.5rem 0 0.45rem; border-top: 1px solid var(--border);
   }
-  /* Its charts on the page's own ground: their shapes read as they do on a line, not through stripes. */
-  .drawn :global(.share), .drawn :global(.sketch) { background: var(--bg); }
-  /* Its first line hangs from it: no rule between them. */
-  .project + :global(div) > :global(.line) { border-top: 0; }
   .who { display: grid; gap: 0.1rem; min-width: 0; }
-  .name { margin: 0; font-size: 1.5rem; font-weight: 500; line-height: 1.15; letter-spacing: -0.01em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .project { cursor: pointer; }
+  /* The name as it was, a button only in what it does. */
+  .fold { all: unset; display: flex; align-items: baseline; gap: 0.35rem; max-width: 100%; cursor: pointer; }
+  .fold:focus-visible { outline: 2px solid var(--fg); outline-offset: 2px; }
+  .text { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .name { margin: 0; font-size: 1.4rem; font-weight: 500; line-height: 1.15; letter-spacing: -0.01em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .second { font-size: 0.82rem; color: var(--muted); }
   /* As a container's line draws them (ContainerLine.svelte), so the columns read alike. */
-  .drawn { display: grid; gap: 4px; min-width: 0; padding-bottom: 0.35rem; --sketch-height: 22px; --bar-height: 7px; }
+  .drawn { display: grid; gap: 4px; min-width: 0; padding-bottom: 0.35rem; --sketch-height: 14px; --bar-height: 7px; }
   .said { display: grid; gap: 0.05rem; min-width: 0; }
-  .said strong { font-size: 1rem; font-weight: 600; white-space: nowrap; }
+  .said strong { font-size: 0.92rem; font-weight: 600; white-space: nowrap; }
   .said strong .label { font-weight: 400; }
   .said .label { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   @media (max-width: 860px) {
