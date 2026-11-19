@@ -19,7 +19,7 @@
   const vms = $derived(live.snapshot?.vms ?? []);
   const MEMORY_PARTS_TIP = [
     "Containers: their processes' own memory (podman's figure, on their lines, also counts file cache the VM counts as available).",
-    "Other processes: the VM's own processes outside its containers, which a VM running only containers should have next to none of.",
+    "Other processes: the VM's own processes outside its containers: podman's (its service, a port forwarder for each published port, its networking), Lima's guest agent, and anything run in the VM itself. Podman's take a few hundred MiB with a few dozen containers.",
     "Kernel and cache: what the guest's kernel holds and doesn't count as available: its own structures, page tables, and cache it can't drop at once.",
   ].join('\n');
   /** A bar's label goes on with its parts, where it has them. */

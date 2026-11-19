@@ -68,8 +68,8 @@ export interface Part {
  * kernel, a build run in the VM itself). Memory counts the containers' processes' own (anon and
  * shmem), which the VM's in-use figure counts too: podman's figure takes in file cache the VM counts
  * as available, and on a busy VM adds up to more than it uses. Where the VM's own processes' memory
- * is read (its anon and shmem), the rest is parted again: its other processes' own, which a VM
- * running only containers should have next to none of, and the kernel's and cache the guest can't
+ * is read (its anon and shmem), the rest is parted again: its other processes' own (podman's, a few hundred MiB
+ * with a few dozen containers; Lima's guest agent; anything run in the VM itself), and the kernel's and cache the guest can't
  * give back at once. Neither is split for a VM running no
  * containers, where it would all be outside them, nor where it has no reading; memory not where a
  * running container's own isn't read. The VM and its containers are read a moment apart, so each
