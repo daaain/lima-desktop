@@ -53,8 +53,20 @@ export interface ContainerLive {
   composeService?: string;
   podName?: string;
   labels: Record<string, string>;
+  /** What it publishes, in the guest. */
+  ports: Port[];
   entity?: number;
   latest: Latest;
+}
+
+/** A published port (podman::Port): `range` ports from `hostPort` on the guest's `hostIp` (every
+ *  address when empty) reach as many from `containerPort`. */
+export interface Port {
+  hostIp: string;
+  hostPort: number;
+  containerPort: number;
+  range: number;
+  protocol: string;
 }
 
 export interface VmLive {

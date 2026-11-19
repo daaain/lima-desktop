@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { byProject, containerRows, filterContainers, groupContainers, lineHistory, projectTotals, readContainerFilter } from './containers';
+import { byProject, containerRows, filterContainers, groupContainers, lineHistory, portLinks, portsElsewhere, projectTotals, readContainerFilter } from './containers';
+import type { Port } from './api';
 import { container, snapshot, vm } from './testing';
 
 const s = snapshot([
@@ -156,5 +157,66 @@ describe('lineHistory', () => {
     expect(lineHistory('acme', container({ entity: 7 }))).toBe(7);
     expect(lineHistory('acme', container({ entity: 7, composeProject: 'shop' }))).toBe(7);
     expect(lineHistory('acme', container())).toBeUndefined();
+  });
+});
+
+describe('portLinks', () => {
+  const port = (o: Partial<Port> = {}): Port => ({ hostIp: '127.0.0.1', hostPort: 3000, containerPort: 3000, range: 1, protocol: 'tcp', ...o });
+  const urls = (p: number) => [`http://localhost:${p}`, `https://localhost:${p}`];
+  it("opens a TCP port at localhost on this machine, where Lima forwards the guest's to, as either scheme", () => {
+    expect(portLinks([port({ hostPort: 8100, containerPort: 8000 })])).toEqual([
+      { inside: '8000/tcp', host: 'localhost:8100', spans: false, urls: urls(8100), alsoOn: null },
+    ]);
+  });
+  it('forwards a port published on every guest address too', () => {
+    for (const hostIp of ['', '0.0.0.0', '::']) expect(portLinks([port({ hostIp })])[0].urls).toEqual(urls(3000));
+  });
+  it("doesn't link one published on another guest address, which Lima doesn't forward", () => {
+    expect(portLinks([port({ hostIp: '192.168.5.15' })])).toEqual([{ inside: '3000/tcp', host: '192.168.5.15:3000', spans: false, urls: [], alsoOn: null }]);
+  });
+  it('brackets an IPv6 guest address, so its port reads apart from it', () => {
+    expect(portLinks([port({ hostIp: 'fd00::5' })])[0].host).toBe('[fd00::5]:3000');
+  });
+  it("doesn't link a UDP port: a browser can't open it", () => {
+    expect(portLinks([port({ hostPort: 5353, containerPort: 53, protocol: 'udp' })])).toEqual([
+      { inside: '53/udp', host: 'localhost:5353', spans: false, urls: [], alsoOn: null },
+    ]);
+  });
+  it('says a range as one, linking its first port', () => {
+    expect(portLinks([port({ hostPort: 8000, containerPort: 80, range: 3 })])).toEqual([
+      { inside: '80–82/tcp', host: 'localhost:8000–8002', spans: true, urls: urls(8000), alsoOn: null },
+    ]);
+  });
+  it('puts them in the container\'s port order, then the host\'s', () => {
+    const ps = [port({ containerPort: 4443, hostPort: 9123 }), port({ containerPort: 8000, hostPort: 8100 }), port({ containerPort: 4443, hostPort: 9100 })];
+    expect(portLinks(ps).map((l) => l.host)).toEqual(['localhost:9100', 'localhost:9123', 'localhost:8100']);
+  });
+});
+
+describe('portsElsewhere', () => {
+  const tcp = (hostPort: number, o: Partial<Port> = {}): Port => ({ hostIp: '', hostPort, containerPort: 80, range: 1, protocol: 'tcp', ...o });
+  const s = snapshot([
+    vm({ name: 'a' }, [container({ id: '1', ports: [tcp(3000)] })]),
+    vm({ name: 'b' }, [
+      container({ id: '2', ports: [tcp(3000), tcp(8000, { range: 2 }), tcp(5353, { protocol: 'udp' }), tcp(9000, { hostIp: '192.168.5.15' })] }),
+      container({ id: '3', state: 'exited', ports: [tcp(4000)] }),
+    ]),
+    vm({ name: 'old', status: 'Stopped' }, [container({ id: '4', ports: [tcp(5000)] })]),
+  ]);
+  it("names the VM forwarding each of the other VMs' running containers' TCP ports to this machine", () => {
+    expect(portsElsewhere(s, 'a')).toEqual(new Map([[3000, 'b'], [8000, 'b'], [8001, 'b']]));
+    expect(portsElsewhere(s, 'b')).toEqual(new Map([[3000, 'a']]));
+  });
+});
+
+describe('portLinks, when another VM publishes the same port', () => {
+  const port = (o: Partial<Port> = {}): Port => ({ hostIp: '', hostPort: 3000, containerPort: 3000, range: 1, protocol: 'tcp', ...o });
+  it("doesn't link it: only one VM holds this machine's port, and the link may open the other's", () => {
+    expect(portLinks([port()], new Map([[3000, 'b']]))).toEqual([
+      { inside: '3000/tcp', host: 'localhost:3000', spans: false, urls: [], alsoOn: 'b' },
+    ]);
+  });
+  it('nor a range any port of which it publishes', () => {
+    expect(portLinks([port({ hostPort: 8000, range: 3 })], new Map([[8002, 'b']]))[0]).toMatchObject({ urls: [], alsoOn: 'b' });
   });
 });

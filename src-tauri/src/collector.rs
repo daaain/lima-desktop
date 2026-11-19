@@ -1222,6 +1222,7 @@ mod tests {
                 compose_service: None,
                 pod_name: None,
                 labels: Default::default(),
+                ports: vec![],
             },
             entity: None,
             latest: mem.map(|m| HashMap::from([("mem".into(), m)])).unwrap_or_default(),

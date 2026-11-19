@@ -1,5 +1,5 @@
 // The Containers view: every running VM's containers in one list, from the live snapshot.
-import type { ContainerLive, HistoryOf, Snapshot } from './api';
+import type { ContainerLive, HistoryOf, Port, Snapshot } from './api';
 import { podmanScope } from './perVm';
 import { matches } from './search';
 import { AMOUNTS, byText, most, named, NAMES, sortBy, type Column, type Compare, type Order } from './order';
@@ -63,6 +63,54 @@ export const CONTAINER_ORDER: Record<ContainerSort, Compare<ContainerLive>> = {
   cpu: most(cpu, lineName),
   up: most(up, lineName),
 };
+
+/** A published port as the detail says it: what in the container (`inside`), where on this
+ *  machine (`host`; several ports when it `spans` a range), and what to open in the browser: its
+ *  first port by either scheme, as nothing here says which one it speaks. None when it can't be,
+ *  as when another VM publishes the same port too (`alsoOn`, the first such). */
+export interface PortLink {
+  inside: string;
+  host: string;
+  spans: boolean;
+  urls: string[];
+  alsoOn: string | null;
+}
+
+// The guest addresses Lima's default rule forwards to this machine's localhost, at the same port.
+const FORWARDED = new Set(['', '0.0.0.0', '::', '127.0.0.1']);
+const span = (from: number, n: number) => (n > 1 ? `${from}–${from + n - 1}` : `${from}`);
+const each = (p: Port) => Array.from({ length: Math.max(p.range, 1) }, (_, i) => p.hostPort + i);
+/** Whether Lima brings `p` to this machine's localhost, where a browser can open it. */
+const opens = (p: Port) => FORWARDED.has(p.hostIp) && p.protocol === 'tcp';
+
+/** The TCP ports on this machine's localhost that running containers of running VMs but `vm`
+ *  publish, each with the (first) VM. Every VM's hostagent binds the port its guest's is published
+ *  on, and only one of them holds it: a link to it from `vm` may open the other VM's service. */
+export function portsElsewhere(s: Snapshot | null, vm: string): Map<number, string> {
+  const taken = new Map<number, string>();
+  for (const r of containerRows(s))
+    if (r.vm !== vm && r.c.state === 'running')
+      for (const p of r.c.ports.filter(opens)) for (const n of each(p)) if (!taken.has(n)) taken.set(n, r.vm);
+  return taken;
+}
+
+/** `ports` as links, in the container's port order. A port bound to another guest address isn't
+ *  forwarded, a browser can only open TCP, and one `elsewhere` (portsElsewhere) may open another
+ *  VM's service, so those are said but not linked. */
+export const portLinks = (ports: Port[], elsewhere: Map<number, string> = new Map()): PortLink[] =>
+  [...ports]
+    .sort((a, b) => a.containerPort - b.containerPort || a.hostPort - b.hostPort)
+    .map((p) => {
+      const forwarded = FORWARDED.has(p.hostIp);
+      const alsoOn = opens(p) ? (each(p).map((n) => elsewhere.get(n)).find((v) => v != null) ?? null) : null;
+      return {
+        inside: `${span(p.containerPort, p.range)}/${p.protocol}`,
+        host: `${forwarded ? 'localhost' : p.hostIp.includes(':') ? `[${p.hostIp}]` : p.hostIp}:${span(p.hostPort, p.range)}`,
+        spans: p.range > 1,
+        urls: opens(p) && !alsoOn ? ['http', 'https'].map((s) => `${s}://localhost:${p.hostPort}`) : [],
+        alsoOn,
+      };
+    });
 
 /** A container's line's history: across recreations (one after another, by name) when compose
  *  made it, else its own. */

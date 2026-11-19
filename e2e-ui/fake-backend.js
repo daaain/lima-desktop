@@ -125,7 +125,7 @@
       id: (n.toString(16).padStart(4, '0') + 'c0ffee').repeat(7).slice(0, 64), name, image, imageId: hexOf(image),
       state: running ? 'running' : 'exited', status: running ? 'Up' : 'Exited (1)', created: Math.floor(START / 1000),
       startedAt: running ? Math.floor((NOW - (o.upHours ?? 26) * HOUR) / 1000) : Math.floor((NOW - 50 * HOUR) / 1000),
-      composeProject: o.project, composeService: o.service, labels: {}, entity: id, latest: {},
+      composeProject: o.project, composeService: o.service, labels: {}, ports: o.ports ?? [], entity: id, latest: {},
     };
   }
   const service = (project, name, image, o = {}) => container(`${project}-${name}-1`, image, { project, service: name, ...o });
@@ -170,7 +170,14 @@
       instance('atlas', 'Running', 8, 48, 120),
       { cpu: shapes.daily(0.03, 0.32), mem: shapes.leak(0.52, 0.88), disk: shapes.flat(0.31, 0), psiCpu: shapes.bursty(0.002, 0.3, 0.12) },
       [
-        service('atlas', 'frontend', local('atlas_frontend'), { memMiB: 690, peak: 1.9, pids: 70, cpu: shapes.daily(0.01, 0.4) }),
+        service('atlas', 'frontend', local('atlas_frontend'), {
+          memMiB: 690, peak: 1.9, pids: 70, cpu: shapes.daily(0.01, 0.4),
+          ports: [
+            { hostIp: '127.0.0.1', hostPort: 5199, containerPort: 5199, range: 1, protocol: 'tcp' },
+            { hostIp: '127.0.0.1', hostPort: 3000, containerPort: 3000, range: 1, protocol: 'tcp' },
+            { hostIp: '', hostPort: 5353, containerPort: 53, range: 1, protocol: 'udp' },
+          ],
+        }),
         service('atlas', 'graph-api', local('atlas_graph-api'), { memMiB: 514, cpu: shapes.daily(0.02, 0.9) }),
         service('atlas', 'warehouse', 'ghcr.io/example/warehouse-emulator:0.6.6', {
           memMiB: 240, peak: 1.25, upHours: 0.05,
@@ -206,6 +213,7 @@
         }),
         service('harbor', 'app', 'docker.io/library/node:24-trixie-slim', {
           memMiB: 900, limitMiB: 1024, peak: 1.13, oomKills: 1, cpu: shapes.bursty(0.2, 1.1, 0.4), upHours: 3, silent: HARBOR_SILENT,
+          ports: [{ hostIp: '', hostPort: 5199, containerPort: 8080, range: 1, protocol: 'tcp' }],
         }),
         service('harbor', 'cache', 'docker.io/library/valkey:8', { memMiB: 64, silent: HARBOR_SILENT }),
       ],
