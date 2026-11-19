@@ -1,5 +1,5 @@
 // The Containers view: every running VM's containers in one list, from the live snapshot.
-import type { ContainerLive, HistoryOf, Snapshot } from './api';
+import type { ContainerLive, HistoryOf, Port, Snapshot } from './api';
 import { podmanScope } from './perVm';
 import { matches } from './search';
 import { AMOUNTS, byText, most, named, NAMES, sortBy, type Column, type Compare, type Order } from './order';
@@ -63,6 +63,33 @@ export const CONTAINER_ORDER: Record<ContainerSort, Compare<ContainerLive>> = {
   cpu: most(cpu, lineName),
   up: most(up, lineName),
 };
+
+/** A published port as the detail says it: where on this machine (`host`), what in the container
+ *  (`inside`), and what to open in the browser, if anything can be. */
+export interface PortLink {
+  host: string;
+  inside: string;
+  href: string | null;
+}
+
+// The guest addresses Lima's default rule forwards to this machine's localhost, at the same port.
+const FORWARDED = new Set(['', '0.0.0.0', '::', '127.0.0.1']);
+const span = (from: number, n: number) => (n > 1 ? `${from}–${from + n - 1}` : `${from}`);
+
+/** `ports` as links, in host port order. A port bound to another guest address isn't forwarded,
+ *  and a browser can only open TCP, so those are said but not linked. */
+export const portLinks = (ports: Port[]): PortLink[] =>
+  [...ports]
+    .sort((a, b) => a.hostPort - b.hostPort)
+    .map((p) => {
+      const forwarded = FORWARDED.has(p.hostIp);
+      const at = forwarded ? 'localhost' : p.hostIp;
+      return {
+        host: `${at}:${span(p.hostPort, p.range)}`,
+        inside: `${span(p.containerPort, p.range)}/${p.protocol}`,
+        href: forwarded && p.protocol === 'tcp' ? `http://localhost:${p.hostPort}` : null,
+      };
+    });
 
 /** A container's line's history: across recreations (one after another, by name) when compose
  *  made it, else its own. */

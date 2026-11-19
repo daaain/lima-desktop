@@ -82,6 +82,27 @@ pub struct Container {
     pub compose_service: Option<String>,
     pub pod_name: Option<String>,
     pub labels: BTreeMap<String, String>,
+    /// What it publishes, in the guest.
+    pub ports: Vec<Port>,
+}
+
+/// A published port: `range` ports from `host_port` on the guest's `host_ip` (every address when
+/// empty) reach as many from `container_port`. libpod's list names its fields in snake case.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct Port {
+    #[serde(default)]
+    pub host_ip: String,
+    pub host_port: u16,
+    pub container_port: u16,
+    #[serde(default = "one")]
+    pub range: u16,
+    #[serde(default)]
+    pub protocol: String,
+}
+
+const fn one() -> u16 {
+    1
 }
 
 #[derive(Debug, Deserialize)]
@@ -106,6 +127,8 @@ struct RawContainer {
     labels: Option<BTreeMap<String, String>>,
     #[serde(default)]
     pod_name: String,
+    #[serde(default)]
+    ports: Option<Vec<Port>>,
 }
 
 /// Compose labels: Docker Compose sets `com.docker.compose.*`; podman-compose sets those AND
@@ -141,6 +164,7 @@ impl From<RawContainer> for Container {
             status: r.status,
             created,
             labels,
+            ports: r.ports.unwrap_or_default(),
         }
     }
 }
@@ -800,6 +824,34 @@ mod tests {
         assert_eq!(c.compose_project.as_deref(), Some("shop"));
         assert_eq!(c.compose_service.as_deref(), Some("web"));
         assert_eq!(c.pod_name, None);
+    }
+
+    #[test]
+    fn container_from_list_row_reads_published_ports() {
+        let row = serde_json::json!({
+            "Id": "x",
+            "Ports": [
+                {"host_ip": "127.0.0.1", "container_port": 3000, "host_port": 3001, "range": 1, "protocol": "tcp"},
+                {"host_ip": "", "container_port": 53, "host_port": 5353, "range": 2, "protocol": "udp"}
+            ]
+        });
+        let c: Container = serde_json::from_value::<RawContainer>(row).unwrap().into();
+        assert_eq!(
+            c.ports,
+            [
+                Port {
+                    host_ip: "127.0.0.1".into(),
+                    host_port: 3001,
+                    container_port: 3000,
+                    range: 1,
+                    protocol: "tcp".into()
+                },
+                Port { host_ip: "".into(), host_port: 5353, container_port: 53, range: 2, protocol: "udp".into() },
+            ]
+        );
+        let none: Container =
+            serde_json::from_value::<RawContainer>(serde_json::json!({"Id": "y", "Ports": null})).unwrap().into();
+        assert!(none.ports.is_empty(), "podman sends null for a container that publishes none");
     }
 
     #[test]

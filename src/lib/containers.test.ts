@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { byProject, containerRows, filterContainers, groupContainers, lineHistory, projectTotals, readContainerFilter } from './containers';
+import { byProject, containerRows, filterContainers, groupContainers, lineHistory, portLinks, projectTotals, readContainerFilter } from './containers';
+import type { Port } from './api';
 import { container, snapshot, vm } from './testing';
 
 const s = snapshot([
@@ -156,5 +157,33 @@ describe('lineHistory', () => {
     expect(lineHistory('acme', container({ entity: 7 }))).toBe(7);
     expect(lineHistory('acme', container({ entity: 7, composeProject: 'shop' }))).toBe(7);
     expect(lineHistory('acme', container())).toBeUndefined();
+  });
+});
+
+describe('portLinks', () => {
+  const port = (o: Partial<Port> = {}): Port => ({ hostIp: '127.0.0.1', hostPort: 3000, containerPort: 3000, range: 1, protocol: 'tcp', ...o });
+  it("opens a TCP port at localhost on this machine, where Lima forwards the guest's to", () => {
+    expect(portLinks([port({ hostPort: 8100, containerPort: 8000 })])).toEqual([
+      { host: 'localhost:8100', inside: '8000/tcp', href: 'http://localhost:8100' },
+    ]);
+  });
+  it('forwards a port published on every guest address too', () => {
+    for (const hostIp of ['', '0.0.0.0', '::']) expect(portLinks([port({ hostIp })])[0].href).toBe('http://localhost:3000');
+  });
+  it("doesn't link one published on another guest address, which Lima doesn't forward", () => {
+    expect(portLinks([port({ hostIp: '192.168.5.15' })])).toEqual([{ host: '192.168.5.15:3000', inside: '3000/tcp', href: null }]);
+  });
+  it("doesn't link a UDP port: a browser can't open it", () => {
+    expect(portLinks([port({ hostPort: 5353, containerPort: 53, protocol: 'udp' })])).toEqual([
+      { host: 'localhost:5353', inside: '53/udp', href: null },
+    ]);
+  });
+  it('says a range as one, linking its first port', () => {
+    expect(portLinks([port({ hostPort: 8000, containerPort: 80, range: 3 })])).toEqual([
+      { host: 'localhost:8000–8002', inside: '80–82/tcp', href: 'http://localhost:8000' },
+    ]);
+  });
+  it('puts them in host port order', () => {
+    expect(portLinks([port({ hostPort: 9123 }), port({ hostPort: 8100 })]).map((l) => l.host)).toEqual(['localhost:8100', 'localhost:9123']);
   });
 });

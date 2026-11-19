@@ -3,6 +3,8 @@
   import { bytes, cpuLabel } from './format';
   import { band, ownLimit, selfMemory } from './almanac';
   import { inOrder } from './inOrder';
+  import { portLinks } from './containers';
+  import { openUrl } from '@tauri-apps/plugin-opener';
   import type { RangeKey } from './ranges';
   import Bar from './Bar.svelte';
   import Chart from './Chart.svelte';
@@ -17,6 +19,9 @@
     oomMarkers?: { ts: number; label: string }[];
     onclose: () => void;
   } = $props();
+  const ports = $derived(portLinks(c.ports));
+  // A stopped container's ports are only what it would publish: nothing answers there to open.
+  const running = $derived(c.state === 'running');
   const limit = $derived(ownLimit(c.latest.mem_limit, vmMemory));
   let tab = $state<'metrics' | 'logs' | 'inspect'>('metrics');
   let series = $state<Series | null>(null);
@@ -58,6 +63,17 @@
     {/each}
     <button onclick={onclose} aria-label="Close">✕</button>
   </div>
+  {#if ports.length}
+    <p class="ports">
+      <span class="muted">ports</span>
+      {#each ports as p}
+        <span class="port num">
+          {#if p.href && running}<button class="link" title="Open {p.href} in your browser" onclick={() => openUrl(p.href!)}>{p.host}</button>{:else}{p.host}{/if}
+          <span class="muted">→ {p.inside}</span>
+        </span>
+      {/each}
+    </p>
+  {/if}
   {#if error}<p class="error">{error}</p>{/if}
   {#if tab === 'metrics'}
     {#if c.entity == null}
@@ -99,6 +115,9 @@
   .head { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
   h3 { margin: 0; font-size: 1.5rem; font-weight: 600; }
   .spacer { flex: 1; }
+  .ports .link { height: auto; padding: 0; border: none; border-radius: 0; background: none; font: inherit; color: var(--accent); }
+  .ports .link:hover { text-decoration: underline; }
+  .ports { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.3rem 1rem; margin: 0; font-size: 0.85rem; }
   .muted { color: var(--muted); font-size: 0.8rem; }
   .head button { height: 1.9rem; padding: 0 0.8rem; font-size: 0.82rem; }
   .self { display: grid; gap: 0.2rem; max-width: 36rem; --bar-height: 7px; }
