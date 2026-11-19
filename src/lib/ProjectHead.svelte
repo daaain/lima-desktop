@@ -29,7 +29,7 @@
   const t = $derived(projectTotals(containers));
   // No limit of its own, so measured against the VM, its peak the sum's in the range.
   // The processes' own memory too, where every running line has it, so its strongest part adds up theirs.
-  const memory = $derived(rowMemory({ mem: t.mem, ...(t.own == null ? {} : { mem_own: t.own }) }, { vmMemory, over: range.key, history: band(history, 'mem'), startedAt: null }));
+  const memory = $derived(rowMemory({ mem: t.mem, ...(t.own == null ? {} : { mem_own: t.own }) }, { vmMemory, over: range.key, history: band(history, 'mem'), startedAt: null, project: true }));
 </script>
 
 <!-- The whole row folds, as a whole line opens its detail; its name is the button a keyboard or a
@@ -42,7 +42,7 @@
   </div>
   <div class="drawn">
     <MemoryShare me={band(history, 'mem')} vm={band(vmHistory, 'mem_used')} ts={history?.ts ?? vmHistory?.ts} {vmMemory} who="this project" />
-    <Bar pct={memory.pct} own={memory.own} tick={memory.tick} label={memory.label} />
+    <Bar pct={memory.pct} own={memory.own} tick={memory.tick} label={memory.label} tip={memory.tip} />
   </div>
   <div class="said">
     <strong>{bytes(t.mem)} <span class="label">of VM</span></strong>

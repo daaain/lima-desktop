@@ -32,6 +32,10 @@ pub struct Block {
     pub disks: Vec<(u64, u64)>,
     /// container id → its cgroup's readings, where cgroup v2 has them.
     pub cgroups: HashMap<String, Cgroup>,
+    /// The guest's own memory (anon + shmem, bytes) by who holds it, from `S` lines: `runtime`
+    /// (the user's systemd instance less its containers: rootless podman), `system` (system.slice
+    /// and init.scope), `ssh` (the login sessions); and `sessions`, how many of those there are.
+    pub groups: HashMap<String, u64>,
 }
 
 /// One podman container's cgroup, from its `G` line; `None` where the probe printed `-`, or (for
@@ -80,6 +84,11 @@ pub fn parse_line(block: &mut Block, line: &str) -> bool {
                 block.disks.push((size, used));
             }
         }
+        Some("S") => {
+            if let (Some(k), Some(v)) = (f.next(), num(f.next())) {
+                block.groups.insert(k.to_string(), v);
+            }
+        }
         Some("G") => {
             if let Some(id) = f.next() {
                 let cgroup = Cgroup { peak: num(f.next()), oom_kills: num(f.next()), own: num(f.next()) };
@@ -102,6 +111,7 @@ fn or_absent(v: Option<i64>) -> i64 {
 /// ABSENT for them.
 pub fn vm_row(prev: Option<&Block>, cur: &Block, ncpus: u32) -> Vec<i64> {
     let mem = |k: &str| cur.mem.get(k).map(|&v| v as i64 * KB);
+    let group = |k: &str| cur.groups.get(k).map(|&v| v as i64);
     let dt_us = prev.map(|p| ((cur.uptime - p.uptime) * 1e6) as i64).filter(|&d| d > 0);
 
     let cpu_mc = prev.and_then(|p| {
@@ -142,6 +152,10 @@ pub fn vm_row(prev: Option<&Block>, cur: &Block, ncpus: u32) -> Vec<i64> {
         ABSENT, // host_disk_alloc
         ABSENT, // host_mem
         or_absent(mem("AnonPages").zip(mem("Shmem")).map(|(a, s)| a + s)),
+        or_absent(group("runtime")),
+        or_absent(group("system")),
+        or_absent(group("ssh")),
+        or_absent(group("sessions")),
     ]
 }
 
@@ -225,6 +239,10 @@ D 100000000 20000000
 D 100000000 20000000
 G 0123456789012345678901234567890123456789012345678901234567890123 52428800 0 31457280
 G abcdef 1 1 -
+S runtime 524288000
+S system 144703488
+S ssh 4194304
+S sessions 2
 .";
 
     fn parse(text: &str) -> Block {
@@ -302,6 +320,23 @@ G abcdef 1 1 -
             .join("\n");
         let row = vm_row(None, &parse(&older), 4);
         assert_eq!(row[VM_METRICS.iter().position(|m| *m == "mem_own").unwrap()], ABSENT);
+    }
+
+    #[test]
+    fn the_guests_own_memory_is_parted_by_who_holds_it() {
+        let a = parse(BLOCK_A);
+        let row = vm_row(None, &a, 4);
+        let col = |name: &str| row[VM_METRICS.iter().position(|m| *m == name).unwrap()];
+        assert_eq!(col("mem_runtime"), 524_288_000, "podman and the user's other services, less their containers");
+        assert_eq!(col("mem_system"), 144_703_488);
+        assert_eq!(col("mem_ssh"), 4_194_304);
+        assert_eq!(col("ssh_sessions"), 2);
+        // An older probe, or a guest without cgroup v2: absent, not nothing.
+        let older: String = BLOCK_A.lines().filter(|l| !l.starts_with('S')).collect::<Vec<_>>().join("\n");
+        let row = vm_row(None, &parse(&older), 4);
+        for m in ["mem_runtime", "mem_system", "mem_ssh", "ssh_sessions"] {
+            assert_eq!(row[VM_METRICS.iter().position(|c| *c == m).unwrap()], ABSENT, "{m}");
+        }
     }
 
     #[test]

@@ -146,6 +146,12 @@
       // Its processes' own memory (anon and shmem): most of what it needs, the rest the kernel's and
       // cache it can't drop at once. atlas, whose memory leaks, leaks it outside its containers.
       mem_own: (t, e) => (o.ownShare ?? 0.75) * needed(t, e),
+      // Of it, by who holds it: podman's runtime, the VM's system, and its ssh sessions (Lima's own
+      // and the app's two, a few MiB; harbor's left behind by a client that didn't close them).
+      mem_runtime: 300 * MiB,
+      mem_system: 140 * MiB,
+      mem_ssh: o.leakedSessions ? (6 + 3.7 * o.leakedSessions) * MiB : 6 * MiB,
+      ssh_sessions: 2 + (o.leakedSessions ?? 0),
       swap_used: 0,
       psi_mem_some: scaled(shape.psiMem ?? shapes.flat(0, 0), 1000),
       psi_mem_full: scaled(shape.psiMemFull ?? shapes.flat(0, 0), 1000),
@@ -220,7 +226,7 @@
         }),
         service('harbor', 'cache', 'docker.io/library/valkey:8', { memMiB: 64, silent: HARBOR_SILENT }),
       ],
-      { oomKills: (t) => (t >= HARBOR_KILL ? 1 : 0), silent: HARBOR_SILENT },
+      { oomKills: (t) => (t >= HARBOR_KILL ? 1 : 0), silent: HARBOR_SILENT, ownShare: 0.48, leakedSessions: 62 },
     ),
     vm(
       instance('quill', 'Running', 4, 8, 60, {

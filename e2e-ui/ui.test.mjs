@@ -118,7 +118,7 @@ for (const dark of [false, true]) {
     await page.getByRole('heading', { level: 1, name: 'harbor needs more memory and CPU, judging by the last 6 h.' }).waitFor();
     // On vz, what it costs the computer, what its guest needs, and that a restart gives back most of the rest.
     assert.match(
-      await page.locator('figcaption.note', { hasText: 'On vz' }).innerText(),
+      await page.locator('figure p.note', { hasText: 'On vz' }).innerText(),
       /^On vz, guest memory is only backed as it's touched, and isn't given back when the guest frees it: right now this VM costs your computer [\d.]+ GiB of RAM, and its guest needs [\d.]+ GiB\. Restarting the VM gives back most of the rest\.$/,
     );
     assert.match(
@@ -1111,8 +1111,9 @@ test("A VM's memory and CPU bars on the overview split what its containers use f
       assert.match(await bar.getAttribute('aria-label'), /: .+ in containers, .+ outside them$/);
       assert.equal(await bar.locator('.others').count(), 0);
     } else {
-      assert.match(await meter.locator('.part').innerText(), /^.+ in containers\n.+ in other processes\n.+ kernel and cache$/);
-      assert.match(await bar.getAttribute('aria-label'), /: .+ in containers, .+ in other processes, .+ kernel and cache$/);
+      // atlas, whose memory leaks outside its containers, has that said under it too.
+      assert.match(await meter.locator('.part').innerText(), /^.+ in containers\n.+ running the VM\n.+ kernel and cache\n.+ in other processes$/);
+      assert.match(await bar.getAttribute('aria-label'), /: .+ in containers, .+ running the VM, .+ kernel and cache$/);
       const [inEnd, othersStart, othersEnd, fillEnd] = await bar.evaluate((el) => {
         const r = (s) => el.querySelector(s).getBoundingClientRect();
         return [r('.inside').right, r('.others').left, r('.others').right, r('.fill').right];
@@ -1125,6 +1126,130 @@ test("A VM's memory and CPU bars on the overview split what its containers use f
   await ember.locator('.meter').first().waitFor();
   assert.equal(await ember.locator('.bar .inside').count(), 0);
   assert.equal(await ember.locator('.part').count(), 0);
+  assert.deepEqual(errors, []);
+  await close();
+});
+
+test("A VM's memory bar shows a card: its parts, what runs the VM parted, and what's worth a look", async () => {
+  const { page, errors, close } = await open('/');
+  const harbor = page.locator('article', { has: page.locator('a.name', { hasText: /^harbor$/ }) });
+  const meter = harbor.locator('.meter').first();
+  await meter.locator('.bar').waitFor();
+  // Under the bar, a line for the ssh sessions a client left behind.
+  assert.match(await meter.locator('.part').innerText(), /in containers\n.+ running the VM\n.+ kernel and cache\n235\.4 MiB in 64 ssh sessions$/);
+  // Resting on the bar: a card, the parts in rows, what runs the VM parted under its own row.
+  // Two moves, as a pointer arrives: the tooltip follows pointermove. In view first, as moving the
+  // mouse doesn't scroll.
+  await meter.locator('.bar').scrollIntoViewIfNeeded();
+  const box = await meter.locator('.bar').boundingBox();
+  await page.mouse.move(box.x + 2, box.y + box.height / 2);
+  await page.mouse.move(box.x + 4, box.y + box.height / 2);
+  const card = page.locator('[role=tooltip].card');
+  await card.waitFor({ timeout: 1500 });
+  const text = await card.innerText();
+  assert.match(text, /^harbor's memory\s+.+ of 7\.8 GiB in use/);
+  for (const row of ['Containers', 'Running the VM', 'Podman and your services', "The VM's system", 'SSH sessions', 'Other processes', 'Kernel and cache']) assert.ok(text.includes(row), row);
+  assert.match(text, /64 open: Lima's own/);
+  assert.equal(await card.locator('.name.flag').innerText(), 'SSH sessions');
+  // Its plain text stays the bar's description for a screen reader.
+  assert.match(await meter.locator('.bar').getAttribute('aria-description'), /^harbor's memory: .+\nContainers /);
+  // A container's memory bar has its card too, in place of the paragraph it had.
+  await page.goto(page.url().replace(/\/$/, '/containers'));
+  const line = page.locator('.line', { hasText: 'harbor-devbox' });
+  // In the middle of the window: just scrolled into view, it would sit under its VM's pinned heading.
+  await line.locator('.bar').first().evaluate((el) => el.scrollIntoView({ block: 'center' }));
+  await page.waitForTimeout(100); // scrolling hides a tooltip: let it settle
+  const bar = await line.locator('.bar').first().boundingBox();
+  await page.mouse.move(bar.x + 1, bar.y + bar.height / 2);
+  await page.mouse.move(bar.x + 3, bar.y + bar.height / 2);
+  await card.waitFor({ timeout: 1500 });
+  assert.match(await card.innerText(), /^Memory\s+.+ of the VM's 8\.0 GiB\n[\s\S]*Its processes' own[\s\S]*File cache and kernel[\s\S]*Full width is the VM's 8\.0 GiB/);
+  assert.deepEqual(errors, []);
+  await close();
+});
+
+test("A VM's page lists where its memory and CPU go under their bars, as their cards do", async () => {
+  const { page, errors, close } = await open('/vm/harbor');
+  const memory = page.locator('figure', { has: page.locator('h2', { hasText: /^Memory$/ }) });
+  const cpu = page.locator('figure', { has: page.locator('h2', { hasText: /^CPU$/ }) });
+  await memory.locator('.rows').waitFor();
+  const rows = await memory.locator('.rows .name').allInnerTexts();
+  assert.deepEqual(rows, ['Containers', 'Running the VM', 'Podman and your services', "The VM's system", 'SSH sessions', 'Other processes', 'Kernel and cache']);
+  // What's worth a look is in the warning colour, as in the card.
+  assert.deepEqual(await memory.locator('.rows .name.flag').allInnerTexts(), ['SSH sessions']);
+  assert.match(await memory.locator('.rows').innerText(), /64 open: Lima's own/);
+  // A hairline between rows, so each figure reads with its own name and line: from the indent for
+  // what runs the VM, under its own row.
+  const rules = await memory.locator('.rows .row').evaluateAll((rows) => rows.map((r) => [getComputedStyle(r).borderTopWidth, Math.round(r.getBoundingClientRect().left - r.parentElement.getBoundingClientRect().left) > 0]));
+  assert.deepEqual(rules, [['0px', false], ['1px', false], ['1px', true], ['1px', true], ['1px', true], ['1px', true], ['1px', false]]);
+  // The bar is split as the overview's is, keeping its tick at the peak.
+  const bar = memory.locator('.bar').first();
+  assert.equal(await bar.locator('.inside').count(), 1);
+  assert.equal(await bar.locator('.others').count(), 1);
+  assert.equal(await bar.locator('.tick').count(), 1);
+  assert.match(await bar.getAttribute('aria-description'), /^harbor's memory: /);
+  assert.deepEqual(await cpu.locator('.rows .name').allInnerTexts(), ['In containers', 'Outside them']);
+  assert.equal(await cpu.locator('.bar .inside').count(), 1);
+  assert.deepEqual(errors, []);
+  await close();
+});
+
+test("Side by side, a VM's memory and CPU charts start level, the vz note above memory's", async () => {
+  const { page, errors, close } = await open('/vm/harbor');
+  const figure = (name) => page.locator('figure', { has: page.locator('h2', { hasText: new RegExp(`^${name}$`) }) });
+  await figure('Memory').locator('.rows').waitFor();
+  // Their tops: a legend that wraps (memory's, here) only adds to what's under its chart.
+  const top = (name) => figure(name).locator('.chart').evaluate((el) => Math.round(el.getBoundingClientRect().top));
+  assert.equal(await top('Memory'), await top('CPU'));
+  assert.equal(await top('Pressure'), await top('Disk'));
+  // Memory's says more above its chart than CPU's does: they're level all the same.
+  const above = (name) => figure(name).locator('.above').evaluate((el) => el.lastElementChild.getBoundingClientRect().bottom - el.getBoundingClientRect().top);
+  assert.ok(await above('Memory') > (await above('CPU')) + 100);
+  // The note on what vz holds comes before the chart, with the figures it's about.
+  assert.equal(await figure('Memory').locator('.above > p.note', { hasText: /^On vz/ }).count(), 1);
+  assert.equal(await figure('Memory').evaluate((el) => el.lastElementChild.classList.contains('chart')), true);
+  assert.deepEqual(errors, []);
+  await close();
+});
+
+test("An open card follows its bar's reading as it changes, as the bar's description does", async () => {
+  const { page, errors, close } = await open('/');
+  const bar = page.locator('article', { has: page.locator('a.name', { hasText: /^harbor$/ }) }).locator('.meter').first().locator('.bar');
+  await bar.evaluate((el) => el.scrollIntoView({ block: 'center' }));
+  const box = await bar.boundingBox();
+  await page.mouse.move(box.x + 2, box.y + box.height / 2);
+  await page.mouse.move(box.x + 4, box.y + box.height / 2);
+  const figure = page.locator('[role=tooltip].card .figure');
+  await figure.waitFor({ timeout: 1500 });
+  const described = async () => (await bar.getAttribute('aria-description')).split('\n')[0].replace(/^harbor's memory: /, '').replace(/\.$/, '');
+  const before = await described();
+  assert.equal(await figure.innerText(), before);
+  // Half an hour on, the next poll reads harbor anew: the pointer hasn't moved, and the open card
+  // says what its bar now says.
+  await page.clock.setFixedTime(new Date(NOW.getTime() + 30 * 60_000));
+  await page.waitForFunction(({ el, was }) => !el.getAttribute('aria-description').startsWith(`harbor's memory: ${was}`), { el: await bar.elementHandle(), was: before }, { timeout: 15_000 });
+  assert.notEqual(await described(), before);
+  const now = await described();
+  await page.waitForFunction(({ el, want }) => el.textContent === want, { el: await figure.elementHandle(), want: now }, { timeout: 1500 });
+  assert.deepEqual(errors, []);
+  await close();
+});
+
+test("Moving from a bar's card up onto its chart shows the chart's own reading, not the card", async () => {
+  const { page, errors, close } = await open('/containers');
+  const line = page.locator('.line', { hasText: 'harbor-devbox' });
+  const bar = line.locator('.bar').first();
+  await bar.evaluate((el) => el.scrollIntoView({ block: 'center' }));
+  const b = await bar.boundingBox();
+  await page.mouse.move(b.x + 20, b.y + b.height / 2);
+  await page.mouse.move(b.x + 22, b.y + b.height / 2);
+  await page.locator('[role=tooltip].card').waitFor({ timeout: 1500 });
+  // Straight up onto the chart above it, skipping the gap between them.
+  const chart = await line.locator('.share').first().boundingBox();
+  await page.mouse.move(b.x + 22, chart.y + chart.height / 2);
+  await page.mouse.move(b.x + 24, chart.y + chart.height / 2);
+  await page.waitForFunction(() => document.querySelector('[role=tooltip]')?.textContent?.includes('this container'), null, { timeout: 1500 });
+  assert.equal(await page.locator('[role=tooltip].card').count(), 0);
   assert.deepEqual(errors, []);
   await close();
 });

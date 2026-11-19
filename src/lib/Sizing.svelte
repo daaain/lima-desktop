@@ -8,10 +8,12 @@
   import { inRange, type RangeKey } from './ranges';
   import { inOrder } from './inOrder';
   import type { Marker } from './oom';
+  import type { RichTip } from './richTip';
   import Bar from './Bar.svelte';
   import Chart from './Chart.svelte';
+  import TipRows from './TipRows.svelte';
 
-  let { inst, entity, latest, from, to, over, oomEvents, stalls, eventsFor, series, markers, hints = $bindable([]) }: {
+  let { inst, entity, latest, from, to, over, oomEvents, stalls, eventsFor, series, markers, memoryParts, cpuParts, hints = $bindable([]) }: {
     inst: Instance; entity?: number; latest: Latest; from: number; to: number;
     /** The range [from, to] is, for the verdicts to say. */
     over: RangeKey;
@@ -24,6 +26,10 @@
     series: Series | null;
     /** OOM kills and stalls to mark on the memory chart. */
     markers: Marker[];
+    /** Where its memory and CPU go now (almanac.memoryTip, cpuTip): its bars split as the overview's
+     * are, with these as their cards, and their rows listed under them. None for a VM running no
+     * containers. */
+    memoryParts?: RichTip; cpuParts?: RichTip;
     /** The verdicts, for the page's headline; empty until the history has arrived. */
     hints?: Hint[];
   } = $props();
@@ -123,53 +129,65 @@
 
 <div class="figures">
   <figure>
-    <h2 class="head">Memory</h2>
-    {@render verdict('memory')}
-    <div class="stats num">
-      {@render stat(bytes(latest.mem_used), 'now')}
-      {@render stat(bytes(summary?.mem_used?.max), `peak ${inRange(summaryOver)}`)}
-      {@render stat(bytes(memTotal), 'allocated')}
+    <div class="above">
+      <h2 class="head">Memory</h2>
+      {@render verdict('memory')}
+      <div class="stats num">
+        {@render stat(bytes(latest.mem_used), 'now')}
+        {@render stat(bytes(summary?.mem_used?.max), `peak ${inRange(summaryOver)}`)}
+        {@render stat(bytes(memTotal), 'allocated')}
+      </div>
+      <Bar pct={share(latest.mem_used, memTotal)} tick={summary?.mem_used?.max != null ? share(summary.mem_used.max, memTotal) : undefined} label="Memory now, with a tick at the peak, against the allocation"
+        inside={memoryParts?.bar?.inside} others={memoryParts?.bar?.others} tip={memoryParts} />
+      {#if memoryParts}<div class="parts"><TipRows rows={memoryParts.rows} /></div>{/if}
+      {#if inst.vmType === 'vz'}
+        <p class="note">{vzMemoryNote(latest.host_rss, latest.mem_used)}</p>
+      {/if}
     </div>
-    <Bar pct={share(latest.mem_used, memTotal)} tick={summary?.mem_used?.max != null ? share(summary.mem_used.max, memTotal) : undefined} label="Memory now, with a tick at the peak, against the allocation" />
     <Chart data={series} format={(v) => bytes(v)} ceiling={inst.memory} {markers}
       lines={[{ key: 'mem_used', label: 'used in the guest', color: '--series-1' }, { key: 'host_rss', label: 'RAM on your computer', color: '--series-3' }]} />
-    {#if inst.vmType === 'vz'}
-      <figcaption class="note">{vzMemoryNote(latest.host_rss, latest.mem_used)}</figcaption>
-    {/if}
   </figure>
   <figure>
-    <h2 class="head">CPU</h2>
-    {@render verdict('cpu')}
-    <div class="stats num">
-      {@render stat(cores(latest.cpu_mc), 'cores now')}
-      {@render stat(cores(cpuBusy), summary?.cpu_mc?.p95 != null ? 'cores, 95th percentile' : 'cores at most')}
-      {@render stat(String(inst.cpus), 'cores allocated')}
+    <div class="above">
+      <h2 class="head">CPU</h2>
+      {@render verdict('cpu')}
+      <div class="stats num">
+        {@render stat(cores(latest.cpu_mc), 'cores now')}
+        {@render stat(cores(cpuBusy), summary?.cpu_mc?.p95 != null ? 'cores, 95th percentile' : 'cores at most')}
+        {@render stat(String(inst.cpus), 'cores allocated')}
+      </div>
+      <Bar pct={share(latest.cpu_mc, inst.cpus * 1000)} tick={cpuBusy != null ? share(cpuBusy, inst.cpus * 1000) : undefined} label="CPU now, with a tick at the 95th percentile, against the cores"
+        inside={cpuParts?.bar?.inside} tip={cpuParts} />
+      {#if cpuParts}<div class="parts"><TipRows rows={cpuParts.rows} /></div>{/if}
     </div>
-    <Bar pct={share(latest.cpu_mc, inst.cpus * 1000)} tick={cpuBusy != null ? share(cpuBusy, inst.cpus * 1000) : undefined} label="CPU now, with a tick at the 95th percentile, against the cores" />
     <Chart data={series} format={cpuLabel} ceiling={inst.cpus * 1000}
       lines={[{ key: 'cpu_mc', label: 'guest', color: '--series-1' }, { key: 'host_cpu_mc', label: 'hypervisor on your computer', color: '--series-3' }]} />
   </figure>
   <figure>
-    <h2 class="head">Pressure</h2>
-    <p class="verdict serif">{pressure}</p>
-    <div class="stats num">
-      {@render stat(permille(latest.psi_cpu_some), 'waiting on CPU now', "Pressure (Linux's PSI): the share of the last measurement in which at least one task waited for a CPU")}
-      {@render stat(permille(latest.psi_mem_some), 'waiting on memory now', "Pressure (Linux's PSI): the share of the last measurement in which at least one task waited for memory")}
-      {@render stat(oomEvents ? String(oomEvents.length) : '–', `${oomEvents?.length === 1 ? 'OOM kill' : 'OOM kills'} ${inRange(over)}`)}
+    <div class="above">
+      <h2 class="head">Pressure</h2>
+      <p class="verdict serif">{pressure}</p>
+      <div class="stats num">
+        {@render stat(permille(latest.psi_cpu_some), 'waiting on CPU now', "Pressure (Linux's PSI): the share of the last measurement in which at least one task waited for a CPU")}
+        {@render stat(permille(latest.psi_mem_some), 'waiting on memory now', "Pressure (Linux's PSI): the share of the last measurement in which at least one task waited for memory")}
+        {@render stat(oomEvents ? String(oomEvents.length) : '–', `${oomEvents?.length === 1 ? 'OOM kill' : 'OOM kills'} ${inRange(over)}`)}
+      </div>
+      <p class="note">The share of time work waited: "some" is at least one task, "all" every task at once.</p>
     </div>
     <Chart data={series} format={(v) => `${v.toFixed(1)} %`}
       lines={[{ key: 'psi_mem_some', label: 'memory, some', color: '--series-2', scale: 0.1 }, { key: 'psi_mem_full', label: 'memory, all', color: '--series-3', scale: 0.1 }, { key: 'psi_cpu_some', label: 'cpu', color: '--series-1', scale: 0.1 }]} />
-    <figcaption class="note">The share of time work waited: "some" is at least one task, "all" every task at once.</figcaption>
   </figure>
   <figure>
-    <h2 class="head">Disk</h2>
-    {@render verdict('disk')}
-    <div class="stats num">
-      {@render stat(bytes(diskUsed), 'used')}
-      {@render stat(bytes(diskUsed != null ? diskSize - diskUsed : undefined), 'free')}
-      {@render stat(bytes(diskSize), 'allocated')}
+    <div class="above">
+      <h2 class="head">Disk</h2>
+      {@render verdict('disk')}
+      <div class="stats num">
+        {@render stat(bytes(diskUsed), 'used')}
+        {@render stat(bytes(diskUsed != null ? diskSize - diskUsed : undefined), 'free')}
+        {@render stat(bytes(diskSize), 'allocated')}
+      </div>
+      <Bar pct={share(diskUsed, diskSize)} label="Disk used, against the allocation" />
     </div>
-    <Bar pct={share(diskUsed, diskSize)} label="Disk used, against the allocation" />
     <Chart data={series} format={(v) => bytes(v)} ceiling={diskSize}
       lines={[{ key: 'store_used', label: 'container store', color: '--series-1' }, { key: 'host_disk_alloc', label: 'image on your computer', color: '--series-3' }]} />
   </figure>
@@ -193,13 +211,23 @@
 
 <style>
   .figures { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 28rem), 1fr)); gap: 2.8rem 4rem; }
-  figure { margin: 0; min-width: 0; display: grid; gap: 0.8rem; align-content: start; border-top: 1px solid var(--fg); padding-top: 0.9rem; }
+  /* Each figure is two rows of the page's grid (subgrid): what it says, then its chart. Side by side,
+     two figures' charts so start level however much each says above it (notes go above the chart),
+     and a legend that wraps only adds to what's under its own. Without subgrid, they stack as they
+     come. */
+  figure {
+    margin: 0; min-width: 0; display: grid; grid-row: span 2; grid-template-rows: subgrid; row-gap: 0.8rem; align-content: start;
+    border-top: 1px solid var(--fg); padding-top: 0.9rem;
+  }
+  .above { display: grid; gap: 0.8rem; align-content: start; min-width: 0; }
   .verdict { margin: 0; font-size: 1.3rem; line-height: 1.3; min-height: 2.6em; }
   .verdict button { font-family: var(--sans); margin-left: 0.4rem; height: 1.9rem; padding: 0 0.8rem; font-size: 0.82rem; vertical-align: 0.15em; }
   .stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1rem; }
   .stats div { display: grid; gap: 0.1rem; }
   .stats strong { font-size: 1.75rem; font-weight: 600; line-height: 1.1; white-space: nowrap; }
-  figcaption { max-width: 34rem; }
+  .above > .note { max-width: 34rem; }
+  /* Where it goes now, under the bar: the card's rows, a little larger than in a tooltip. */
+  .parts { font-size: 0.85rem; line-height: 1.4; max-width: 34rem; }
 
   .resize { display: grid; gap: 0.7rem; margin-top: 1.4rem; }
   form { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.6rem 0.8rem; font-size: 1.75rem; line-height: 1.3; }

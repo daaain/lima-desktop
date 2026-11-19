@@ -2,7 +2,8 @@
 // quarters; who is past three quarters; and a series turned into columns and a distribution.
 import type { Band, Latest, Series, Summary, VmLive } from './api';
 import type { Hint } from './rightsize';
-import { bytes, cores, permille, uptime } from './format';
+import { bytes, cores, MiB, permille, uptime } from './format';
+import type { RichTip, TipRow } from './richTip';
 import { inRange, theLast, type RangeKey } from './ranges';
 
 /** Past this share of an allocation a figure, its bar and its sentence turn to the warning colour. */
@@ -60,6 +61,21 @@ export interface Part {
   inside: number;
   others?: number;
   outside: number;
+  /** Of `others`, who holds it, where the probe parts it (its `S` lines). */
+  running?: Running;
+}
+
+/** What runs a VM besides its containers, by who holds it, in bytes; `sessions` a count. */
+export interface Running {
+  /** Podman (rootless: the user's systemd instance, less the containers inside it). */
+  runtime: number;
+  /** Lima's guest agent, systemd and its services. */
+  system: number;
+  /** The login sessions, and how many: Lima's own and the app's use one or two. */
+  ssh: number;
+  sessions: number;
+  /** The rest: anything run in the VM itself. */
+  other: number;
 }
 
 /**
@@ -98,6 +114,20 @@ export function containersPart(vm: VmLive): { memory?: Part; cpu?: Part } {
   if (memory && own != null) {
     const others = Math.max(0, Math.min(own, memory.inside + memory.outside) - memory.inside);
     memory = { inside: memory.inside, others, outside: memory.outside - others };
+    const l = vm.latest;
+    if (l.mem_runtime != null && l.mem_system != null && l.mem_ssh != null) {
+      // Each part held to what is left of what runs the VM, in turn.
+      let left = others;
+      const take = (n: number) => {
+        const t = Math.max(0, Math.min(n, left));
+        left -= t;
+        return t;
+      };
+      const runtime = take(l.mem_runtime);
+      const system = take(l.mem_system);
+      const ssh = take(l.mem_ssh);
+      memory.running = { runtime, system, ssh, sessions: l.ssh_sessions ?? 0, other: left };
+    }
   }
   const read = running.some((c) => c.latest.cpu_mc != null);
   const cpu = read ? part(vm.latest.cpu_mc, running.map((c) => c.latest.cpu_mc ?? 0)) : undefined;
@@ -110,7 +140,69 @@ export function partSaid(what: 'memory' | 'cpu', p: Part): { inside: string; oth
   const say = what === 'memory' ? (n: number) => bytes(n) : cores;
   const inside = `${say(p.inside)} in containers`;
   if (p.others == null) return { inside, outside: `${say(p.outside)} outside them` };
-  return { inside, others: `${say(p.others)} in other processes`, outside: `${say(p.outside)} kernel and cache` };
+  return { inside, others: `${say(p.others)} running the VM`, outside: `${say(p.outside)} kernel and cache` };
+}
+
+/** SSH sessions worth a look: many of them (Lima's own and the app's use one or two, and a few
+ * shells are ordinary) holding more than a few do (a few MiB each). What a shell runs counts as its
+ * session's, so one busy shell is work, not a leak: a leak shows as many sessions. Other processes
+ * holding a lot, in a VM that otherwise runs containers. */
+export const SSH_FLAG = 64 * MiB;
+export const SSH_SESSIONS_FLAG = 4;
+export const OTHER_FLAG = 256 * MiB;
+const sshFlagged = (r: Running) => r.sessions > SSH_SESSIONS_FLAG && r.ssh >= SSH_FLAG;
+
+/** What in a VM's memory is worth a look, as a line each: "247 MiB in 64 ssh sessions". */
+export function memoryFlags(p: Part): string[] {
+  const r = p.running;
+  if (!r) return [];
+  return [
+    ...(sshFlagged(r) ? [`${bytes(r.ssh)} in ${r.sessions} ssh sessions`] : []),
+    ...(r.other >= OTHER_FLAG ? [`${bytes(r.other)} in other processes`] : []),
+  ];
+}
+
+/** The card for a VM's memory bar: the figure, the bar again, a row per part, and what runs the VM
+ * parted under its own row where the probe parts it. */
+export function memoryTip(vm: string, g: Gauge, p: Part, vmType?: string): RichTip {
+  const r = p.running;
+  const rows: TipRow[] = [{ name: 'Containers', value: bytes(p.inside), sub: "their processes' own memory", swatch: 'solid' }];
+  if (p.others != null) {
+    rows.push({ name: 'Running the VM', value: bytes(p.others), sub: r ? undefined : 'its processes outside the containers', swatch: 'soft' });
+    if (r) {
+      rows.push(
+        { name: 'Podman and your services', value: bytes(r.runtime), sub: 'API server, a port forwarder for each container that publishes ports, networking', indent: true },
+        { name: "The VM's system", value: bytes(r.system), sub: "Lima's guest agent, systemd and its services", indent: true },
+        { name: 'SSH sessions', value: bytes(r.ssh), sub: `${r.sessions} open: Lima's own and the app's use one or two, and what a shell runs counts here; many more are usually left behind by clients that didn't close them`, indent: true, flag: sshFlagged(r) },
+        { name: 'Other processes', value: bytes(r.other), sub: 'anything else run in the VM, outside a shell, and files in its tmpfs', indent: true, flag: r.other >= OTHER_FLAG },
+      );
+    }
+  }
+  rows.push({ name: p.others != null ? 'Kernel and cache' : 'Outside them', value: bytes(p.outside), sub: p.others != null ? "the kernel's own, and cache it can't drop at once" : undefined, swatch: 'hatch' });
+  return {
+    title: `${vm}'s memory`,
+    figure: `${bytes(g.used)} of ${bytes(g.size)} in use`,
+    bar: { pct: g.pct, inside: share(p.inside, g.size), ...(p.others != null ? { others: share(p.others, g.size) } : {}), hot: g.hot },
+    rows,
+    // On vz, what a guest has touched stays held on the Mac until a restart (vzMemoryNote); for
+    // another type, or a Linux host, that isn't known to hold, so it isn't said.
+    foot: vmType === 'vz'
+      ? "In use is what the guest doesn't count as available. Its file cache, which it does, isn't counted here; on this Mac it can still hold memory until a restart."
+      : "In use is what the guest doesn't count as available.",
+  };
+}
+
+/** The card for a VM's CPU bar: its containers' part and what runs outside them. */
+export function cpuTip(vm: string, g: Gauge, p: Part, cpus: number): RichTip {
+  return {
+    title: `${vm}'s CPU`,
+    figure: `${cores(g.used)} of ${cpus} cores`,
+    bar: { pct: g.pct, inside: share(p.inside, g.size), hot: g.hot },
+    rows: [
+      { name: 'In containers', value: cores(p.inside), swatch: 'solid' },
+      { name: 'Outside them', value: cores(p.outside), sub: "Lima's guest agent, podman starting and stopping containers, the kernel, anything run in the VM itself", swatch: 'hatch' },
+    ],
+  };
 }
 
 /** A bar's label goes on with its parts, where it has them: ": 0.40 in containers, 5.9 outside them". */
@@ -120,12 +212,6 @@ export function partsLabel(what: 'memory' | 'cpu', p: Part | undefined): string 
   return `: ${[said.inside, said.others, said.outside].filter(Boolean).join(', ')}`;
 }
 
-/** Under a VM's memory bar, pointed at: what each part is. */
-export const MEMORY_PARTS_TIP = [
-  "Containers: their processes' own memory (podman's figure, on their lines, also counts file cache the VM counts as available).",
-  "Other processes: what else holds memory in the VM: podman's own processes (its service, a port forwarder for each container that publishes ports, its networking), Lima's guest agent, anything run in the VM itself, and files in its tmpfs.",
-  "Kernel and cache: what the guest's kernel holds and doesn't count as available: its own structures, page tables, and cache it can't drop at once.",
-].join('\n');
 
 /** A VM that has stopped answering, said wherever its last figures are drawn: they're from before. */
 export const stalledSaid = (since: number, now: number = Date.now()) =>
@@ -343,12 +429,14 @@ export interface RowMemory {
   /** The line under it: "peak 30.3 GiB in 24 h", in the range chosen. */
   peakSaid: string;
   label: string;
+  /** The same as a card, for its tooltip. */
+  tip: RichTip;
 }
 
 /** A container's memory in its line: now, against its limit or else its VM, with its peaks. */
 export function rowMemory(
   l: Latest,
-  o: { vmMemory: number; over: RangeKey; history?: Band; startedAt: number | null; now?: number },
+  o: { vmMemory: number; over: RangeKey; history?: Band; startedAt: number | null; now?: number; project?: boolean },
 ): RowMemory {
   const mem = l.mem ?? 0;
   const own = ownOf(mem, l.mem_own);
@@ -373,6 +461,28 @@ export function rowMemory(
     // "since start" wouldn't fit the column; the label says it.
     peakSaid: seen != null ? `peak ${bytes(peak)} ${inRange(o.over)}` : `peak ${bytes(peak)}`,
     label: `Memory ${nowSaid(mem, own)}${own == null ? '' : `, the rest ${REST}`}; ${peaks}; full width is ${whole}`,
+    tip: {
+      title: 'Memory',
+      figure: limit ? `${bytes(mem)} of its ${bytes(limit)} limit` : `${bytes(mem)} of the VM's ${bytes(o.vmMemory)}`,
+      bar: { pct: share(mem, scale), behind: share(l.mem_peak, scale), ...(own == null ? {} : { own: share(own, scale) }), tick: share(peak, scale), hot: limit != null && isHot(share(mem, limit)) },
+      rows: [
+        ...(own == null
+          ? [{ name: 'Now', value: bytes(mem), swatch: 'solid' as const }]
+          : [
+              { name: "Its processes' own", value: bytes(own), swatch: 'strong' as const },
+              { name: 'File cache and kernel', value: bytes(mem - own), sub: 'most of which the VM can reclaim', swatch: 'solid' as const },
+            ]),
+        ...(seen != null ? [{ name: `Peak in ${theLast(o.over)}`, value: bytes(peak) }] : []),
+        // Only a peak it has a reading of: without one, now is all that's known.
+        ...(l.mem_peak != null ? [{ name: `Peak ${since(o.startedAt, o.now)}`, value: bytes(l.mem_peak) }] : []),
+      ],
+      // An unlimited container reports the guest's memory as its limit, a little under the VM's, so a
+      // limit within reach of the VM's reads as none (ownLimit): say only that there's none below it.
+      // A compose project's heading (`project`) has no limit to speak of.
+      foot: limit
+        ? `Full width is its ${bytes(limit)} limit.`
+        : `Full width is the VM's ${bytes(o.vmMemory)}${o.project ? '' : ': the container has no limit below it'}.`,
+    },
   };
 }
 
