@@ -436,7 +436,7 @@ export interface RowMemory {
 /** A container's memory in its line: now, against its limit or else its VM, with its peaks. */
 export function rowMemory(
   l: Latest,
-  o: { vmMemory: number; over: RangeKey; history?: Band; startedAt: number | null; now?: number },
+  o: { vmMemory: number; over: RangeKey; history?: Band; startedAt: number | null; now?: number; project?: boolean },
 ): RowMemory {
   const mem = l.mem ?? 0;
   const own = ownOf(mem, l.mem_own);
@@ -473,9 +473,15 @@ export function rowMemory(
               { name: 'File cache and kernel', value: bytes(mem - own), sub: 'most of which the VM can reclaim', swatch: 'solid' as const },
             ]),
         ...(seen != null ? [{ name: `Peak in ${theLast(o.over)}`, value: bytes(peak) }] : []),
-        ...(seen == null || l.mem_peak != null ? [{ name: `Peak ${since(o.startedAt, o.now)}`, value: bytes(l.mem_peak ?? peak) }] : []),
+        // Only a peak it has a reading of: without one, now is all that's known.
+        ...(l.mem_peak != null ? [{ name: `Peak ${since(o.startedAt, o.now)}`, value: bytes(l.mem_peak) }] : []),
       ],
-      foot: limit ? `Full width is its ${bytes(limit)} limit.` : `Full width is the VM's ${bytes(o.vmMemory)}: the container has no limit of its own.`,
+      // An unlimited container reports the guest's memory as its limit, a little under the VM's, so a
+      // limit within reach of the VM's reads as none (ownLimit): say only that there's none below it.
+      // A compose project's heading (`project`) has no limit to speak of.
+      foot: limit
+        ? `Full width is its ${bytes(limit)} limit.`
+        : `Full width is the VM's ${bytes(o.vmMemory)}${o.project ? '' : ': the container has no limit below it'}.`,
     },
   };
 }

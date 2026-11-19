@@ -6,7 +6,6 @@
   // changed) is taken over the same way next time.
   // An element given a card (richTip.svelte.ts) shows it in place of its text.
   import { OWN_TIP, tooltip } from './tipState.svelte';
-  import { tipText } from './richTip';
   import { richOf } from './richTip.svelte';
   import Bar from './Bar.svelte';
   import TipRows from './TipRows.svelte';
@@ -34,12 +33,10 @@
     tooltip.point(el, el ? textOf(el) : null, e.clientX, e.clientY);
   }
 
-  // What the pointer is over: its card, if it has one and it's what is shown.
+  // What the pointer is over: its card, while a tooltip is shown (always the one for what it's
+  // over), read reactively, so an open card follows the element's reading as it changes.
   let over = $state<Element | null>(null);
-  const card = $derived.by(() => {
-    const rich = richOf(over);
-    return rich && tooltip.shown?.text === tipText(rich) ? rich : null;
-  });
+  const card = $derived(tooltip.shown ? (richOf(over) ?? null) : null);
 
   let width = $state(0);
   let height = $state(0);

@@ -1212,6 +1212,29 @@ test("Side by side, a VM's memory and CPU charts start level, the vz note above 
   await close();
 });
 
+test("An open card follows its bar's reading as it changes, as the bar's description does", async () => {
+  const { page, errors, close } = await open('/');
+  const bar = page.locator('article', { has: page.locator('a.name', { hasText: /^harbor$/ }) }).locator('.meter').first().locator('.bar');
+  await bar.evaluate((el) => el.scrollIntoView({ block: 'center' }));
+  const box = await bar.boundingBox();
+  await page.mouse.move(box.x + 2, box.y + box.height / 2);
+  await page.mouse.move(box.x + 4, box.y + box.height / 2);
+  const figure = page.locator('[role=tooltip].card .figure');
+  await figure.waitFor({ timeout: 1500 });
+  const described = async () => (await bar.getAttribute('aria-description')).split('\n')[0].replace(/^harbor's memory: /, '').replace(/\.$/, '');
+  const before = await described();
+  assert.equal(await figure.innerText(), before);
+  // Half an hour on, the next poll reads harbor anew: the pointer hasn't moved, and the open card
+  // says what its bar now says.
+  await page.clock.setFixedTime(new Date(NOW.getTime() + 30 * 60_000));
+  await page.waitForFunction(({ el, was }) => !el.getAttribute('aria-description').startsWith(`harbor's memory: ${was}`), { el: await bar.elementHandle(), was: before }, { timeout: 15_000 });
+  await page.waitForFunction(() => true);
+  assert.notEqual(await described(), before);
+  assert.equal(await figure.innerText(), await described());
+  assert.deepEqual(errors, []);
+  await close();
+});
+
 test('On a narrow window the order is chosen from a word, as the heads are gone', async () => {
   const { page, errors, close } = await open('/', { width: 420, height: 900 });
   await page.locator('article').first().waitFor();

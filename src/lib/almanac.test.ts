@@ -716,13 +716,27 @@ describe("a container's memory card", () => {
       ['Peak in the last 24 h', '9.1 GiB'],
       ['Peak since it started', '9.3 GiB'],
     ]);
-    expect(m.tip.foot).toBe("Full width is the VM's 45.8 GiB: the container has no limit of its own.");
+    expect(m.tip.foot).toBe("Full width is the VM's 45.8 GiB: the container has no limit below it.");
   });
   it('against its own limit, and without a reading of its own memory', () => {
     const m = rowMemory({ mem: 900 * 1024 ** 2, mem_limit: 1024 ** 3 }, { vmMemory: 8 * GiB, over: '1h', startedAt: null });
     expect(m.tip.figure).toBe('900.0 MiB of its 1.0 GiB limit');
-    expect(m.tip.rows.map((r) => r.name)).toEqual(['Now', 'Peak since it started']);
+    expect(m.tip.rows.map((r) => r.name)).toEqual(['Now']);
     expect(m.tip.foot).toBe('Full width is its 1.0 GiB limit.');
+  });
+  it("cards a compose project's memory too, saying only what full width is: a project has no limit", () => {
+    const m = rowMemory({ mem: 3 * GiB, mem_own: 2 * GiB }, { vmMemory: 8 * GiB, over: '24h', history: { min: [1], max: [4 * GiB], avg: [1] }, startedAt: null, project: true });
+    expect(m.tip.rows.map((r) => r.name)).toEqual(["Its processes' own", 'File cache and kernel', 'Peak in the last 24 h']);
+    expect(m.tip.foot).toBe("Full width is the VM's 8.0 GiB.");
+  });
+    it('says no peak it has no reading of: now is all that is known', () => {
+    const m = rowMemory({ mem: 900 * 1024 ** 2 }, { vmMemory: 8 * GiB, over: '1h', startedAt: null });
+    expect(m.tip.rows.map((r) => r.name)).toEqual(['Now']);
+  });
+  it("says full width is the VM's without claiming there's no limit, as one near the VM's reads as none", () => {
+    // Podman gives an unlimited container the guest's memory as its limit, a little under the VM's.
+    const m = rowMemory({ mem: GiB, mem_limit: 7.8 * GiB }, { vmMemory: 8 * GiB, over: '1h', startedAt: null });
+    expect(m.tip.foot).toBe("Full width is the VM's 8.0 GiB: the container has no limit below it.");
   });
 });
 

@@ -14,7 +14,7 @@
 #   S <runtime|system|ssh> <bytes>  S sessions <n>   (cgroup v2 only) the guest's own memory (anon +
 #     shmem) by who holds it: runtime, the user's systemd instance less the containers inside it
 #     (rootless podman: its API server, port forwarders, networking, conmon); system, system.slice
-#     and init.scope (Lima's guest agent, systemd and its services); ssh, the login sessions, and
+#     and init.scope less any containers under them (Lima's guest agent, systemd and its services); ssh, the login sessions, and
 #     how many there are (Lima's own and the app's probe; more are left behind by clients that
 #     didn't close them).
 #   .                                             (end of block)
@@ -62,6 +62,7 @@ while :; do
     scopes=$(find /sys/fs/cgroup -maxdepth 9 -type d -name 'libpod-*' ! -name 'libpod-conmon-*' 2>/dev/null)
   fi
   incontainers=0
+  insystem=0
   for s in $scopes; do
     id=${s##*/libpod-}
     id=${id%.scope}
@@ -78,7 +79,12 @@ while :; do
     # order): own_of stops once both are read, not at the end of the file.
     own_of "$s"
     echo "G $id $pk $ok $own"
-    case $s in */user@*.service/*) [ "$own" = - ] || incontainers=$((incontainers + own)) ;; esac
+    # Containers are counted as theirs, not again as what holds them: rootless ones under the
+    # user's systemd instance (runtime), any rootful one placed under system.slice (system).
+    case $s in
+      */user@*.service/*) [ "$own" = - ] || incontainers=$((incontainers + own)) ;;
+      */system.slice/*) [ "$own" = - ] || insystem=$((insystem + own)) ;;
+    esac
   done
   if [ -f /sys/fs/cgroup/cgroup.controllers ]; then
     runtime=0
@@ -93,6 +99,8 @@ while :; do
       own_of "$g"
       [ "$own" = - ] || system=$((system + own))
     done
+    system=$((system - insystem))
+    [ "$system" -ge 0 ] || system=0
     ssh=0
     sessions=0
     for g in /sys/fs/cgroup/user.slice/user-*.slice/session-*.scope; do
