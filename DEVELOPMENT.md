@@ -83,6 +83,7 @@ Two levels, kept apart in the masthead (`lib/Masthead.svelte`): **VMs** (`routes
 | `lib/live.svelte.ts` | the snapshot every page shares (VMs, their containers and latest metrics), polled at the measuring interval |
 | `lib/order.ts`, `lib/ordering.svelte.ts` | ordering a list by a column, the natural way or reversed, and a list's order as a page holds it (kept in the webview's storage) |
 | `lib/vmSort.ts`, `lib/itemOrder.ts`, `containers.ts` | each list's columns and how they compare: the VMs; images and volumes; containers |
+| `lib/folds.ts`, `lib/folds.svelte.ts` | which compose projects are folded on Containers and a VM's page (one set for both, by VM and project, kept in the webview's storage), and that a search lists a folded project's lines |
 | `lib/SortHead.svelte`, `lib/OrderPicker.svelte` | a column head that orders its list; the same in words where the heads are hidden |
 | `lib/perVm.ts` | which VMs a podman-wide view lists (and the sentences about those it leaves out); asking each VM with `Promise.allSettled`, so one broken VM doesn't blank a list |
 | `lib/perVmList.svelte.ts`, `lib/podmanLists.svelte.ts` | images and volumes aren't in the snapshot: fetched from the start (the layout follows them, and measures each VM once), kept for the app's life so their views open on what's known, again after actions, on Refresh and every 15 s |

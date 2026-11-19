@@ -881,6 +881,59 @@ test("A project's heading describes the whole project whatever the filter leaves
   await close();
 });
 
+test("A project's heading folds its lines away, kept for next time and on its VM's page too", async () => {
+  const { page, errors, close } = await open('/containers');
+  await page.locator('.line').first().waitFor();
+  const atlas = page.locator('section', { has: page.locator('h2 a', { hasText: 'atlas' }) });
+  const project = atlas.getByRole('group', { name: 'Compose project atlas' });
+  const fold = project.getByRole('button', { name: 'atlas' });
+  const lines = atlas.locator('.project + .rows .line');
+  assert.equal(await fold.getAttribute('aria-expanded'), 'true');
+  assert.equal(await lines.count(), 12);
+  // A click anywhere on the heading folds it; its sentence and sums stay.
+  await project.locator('.said').first().click();
+  await lines.first().waitFor({ state: 'detached' });
+  assert.equal(await fold.getAttribute('aria-expanded'), 'false');
+  assert.match(await project.innerText(), /^atlas\s+twelve running\b/);
+  // What is in no project is never folded.
+  assert.match(await atlas.locator('.line').first().innerText(), /^atlas-devbox/);
+  // A search lists what it finds in a folded project, and folds it again once cleared.
+  await page.getByPlaceholder(/^Search/).fill('postgres');
+  await lines.first().waitFor();
+  assert.equal(await lines.count(), 1);
+  await page.getByPlaceholder(/^Search/).fill('');
+  await lines.first().waitFor({ state: 'detached' });
+  // Kept for next time.
+  await page.reload();
+  await atlas.locator('.line').first().waitFor();
+  assert.equal(await fold.getAttribute('aria-expanded'), 'false');
+  assert.equal(await lines.count(), 0);
+  // Folded on the VM's page too, and unfolded there from the keyboard.
+  await atlas.locator('h2 a').click();
+  await page.waitForURL(/\/vm\/atlas$/);
+  const onVm = page.getByRole('group', { name: 'Compose project atlas' }).getByRole('button', { name: 'atlas' });
+  assert.equal(await onVm.getAttribute('aria-expanded'), 'false');
+  await onVm.focus();
+  await page.keyboard.press('Enter');
+  await page.locator('.project + .rows .line').first().waitFor();
+  assert.equal(await onVm.getAttribute('aria-expanded'), 'true');
+  assert.deepEqual(errors, []);
+  await close();
+});
+
+test("An OOM kill opens its container's detail even in a folded project, unfolding it", async () => {
+  const { page, errors, close } = await open('/vm/harbor', { init: () => localStorage.setItem('folded-projects', '["harbor/harbor"]') });
+  const fold = page.getByRole('group', { name: 'Compose project harbor' }).getByRole('button', { name: 'harbor' });
+  await fold.waitFor();
+  assert.equal(await fold.getAttribute('aria-expanded'), 'false');
+  // The kill in harbor's app (the stall's row is the devbox, in no project).
+  await page.locator('#oom tbody tr.clickable', { has: page.locator('.cname', { hasText: /^app$/ }) }).click();
+  await page.locator('[id^="detail-"]').waitFor();
+  assert.equal(await fold.getAttribute('aria-expanded'), 'true');
+  assert.deepEqual(errors, []);
+  await close();
+});
+
 for (const dark of [false, true]) {
   test(`A project's heading sits on a faint hatch, its charts on the page's own ground${dark ? ' (dark)' : ''}`, async () => {
     const { page, errors, close } = await open('/containers', { dark });

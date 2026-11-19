@@ -19,6 +19,8 @@
   import SortHead from '$lib/SortHead.svelte';
   import { glide, unfold } from '$lib/motion';
   import { Ordering } from '$lib/ordering.svelte';
+  import { folds } from '$lib/folds.svelte';
+  import { listsLines } from '$lib/folds';
 
   let query = $state('');
   let actionError = $state<string | null>(null);
@@ -32,6 +34,8 @@
   const scope = $derived(podmanScope(live.snapshot));
   const all = $derived(containerRows(live.snapshot));
   const rows = $derived(filterContainers(all, { ...urlFilter, query }));
+  // A folded project lists its lines while a search is typed: what it finds is never hidden.
+  const searching = $derived(query.trim() !== '');
   // Every container of each compose project, keyed `vm/project`, whatever the filter: a project's
   // heading describes the whole project, as its range (compose_series) does, and the filter only
   // decides which of its lines are listed under it.
@@ -127,21 +131,27 @@
         {#each g.projects as p (p.project)}
           <div animate:glide>
             {#if p.project}
-              <ProjectHead project={p.project} containers={projectContainers.get(keyOf(g.vm, p.project)) ?? []} history={history.get({ vm: g.vm, project: p.project })}
-                vmHistory={history.get(g.live?.entity)} vmMemory={g.live?.instance.memory ?? 0} vmCpus={g.live?.instance.cpus ?? 1} />
+              {@const project = p.project}
+              <ProjectHead {project} containers={projectContainers.get(keyOf(g.vm, project)) ?? []} history={history.get({ vm: g.vm, project })}
+                vmHistory={history.get(g.live?.entity)} vmMemory={g.live?.instance.memory ?? 0} vmCpus={g.live?.instance.cpus ?? 1}
+                folded={folds.has(g.vm, project)} ontoggle={() => folds.toggle(g.vm, project)} />
             {/if}
-            {#each p.rows as { vm, c } (c.id)}
-              {@const key = keyOf(vm, c.id)}
-              <div animate:glide>
-                <ContainerLine {vm} {c} history={history.get(lineHistory(vm, c))} vmHistory={history.get(g.live?.entity)} vmCpus={g.live?.instance.cpus ?? 1} vmMemory={g.live?.instance.memory ?? 0} second="image"
-                  now={live.snapshot?.updated} selected={key in open} onselect={() => toggle(key)} onerror={(e) => (actionError = e)} />
-                {#if open[key] != null}
-                  <div transition:unfold>
-                    <ContainerDetail {vm} {c} from={span.from} to={span.to} over={range.key} vmMemory={g.live?.instance.memory ?? 0} onclose={() => close(key)} />
-                  </div>
-                {/if}
-              </div>
-            {/each}
+            {#if !p.project || listsLines({ folded: folds.has(g.vm, p.project), searching })}
+            <div class="rows" transition:unfold>
+              {#each p.rows as { vm, c } (c.id)}
+                {@const key = keyOf(vm, c.id)}
+                <div animate:glide>
+                  <ContainerLine {vm} {c} history={history.get(lineHistory(vm, c))} vmHistory={history.get(g.live?.entity)} vmCpus={g.live?.instance.cpus ?? 1} vmMemory={g.live?.instance.memory ?? 0} second="image"
+                    now={live.snapshot?.updated} selected={key in open} onselect={() => toggle(key)} onerror={(e) => (actionError = e)} />
+                  {#if open[key] != null}
+                    <div transition:unfold>
+                      <ContainerDetail {vm} {c} from={span.from} to={span.to} over={range.key} vmMemory={g.live?.instance.memory ?? 0} onclose={() => close(key)} />
+                    </div>
+                  {/if}
+                </div>
+              {/each}
+            </div>
+            {/if}
           </div>
         {/each}
       </section>
