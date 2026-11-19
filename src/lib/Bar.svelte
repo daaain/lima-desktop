@@ -5,8 +5,10 @@
   // of it hatched (a VM's containers, and what runs outside them), and between them a paler part
   // (its other processes). Past three quarters it takes the warning colour, unless `plain`.
   import { isHot } from './almanac';
+  import type { RichTip } from './richTip';
+  import { richTip } from './richTip.svelte';
 
-  let { pct, behind, own, inside, others, tick, plain = false, quiet = false, hot, label }: {
+  let { pct, behind, own, inside, others, tick, plain = false, quiet = false, hot, label, tip }: {
     pct: number; behind?: number;
     /** Of `pct`, the part drawn strongest: no wider than it. */
     own?: number;
@@ -17,11 +19,13 @@
     tick?: number; plain?: boolean; quiet?: boolean;
     /** Overrides the three-quarters rule (e.g. measured against a limit that isn't the scale). */
     hot?: boolean; label?: string;
+    /** A card for its tooltip in place of the label's text (richTip.ts); the label stays its name. */
+    tip?: RichTip;
   } = $props();
   const clamp = (n: number) => Math.max(0, Math.min(100, n));
 </script>
 
-<div class="bar" class:hot={hot ?? (!plain && isHot(pct))} class:quiet role={label ? 'img' : undefined} aria-label={label} title={label}>
+<div class="bar" class:hot={hot ?? (!plain && isHot(pct))} class:quiet role={label ? 'img' : undefined} aria-label={label} title={tip ? undefined : label} use:richTip={tip}>
   {#if behind != null}<span class="behind" style:width={`${clamp(behind)}%`}></span>{/if}
   <span class="fill" class:some={pct > 0} class:split={own != null} class:hatched={inside != null} style:width={`${clamp(pct)}%`}></span>
   {#if inside != null}<span class="inside" style:width={`${clamp(Math.min(inside, pct))}%`}></span>{/if}

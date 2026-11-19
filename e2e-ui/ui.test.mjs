@@ -920,8 +920,9 @@ test("A VM's memory and CPU bars on the overview split what its containers use f
       assert.match(await bar.getAttribute('aria-label'), /: .+ in containers, .+ outside them$/);
       assert.equal(await bar.locator('.others').count(), 0);
     } else {
-      assert.match(await meter.locator('.part').innerText(), /^.+ in containers\n.+ in other processes\n.+ kernel and cache$/);
-      assert.match(await bar.getAttribute('aria-label'), /: .+ in containers, .+ in other processes, .+ kernel and cache$/);
+      // atlas, whose memory leaks outside its containers, has that said under it too.
+      assert.match(await meter.locator('.part').innerText(), /^.+ in containers\n.+ running the VM\n.+ kernel and cache\n.+ in other processes$/);
+      assert.match(await bar.getAttribute('aria-label'), /: .+ in containers, .+ running the VM, .+ kernel and cache$/);
       const [inEnd, othersStart, othersEnd, fillEnd] = await bar.evaluate((el) => {
         const r = (s) => el.querySelector(s).getBoundingClientRect();
         return [r('.inside').right, r('.others').left, r('.others').right, r('.fill').right];
@@ -934,6 +935,43 @@ test("A VM's memory and CPU bars on the overview split what its containers use f
   await ember.locator('.meter').first().waitFor();
   assert.equal(await ember.locator('.bar .inside').count(), 0);
   assert.equal(await ember.locator('.part').count(), 0);
+  assert.deepEqual(errors, []);
+  await close();
+});
+
+test("A VM's memory bar shows a card: its parts, what runs the VM parted, and what's worth a look", async () => {
+  const { page, errors, close } = await open('/');
+  const harbor = page.locator('article', { has: page.locator('a.name', { hasText: /^harbor$/ }) });
+  const meter = harbor.locator('.meter').first();
+  await meter.locator('.bar').waitFor();
+  // Under the bar, a line for the ssh sessions a client left behind.
+  assert.match(await meter.locator('.part').innerText(), /in containers\n.+ running the VM\n.+ kernel and cache\n235\.4 MiB in 64 ssh sessions$/);
+  // Resting on the bar: a card, the parts in rows, what runs the VM parted under its own row.
+  // Two moves, as a pointer arrives: the tooltip follows pointermove. In view first, as moving the
+  // mouse doesn't scroll.
+  await meter.locator('.bar').scrollIntoViewIfNeeded();
+  const box = await meter.locator('.bar').boundingBox();
+  await page.mouse.move(box.x + 2, box.y + box.height / 2);
+  await page.mouse.move(box.x + 4, box.y + box.height / 2);
+  const card = page.locator('[role=tooltip].card');
+  await card.waitFor({ timeout: 1500 });
+  const text = await card.innerText();
+  assert.match(text, /^harbor's memory\s+.+ of 7\.8 GiB in use/);
+  for (const row of ['Containers', 'Running the VM', 'Podman and your services', "The VM's system", 'SSH sessions', 'Other processes', 'Kernel and cache']) assert.ok(text.includes(row), row);
+  assert.match(text, /64 open: Lima's own/);
+  assert.equal(await card.locator('.name.flag').innerText(), 'SSH sessions');
+  // Its plain text stays the bar's description for a screen reader.
+  assert.match(await meter.locator('.bar').getAttribute('aria-description'), /^harbor's memory: .+\nContainers /);
+  // A container's memory bar has its card too, in place of the paragraph it had.
+  await page.goto(page.url().replace(/\/$/, '/containers'));
+  const line = page.locator('.line', { hasText: 'harbor-devbox' });
+  await line.locator('.bar').first().scrollIntoViewIfNeeded();
+  await page.waitForTimeout(100); // scrolling hides a tooltip: let it settle
+  const bar = await line.locator('.bar').first().boundingBox();
+  await page.mouse.move(bar.x + 1, bar.y + bar.height / 2);
+  await page.mouse.move(bar.x + 3, bar.y + bar.height / 2);
+  await card.waitFor({ timeout: 1500 });
+  assert.match(await card.innerText(), /^Memory\s+.+ of the VM's 8\.0 GiB\n[\s\S]*Its processes' own[\s\S]*File cache and kernel[\s\S]*Full width is the VM's 8\.0 GiB/);
   assert.deepEqual(errors, []);
   await close();
 });

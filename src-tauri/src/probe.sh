@@ -11,6 +11,12 @@
 #     anon+shmem from memory.stat: its processes' own memory, which only swap could take away.
 #     podman's figure is memory.current less inactive_file, so it counts active file cache and
 #     reclaimable slab too. shmem is in because postgres' shared_buffers and tmpfs live there.
+#   S <runtime|system|ssh> <bytes>  S sessions <n>   (cgroup v2 only) the guest's own memory (anon +
+#     shmem) by who holds it: runtime, the user's systemd instance less the containers inside it
+#     (rootless podman: its API server, port forwarders, networking, conmon); system, system.slice
+#     and init.scope (Lima's guest agent, systemd and its services); ssh, the login sessions, and
+#     how many there are (Lima's own and the app's probe; more are left behind by clients that
+#     didn't close them).
 #   .                                             (end of block)
 store="${XDG_DATA_HOME:-$HOME/.local/share}/containers/storage"
 [ -d "$store" ] || store="$HOME"
@@ -20,6 +26,21 @@ rescan=$((5 / interval))
 [ "$rescan" -ge 1 ] || rescan=1
 i=0
 scopes=
+# A cgroup's anon + shmem in bytes, into `own` (- if unreadable): builtins only, no subshell.
+own_of() {
+  own=-
+  [ -r "$1/memory.stat" ] || return 0
+  an=
+  sh=
+  while read -r k v; do
+    case $k in
+      anon) an=$v ;;
+      shmem) sh=$v ;;
+      *) continue ;;
+    esac
+    if [ -n "$an" ] && [ -n "$sh" ]; then own=$((an + sh)); return 0; fi
+  done < "$1/memory.stat"
+}
 while :; do
   read -r up _ < /proc/uptime
   echo "U $up"
@@ -40,6 +61,7 @@ while :; do
   if [ $((i % rescan)) -eq 0 ] && [ -f /sys/fs/cgroup/cgroup.controllers ]; then
     scopes=$(find /sys/fs/cgroup -maxdepth 9 -type d -name 'libpod-*' ! -name 'libpod-conmon-*' 2>/dev/null)
   fi
+  incontainers=0
   for s in $scopes; do
     id=${s##*/libpod-}
     id=${id%.scope}
@@ -52,23 +74,38 @@ while :; do
         if [ "$k" = oom_kill ]; then ok=$v; fi
       done < "$s/memory.events"
     fi
-    own=-
-    if [ -r "$s/memory.stat" ]; then
-      # Both near the top (anon first, as a rule, but the kernel doesn't promise the order): stop
-      # once both are read, not at the end of the file.
-      an=
-      sh=
-      while read -r k v; do
-        case $k in
-          anon) an=$v ;;
-          shmem) sh=$v ;;
-          *) continue ;;
-        esac
-        if [ -n "$an" ] && [ -n "$sh" ]; then own=$((an + sh)); break; fi
-      done < "$s/memory.stat"
-    fi
+    # Both near the top of memory.stat (anon first, as a rule, but the kernel doesn't promise the
+    # order): own_of stops once both are read, not at the end of the file.
+    own_of "$s"
     echo "G $id $pk $ok $own"
+    case $s in */user@*.service/*) [ "$own" = - ] || incontainers=$((incontainers + own)) ;; esac
   done
+  if [ -f /sys/fs/cgroup/cgroup.controllers ]; then
+    runtime=0
+    for u in /sys/fs/cgroup/user.slice/user-*.slice/user@*.service; do
+      own_of "$u"
+      [ "$own" = - ] || runtime=$((runtime + own))
+    done
+    runtime=$((runtime - incontainers))
+    [ "$runtime" -ge 0 ] || runtime=0
+    system=0
+    for g in /sys/fs/cgroup/system.slice /sys/fs/cgroup/init.scope; do
+      own_of "$g"
+      [ "$own" = - ] || system=$((system + own))
+    done
+    ssh=0
+    sessions=0
+    for g in /sys/fs/cgroup/user.slice/user-*.slice/session-*.scope; do
+      [ -d "$g" ] || continue
+      sessions=$((sessions + 1))
+      own_of "$g"
+      [ "$own" = - ] || ssh=$((ssh + own))
+    done
+    echo "S runtime $runtime"
+    echo "S system $system"
+    echo "S ssh $ssh"
+    echo "S sessions $sessions"
+  fi
   echo "."
   i=$((i + 1))
   sleep "$interval"

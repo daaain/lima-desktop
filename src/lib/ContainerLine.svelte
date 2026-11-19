@@ -42,7 +42,7 @@
   {#if running}
     <div class="drawn">
       <MemoryShare me={band(history, 'mem')} vm={band(vmHistory, 'mem_used')} ts={history?.ts ?? vmHistory?.ts} {vmMemory} hot={memory.hot} />
-      <Bar pct={memory.pct} behind={memory.behind} own={memory.own} tick={memory.tick} hot={memory.hot} label={memory.label} />
+      <Bar pct={memory.pct} behind={memory.behind} own={memory.own} tick={memory.tick} hot={memory.hot} label={memory.label} tip={memory.tip} />
     </div>
     <div class="said">
       <strong class="of" class:hot={memory.hot}><span>{bytes(l.mem)}</span> <span class="label">{memory.of}</span></strong>

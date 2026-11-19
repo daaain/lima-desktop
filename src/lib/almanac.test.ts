@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   bandPeak, bandRise, containersHeadline, containersSentence, countWord, projectSaid, exitedSentence, fullWindow, holdsSentence, intervalPhrase, ownLimit, pressureSentence, rowMemory,
-  restartNote, runsSentence, containersPart, partSaid, fleetHeadline, hostBar, hostRamSentence, quarters, selfMemory, vzMemoryNote, share, shareChart, shareTip, sketch, unusedHeadline, unusedLede, vmHeadline, vmSentence,
+  restartNote, runsSentence, containersPart, partSaid, memoryFlags, memoryTip, cpuTip, fleetHeadline, hostBar, hostRamSentence, quarters, selfMemory, vzMemoryNote, share, shareChart, shareTip, sketch, unusedHeadline, unusedLede, vmHeadline, vmSentence,
 } from './almanac';
 import type { Latest } from './api';
 import type { Hint } from './rightsize';
@@ -562,6 +562,95 @@ describe('partSaid', () => {
   });
   it("names the memory's rest for what it is once other processes are told apart from it", () => {
     expect(partSaid('memory', { inside: 10.8 * 1024 ** 3, others: 0.6 * 1024 ** 3, outside: 2.3 * 1024 ** 3 }))
-      .toEqual({ inside: '10.8 GiB in containers', others: '614.4 MiB in other processes', outside: '2.3 GiB kernel and cache' });
+      .toEqual({ inside: '10.8 GiB in containers', others: '614.4 MiB running the VM', outside: '2.3 GiB kernel and cache' });
+  });
+});
+
+describe('what runs the VM', () => {
+  const MiB = 1024 ** 2;
+  const GiB = 1024 ** 3;
+  const own = (n: number) => container({ id: `c${n}`, latest: { mem_own: n * MiB } });
+  // tangible: 10.8 GiB in its containers, 676 MiB more of its own, 2.2 GiB the kernel's and cache.
+  const latest = { mem_used: 13.6 * GiB, mem_total: 45.8 * GiB, mem_own: 11.47 * GiB, mem_runtime: 500 * MiB, mem_system: 138 * MiB, mem_ssh: 4 * MiB, ssh_sessions: 2, cpu_mc: 6300 };
+  const tangible = { ...vm({ name: 'tangible', cpus: 8, memory: 48 * GiB }, [own(10.8 * 1024)]), latest };
+
+  it("parts what runs the VM into podman, its system, ssh sessions and other processes", () => {
+    const r = containersPart(tangible).memory!.running!;
+    expect(r.runtime / MiB).toBeCloseTo(500);
+    expect(r.system / MiB).toBeCloseTo(138);
+    expect(r.ssh / MiB).toBeCloseTo(4);
+    expect(r.sessions).toBe(2);
+    expect(r.other / MiB).toBeCloseTo(0.67 * 1024 - 642, 0);
+  });
+  it('holds the parts to what runs the VM, as they are read a moment apart', () => {
+    const over = { ...tangible, latest: { ...latest, mem_runtime: 900 * MiB } };
+    const p = containersPart(over).memory!;
+    const r = p.running!;
+    expect(r.runtime + r.system + r.ssh + r.other).toBeCloseTo(p.others!);
+    expect(r.other).toBe(0);
+  });
+  it('leaves what runs the VM whole without the probe that parts it', () => {
+    const { mem_runtime: _, ...older } = latest;
+    expect(containersPart({ ...tangible, latest: older }).memory!.running).toBeUndefined();
+  });
+
+  it('flags ssh sessions holding more than a few, and other processes holding a lot', () => {
+    expect(memoryFlags(containersPart(tangible).memory!)).toEqual([]);
+    const leaky = { ...tangible, latest: { ...latest, mem_ssh: 247 * MiB, ssh_sessions: 64, mem_own: 11.7 * GiB } };
+    expect(memoryFlags(containersPart(leaky).memory!)).toEqual(['247.0 MiB in 64 ssh sessions']);
+    const busy = { ...tangible, latest: { ...latest, mem_own: 11.47 * GiB + 400 * MiB, mem_used: 14 * GiB } };
+    expect(memoryFlags(containersPart(busy).memory!)).toEqual([`${(0.67 * 1024 - 642 + 400).toFixed(1)} MiB in other processes`]);
+  });
+
+  it("cards the VM's memory: the figure, the bar again, a row per part and what runs the VM parted under its own", () => {
+    const t = memoryTip('tangible', { used: 13.6 * GiB, size: 45.8 * GiB, pct: 29.7, hot: false }, containersPart(tangible).memory!);
+    expect(t.title).toBe("tangible's memory");
+    expect(t.figure).toBe('13.6 GiB of 45.8 GiB in use');
+    expect(t.bar!.pct).toBeCloseTo(29.7);
+    expect(t.rows.map((r) => [r.name, r.value, r.indent ?? false])).toEqual([
+      ['Containers', '10.8 GiB', false],
+      ['Running the VM', '686.1 MiB', false],
+      ['Podman and your services', '500.0 MiB', true],
+      ["The VM's system", '138.0 MiB', true],
+      ['SSH sessions', '4.0 MiB', true],
+      ['Other processes', '44.1 MiB', true],
+      ['Kernel and cache', '2.1 GiB', false],
+    ]);
+    expect(t.rows.find((r) => r.name === 'SSH sessions')!.sub).toMatch(/^2 open: /);
+    expect(t.foot).toMatch(/file cache/);
+  });
+  it('flags the row worth a look', () => {
+    const leaky = { ...tangible, latest: { ...latest, mem_ssh: 247 * MiB, ssh_sessions: 64, mem_own: 11.7 * GiB } };
+    const t = memoryTip('tangible', { used: 13.6 * GiB, size: 45.8 * GiB, pct: 29.7, hot: false }, containersPart(leaky).memory!);
+    expect(t.rows.filter((r) => r.flag).map((r) => r.name)).toEqual(['SSH sessions']);
+  });
+  it("cards the VM's CPU: its containers' part and what runs outside them", () => {
+    const t = cpuTip('tangible', { used: 6300, size: 8000, pct: 78.75, hot: true }, { inside: 400, outside: 5900 }, 8);
+    expect(t.title).toBe("tangible's CPU");
+    expect(t.figure).toBe('6.3 of 8 cores');
+    expect(t.rows.map((r) => [r.name, r.value])).toEqual([['In containers', '0.40'], ['Outside them', '5.9']]);
+    expect(t.bar).toMatchObject({ pct: 78.75, inside: 5, hot: true });
+  });
+});
+
+describe("a container's memory card", () => {
+  const GiB = 1024 ** 3;
+  it('says now, its own and the rest, its peaks and what full width is, in rows', () => {
+    const m = rowMemory({ mem: 6.7 * GiB, mem_own: 2 * GiB, mem_peak: 9.3 * GiB }, { vmMemory: 45.8 * GiB, over: '24h', history: { min: [1], max: [9.1 * GiB], avg: [1] }, startedAt: null });
+    expect(m.tip.title).toBe('Memory');
+    expect(m.tip.figure).toBe('6.7 GiB of the VM\'s 45.8 GiB');
+    expect(m.tip.rows.map((r) => [r.name, r.value])).toEqual([
+      ["Its processes' own", '2.0 GiB'],
+      ['File cache and kernel', '4.7 GiB'],
+      ['Peak in the last 24 h', '9.1 GiB'],
+      ['Peak since it started', '9.3 GiB'],
+    ]);
+    expect(m.tip.foot).toBe("Full width is the VM's 45.8 GiB: the container has no limit of its own.");
+  });
+  it('against its own limit, and without a reading of its own memory', () => {
+    const m = rowMemory({ mem: 900 * 1024 ** 2, mem_limit: 1024 ** 3 }, { vmMemory: 8 * GiB, over: '1h', startedAt: null });
+    expect(m.tip.figure).toBe('900.0 MiB of its 1.0 GiB limit');
+    expect(m.tip.rows.map((r) => r.name)).toEqual(['Now', 'Peak since it started']);
+    expect(m.tip.foot).toBe('Full width is its 1.0 GiB limit.');
   });
 });
