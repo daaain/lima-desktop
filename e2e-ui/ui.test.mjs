@@ -158,10 +158,10 @@ for (const dark of [false, true]) {
     assert.match(await page.locator('p.lede').innerText(), /^quill's disk is past three quarters\. Three unused images are dangling/);
     // The fullest disk leads, and within it what no container uses.
     const quill = page.locator('section').first();
-    assert.match(await quill.locator('h2').innerText(), /^quill holds four images; two aren't used\.$/);
+    assert.match(await quill.locator('h2').innerText(), /^quill\s+holds four images; two aren't used\.$/);
     assert.match(await quill.locator('.line').first().innerText(), /untagged[\s\S]*no container/);
     // An old podman's VM: no containers in the snapshot, but its engine counts the one on alpine.
-    assert.match(await page.locator('section', { hasText: 'ember' }).innerText(), /ember holds one image, in use\./);
+    assert.match(await page.locator('section', { hasText: 'ember' }).innerText(), /ember\s+holds one image, in use\./);
     // Measured as the app starts, it says what removing the unused would free.
     await page.getByText('would free at least').waitFor();
     assert.match(await page.locator('p.lede').innerText(), /Removing the unused ones would free at least 6\.3 GiB\./);
@@ -182,7 +182,7 @@ for (const dark of [false, true]) {
     assert.equal(await page.getByRole('heading', { level: 1 }).innerText(), "Four of 11 volumes aren't used by any container.");
     assert.equal(await page.locator('p.lede').innerText(), "quill's disk is past three quarters. Removing the unused ones would free 8.1 GiB.");
     const quill = page.locator('section').first();
-    assert.match(await quill.locator('h2').innerText(), /^quill holds three volumes; two aren't used\.$/);
+    assert.match(await quill.locator('h2').innerText(), /^quill\s+holds three volumes; two aren't used\.$/);
     assert.match(await quill.locator('.line').first().innerText(), /quill_target[\s\S]*6\.2 GiB[\s\S]*no container/);
     assert.equal((await sizeCell().boundingBox()).x, (await sizeHead.boundingBox()).x);
     await shoot(page, `volumes${suffix}`);
@@ -979,6 +979,30 @@ test("A VM's folds are each page's own: folded on Containers, its images are sti
   await page.locator('nav').getByRole('link', { name: 'Images' }).click();
   const images = page.locator('section', { has: page.locator('h2 a', { hasText: 'harbor' }) });
   await images.locator('.line', { hasText: 'valkey' }).waitFor();
+  assert.deepEqual(errors, []);
+  await close();
+});
+
+test("A VM's group on Images folds from its heading, but not from its clean-up, and Volumes keeps its own", async () => {
+  const { page, errors, close } = await open('/images');
+  const harbor = page.locator('section', { has: page.locator('h2 a', { hasText: 'harbor' }) });
+  await harbor.locator('.line', { hasText: 'valkey' }).waitFor();
+  const head = harbor.getByRole('group', { name: 'VM harbor' });
+  // Its clean-up acts on its own: opening it doesn't fold the group.
+  await head.getByRole('button', { name: /^Remove unused/ }).click();
+  await page.keyboard.press('Escape');
+  assert.ok(await harbor.locator('.line').count() > 0);
+  await head.getByRole('button', { name: "Fold harbor's images away" }).click();
+  await harbor.locator('.line').first().waitFor({ state: 'detached' });
+  assert.match(await head.innerText(), /of 59\.9 GiB disk/);
+  // Volumes folds its own VMs: harbor's volumes are still listed there.
+  await page.locator('nav').getByRole('link', { name: 'Volumes' }).click();
+  const volumes = page.locator('section', { has: page.locator('h2 a', { hasText: 'harbor' }) });
+  await volumes.locator('.line').first().waitFor();
+  assert.equal(await volumes.getByRole('button', { name: "Fold harbor's volumes away" }).getAttribute('aria-expanded'), 'true');
+  // And back on Images, still folded.
+  await page.locator('nav').getByRole('link', { name: 'Images' }).click();
+  await page.getByRole('group', { name: 'VM harbor' }).getByRole('button', { name: "Show harbor's images" }).waitFor();
   assert.deepEqual(errors, []);
   await close();
 });

@@ -11,6 +11,8 @@
   import { filterVolumes, volumeRows, type VolumeRow } from '$lib/volumes';
   import { withParam } from '$lib/url';
   import GroupHead, { type Said } from '$lib/GroupHead.svelte';
+  import { vmFolds } from '$lib/folds.svelte';
+  import { listsLines } from '$lib/folds';
   import ItemLine from '$lib/ItemLine.svelte';
   import UnlistedVms from '$lib/UnlistedVms.svelte';
   import VmSelect from '$lib/VmSelect.svelte';
@@ -174,33 +176,38 @@
   <div class="lines items">
     {#each groups as g (g.vm)}
       <section animate:glide>
-        <GroupHead vm={g.vm} live={g.live} sentence={g.sentence} said={said[g.vm]}>
+        <GroupHead vm={g.vm} live={g.live} sentence={g.sentence} what="volumes" said={said[g.vm]}
+          folded={vmFolds.volumes.has(g.vm)} ontoggle={() => vmFolds.volumes.toggle(g.vm)}>
           {#snippet actions()}
             <VolumePrune vm={g.vm} count={g.count} unused={g.unused} onpruned={() => changed(g.vm)} bind:said={said[g.vm]} />
           {/snippet}
         </GroupHead>
-        {#each g.lines as row (row.v.name)}
-          {@const u = usageOf(row)}
-          {@const disk = g.live ? gauges(g.live).disk.size : undefined}
-          {@const key = `${row.vm}/${row.v.name}`}
-          <div animate:glide>
-            <ItemLine selected={!!open[key]} onselect={() => toggle(key)} title={row.v.name}
-              second={`created ${age(row.created)}${row.v.driver !== 'local' ? ` · ${row.v.driver} driver` : ''}`}
-              secondTitle={`In the VM at ${row.v.mountpoint}; created ${new Date(row.v.createdAt).toLocaleString('en-GB')}`}
-              size={u?.size} {scale} sizeLabel={u ? diskShare(u.size, disk) : 'not measured'}
-              used={usedOf(row)} usedText={usedText(row)}
-              removable={(u?.users ?? 0) === 0 && removing !== `${row.vm}/${row.v.name}`}
-              removeTitle={(u?.users ?? 0) > 0 ? 'In use — remove its containers first' : 'Deletes its data for good'}
-              onremove={() => remove(row)}>
-              {#snippet name()}{row.v.name}{/snippet}
-            </ItemLine>
-            {#if open[key]}
-              <div transition:unfold>
-                <Files vm={row.vm} source={{ kind: 'volume', name: row.v.name }} label={row.v.name} onclose={() => toggle(key)} />
-              </div>
-            {/if}
-          </div>
-        {/each}
+        {#if listsLines({ folded: vmFolds.volumes.has(g.vm), searching: query.trim() !== '' || vmFilter != null })}
+        <div class="vm-lines" transition:unfold>
+          {#each g.lines as row (row.v.name)}
+            {@const u = usageOf(row)}
+            {@const disk = g.live ? gauges(g.live).disk.size : undefined}
+            {@const key = `${row.vm}/${row.v.name}`}
+            <div animate:glide>
+              <ItemLine selected={!!open[key]} onselect={() => toggle(key)} title={row.v.name}
+                second={`created ${age(row.created)}${row.v.driver !== 'local' ? ` · ${row.v.driver} driver` : ''}`}
+                secondTitle={`In the VM at ${row.v.mountpoint}; created ${new Date(row.v.createdAt).toLocaleString('en-GB')}`}
+                size={u?.size} {scale} sizeLabel={u ? diskShare(u.size, disk) : 'not measured'}
+                used={usedOf(row)} usedText={usedText(row)}
+                removable={(u?.users ?? 0) === 0 && removing !== `${row.vm}/${row.v.name}`}
+                removeTitle={(u?.users ?? 0) > 0 ? 'In use — remove its containers first' : 'Deletes its data for good'}
+                onremove={() => remove(row)}>
+                {#snippet name()}{row.v.name}{/snippet}
+              </ItemLine>
+              {#if open[key]}
+                <div transition:unfold>
+                  <Files vm={row.vm} source={{ kind: 'volume', name: row.v.name }} label={row.v.name} onclose={() => toggle(key)} />
+                </div>
+              {/if}
+            </div>
+          {/each}
+        </div>
+        {/if}
       </section>
     {/each}
   </div>
@@ -217,7 +224,9 @@
   .dot.unknown { background: var(--soft); }
   .column-heads { grid-template-columns: var(--item-columns); column-gap: 1.4rem; margin-top: 0.3rem; } /* 0.3rem less: SortHead's min-height */
   .lines { display: grid; gap: 2.2rem; }
-  section { border-top: 1px solid var(--fg); padding-top: 0.8rem; border-bottom: 1px solid var(--border); }
+  section { border-top: 1px solid var(--fg); border-bottom: 1px solid var(--border); }
+  /* The VM's heading has the rule over its first line. */
+  .vm-lines > div:first-child > :global(.line) { border-top: 0; }
   section:first-child { border-top: 0; }
   .narrow-order { display: none; }
   @media (max-width: 860px) {

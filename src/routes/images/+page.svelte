@@ -11,6 +11,8 @@
   import { images } from '$lib/podmanLists.svelte';
   import { withParam } from '$lib/url';
   import GroupHead, { type Said } from '$lib/GroupHead.svelte';
+  import { vmFolds } from '$lib/folds.svelte';
+  import { listsLines } from '$lib/folds';
   import ImagePrune from '$lib/ImagePrune.svelte';
   import ItemLine from '$lib/ItemLine.svelte';
   import UnlistedVms from '$lib/UnlistedVms.svelte';
@@ -190,37 +192,42 @@
   <div class="lines items">
     {#each groups as g (g.vm)}
       <section animate:glide>
-        <GroupHead vm={g.vm} live={g.live} sentence={g.sentence} said={said[g.vm]}>
+        <GroupHead vm={g.vm} live={g.live} sentence={g.sentence} what="images" said={said[g.vm]}
+          folded={vmFolds.images.has(g.vm)} ontoggle={() => vmFolds.images.toggle(g.vm)}>
           {#snippet actions()}
             <ImagePrune vm={g.vm} dangling={g.dangling} unused={g.unused.length} onpruned={() => changed(g.vm)} bind:said={said[g.vm]} />
           {/snippet}
         </GroupHead>
-        {#each g.lines as row (row.reference)}
-          {@const h = heldOf(row.vm, row.id)}
-          {@const r = removalOf(row.vm, row.id)}
-          <!-- A tag the image has others of frees nothing removed (it only untags): drawn and said so. -->
-          {@const otherTags = row.tagged ? (h?.image.tags ?? []).filter((t) => t !== row.name) : []}
-          {@const [from, short] = splitReference(row.name)}
-          {@const key = `${row.vm}/${row.reference}`}
-          <div animate:glide>
-            <ItemLine selected={!!open[key]} onselect={() => toggle(key)} title={row.tagged ? row.name : `untagged image ${row.id}`}
-              second={`${shortId(row.id)} · ${row.created ? `built ${age(row.created)}` : 'no build date'}`}
-              secondTitle={row.created ? `Built ${new Date(row.created * 1000).toLocaleString('en-GB')}` : "The image doesn't record when it was built"}
-              size={row.size} frees={r && otherTags.length ? 0 : r?.frees} {scale} sizeLabel={freesLabel(r, row.size, otherTags.length)}
-              sizeTitle={r ? freesTitle(r, row.size, otherTags) : undefined}
-              used={h?.used} usedText={usedText(h)} usedTitle={h?.users.length ? `Used by ${h.users.join(', ')}` : undefined}
-              removable={!h?.used && removing !== `${row.vm}/${row.reference}`}
-              removeTitle={h?.used ? 'In use — remove its containers first' : row.tagged ? 'Removes this tag; the image goes with its last one' : undefined}
-              onremove={() => remove(row)}>
-              {#snippet name()}{#if row.tagged}<span class="from">{from}</span>{short}{:else}<span class="from">untagged</span>{/if}{/snippet}
-            </ItemLine>
-            {#if open[key]}
-              <div transition:unfold>
-                <ImageLayers vm={row.vm} id={row.id} title={row.tagged ? row.name : `untagged ${shortId(row.id)}`} onclose={() => toggle(key)} />
-              </div>
-            {/if}
-          </div>
-        {/each}
+        {#if listsLines({ folded: vmFolds.images.has(g.vm), searching: query.trim() !== '' || vmFilter != null })}
+        <div class="vm-lines" transition:unfold>
+          {#each g.lines as row (row.reference)}
+            {@const h = heldOf(row.vm, row.id)}
+            {@const r = removalOf(row.vm, row.id)}
+            <!-- A tag the image has others of frees nothing removed (it only untags): drawn and said so. -->
+            {@const otherTags = row.tagged ? (h?.image.tags ?? []).filter((t) => t !== row.name) : []}
+            {@const [from, short] = splitReference(row.name)}
+            {@const key = `${row.vm}/${row.reference}`}
+            <div animate:glide>
+              <ItemLine selected={!!open[key]} onselect={() => toggle(key)} title={row.tagged ? row.name : `untagged image ${row.id}`}
+                second={`${shortId(row.id)} · ${row.created ? `built ${age(row.created)}` : 'no build date'}`}
+                secondTitle={row.created ? `Built ${new Date(row.created * 1000).toLocaleString('en-GB')}` : "The image doesn't record when it was built"}
+                size={row.size} frees={r && otherTags.length ? 0 : r?.frees} {scale} sizeLabel={freesLabel(r, row.size, otherTags.length)}
+                sizeTitle={r ? freesTitle(r, row.size, otherTags) : undefined}
+                used={h?.used} usedText={usedText(h)} usedTitle={h?.users.length ? `Used by ${h.users.join(', ')}` : undefined}
+                removable={!h?.used && removing !== `${row.vm}/${row.reference}`}
+                removeTitle={h?.used ? 'In use — remove its containers first' : row.tagged ? 'Removes this tag; the image goes with its last one' : undefined}
+                onremove={() => remove(row)}>
+                {#snippet name()}{#if row.tagged}<span class="from">{from}</span>{short}{:else}<span class="from">untagged</span>{/if}{/snippet}
+              </ItemLine>
+              {#if open[key]}
+                <div transition:unfold>
+                  <ImageLayers vm={row.vm} id={row.id} title={row.tagged ? row.name : `untagged ${shortId(row.id)}`} onclose={() => toggle(key)} />
+                </div>
+              {/if}
+            </div>
+          {/each}
+        </div>
+        {/if}
       </section>
     {/each}
   </div>
@@ -238,7 +245,9 @@
   .dot.off { background: none; border: 2px solid var(--warn); }
   .column-heads { grid-template-columns: var(--item-columns); column-gap: 1.4rem; margin-top: 0.3rem; } /* 0.3rem less: SortHead's min-height */
   .lines { display: grid; gap: 2.2rem; }
-  section { border-top: 1px solid var(--fg); padding-top: 0.8rem; border-bottom: 1px solid var(--border); }
+  section { border-top: 1px solid var(--fg); border-bottom: 1px solid var(--border); }
+  /* The VM's heading has the rule over its first line. */
+  .vm-lines > div:first-child > :global(.line) { border-top: 0; }
   section:first-child { border-top: 0; }
   .narrow-order { display: none; }
   @media (max-width: 860px) {
