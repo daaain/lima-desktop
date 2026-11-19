@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
   bandPeak, bandRise, containersHeadline, containersSentence, countWord, projectSaid, exitedSentence, fullWindow, holdsSentence, intervalPhrase, ownLimit, pressureSentence, rowMemory,
-  restartNote, runsSentence, fleetHeadline, hostBar, hostRamSentence, quarters, selfMemory, vzMemoryNote, share, shareChart, shareTip, sketch, unusedHeadline, unusedLede, vmHeadline, vmSentence,
+  restartNote, runsSentence, containersPart, partSaid, fleetHeadline, hostBar, hostRamSentence, quarters, selfMemory, vzMemoryNote, share, shareChart, shareTip, sketch, unusedHeadline, unusedLede, vmHeadline, vmSentence,
 } from './almanac';
+import type { Latest } from './api';
 import type { Hint } from './rightsize';
 import { container, vm } from './testing';
 
@@ -501,5 +502,46 @@ describe("what a VM holds beyond its guest's need, and that restarting gives it 
     // reporting), and the tooltip says so: on another VM type it isn't known to hold.
     expect(restartNote('qemu', 47.5 * GiB, 7.5 * GiB)).toBe('');
     expect(restartNote(undefined, 47.5 * GiB, 7.5 * GiB)).toBe('');
+  });
+});
+
+describe('containersPart', () => {
+  const GiB = 1024 ** 3;
+  const up = (id: string, latest: Latest) => container({ id, latest });
+  const tangible = (containers: ReturnType<typeof container>[], latest: Latest = { mem_used: 13.6 * GiB, cpu_mc: 6300 }) =>
+    ({ ...vm({ name: 'tangible', cpus: 8 }, containers), latest });
+
+  it("splits the VM's CPU into what its running containers use and the rest", () => {
+    const p = containersPart(tangible([up('a', { cpu_mc: 300 }), up('b', { cpu_mc: 100 })]));
+    expect(p.cpu).toEqual({ inside: 400, outside: 5900 });
+  });
+  it("counts the containers' memory as their processes' own, which the VM's in-use figure counts too", () => {
+    const p = containersPart(tangible([up('a', { mem: 9 * GiB, mem_own: 8 * GiB }), up('b', { mem: 5 * GiB, mem_own: 2.8 * GiB })]));
+    expect(p.memory!.inside / GiB).toBeCloseTo(10.8);
+    expect(p.memory!.outside / GiB).toBeCloseTo(2.8);
+  });
+  it("leaves the memory unsplit where a running container's own memory isn't read", () => {
+    expect(containersPart(tangible([up('a', { mem: GiB, mem_own: GiB }), up('b', { mem: GiB })])).memory).toBeUndefined();
+  });
+  it('leaves out what has stopped', () => {
+    const p = containersPart(tangible([up('a', { cpu_mc: 300 }), container({ id: 'b', state: 'exited', latest: { cpu_mc: 900 } })]));
+    expect(p.cpu).toEqual({ inside: 300, outside: 6000 });
+  });
+  it('never puts more in the containers than the VM uses: they are read a moment apart', () => {
+    expect(containersPart(tangible([up('a', { cpu_mc: 7000 })])).cpu).toEqual({ inside: 6300, outside: 0 });
+  });
+  it('splits nothing for a VM running no containers, where everything would be outside them', () => {
+    expect(containersPart(tangible([]))).toEqual({});
+    expect(containersPart(tangible([container({ state: 'exited', latest: { cpu_mc: 10 } })]))).toEqual({});
+  });
+  it('splits nothing without a reading of the VM', () => {
+    expect(containersPart(tangible([up('a', { cpu_mc: 300, mem_own: GiB })], {}))).toEqual({});
+  });
+});
+
+describe('partSaid', () => {
+  it('says each part, in the figures of the meter it splits', () => {
+    expect(partSaid('cpu', { inside: 400, outside: 5900 })).toEqual({ inside: '0.40 in containers', outside: '5.9 outside them' });
+    expect(partSaid('memory', { inside: 10.8 * 1024 ** 3, outside: 2.8 * 1024 ** 3 })).toEqual({ inside: '10.8 GiB in containers', outside: '2.8 GiB outside them' });
   });
 });

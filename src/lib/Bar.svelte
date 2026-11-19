@@ -1,13 +1,17 @@
 <script lang="ts">
   // A share of a scale, notched at quarters. Optionally a paler bar behind it (e.g. the peak), a
   // strongest part of it (e.g. a container's processes' own memory, of a figure that also counts cache)
-  // and a tick (e.g. p95). Past three quarters it takes the warning colour, unless `plain`.
+  // and a tick (e.g. p95). Or, instead of a strongest part, a part of it drawn solid with the rest
+  // of it hatched (a VM's containers, and what runs outside them). Past three quarters it takes the
+  // warning colour, unless `plain`.
   import { isHot } from './almanac';
 
-  let { pct, behind, own, tick, plain = false, quiet = false, hot, label }: {
+  let { pct, behind, own, inside, tick, plain = false, quiet = false, hot, label }: {
     pct: number; behind?: number;
     /** Of `pct`, the part drawn strongest: no wider than it. */
     own?: number;
+    /** Of `pct`, the part drawn solid, the rest of it hatched: no wider than it. */
+    inside?: number;
     tick?: number; plain?: boolean; quiet?: boolean;
     /** Overrides the three-quarters rule (e.g. measured against a limit that isn't the scale). */
     hot?: boolean; label?: string;
@@ -17,7 +21,8 @@
 
 <div class="bar" class:hot={hot ?? (!plain && isHot(pct))} class:quiet role={label ? 'img' : undefined} aria-label={label} title={label}>
   {#if behind != null}<span class="behind" style:width={`${clamp(behind)}%`}></span>{/if}
-  <span class="fill" class:some={pct > 0} class:split={own != null} style:width={`${clamp(pct)}%`}></span>
+  <span class="fill" class:some={pct > 0} class:split={own != null} class:hatched={inside != null} style:width={`${clamp(pct)}%`}></span>
+  {#if inside != null}<span class="inside" style:width={`${clamp(Math.min(inside, pct))}%`}></span>{/if}
   {#if own != null}<span class="own" style:width={`${clamp(Math.min(own, pct))}%`}></span>{/if}
   <span class="notch" style:left="25%"></span><span class="notch" style:left="50%"></span><span class="notch" style:left="75%"></span>
   <!-- Where the strongest part ends inside the fill, a notch like the quarters' parts it from the rest:
@@ -28,12 +33,12 @@
 
 <style>
   .bar { position: relative; height: var(--bar-height, 6px); background: var(--track); }
-  .fill, .behind, .own { position: absolute; inset: 0 auto 0 0; }
+  .fill, .behind, .own, .inside { position: absolute; inset: 0 auto 0 0; }
   /* The width a plain percentage and the least of it a min-width, not `max(2px, n%)`: WebKit before
      October 2026 never frees a computed calc() length (bugs.webkit.org/show_bug.cgi?id=325845), and a
      transition between two computes one every frame, about 1 MB a second on the Containers view
      (styles.test.ts). */
-  .fill, .own { transition: width 0.4s; }
+  .fill, .own, .inside { transition: width 0.4s; }
   /* The notch where the strongest part ends moves with it, not ahead of it. */
   .notch.cut { transition: left 0.4s; }
   .fill { background: var(--bar); }
@@ -43,6 +48,12 @@
      There is no stronger warning colour, so past three quarters it is the rest that goes fainter. */
   .own { background: var(--fg); }
   .hot .fill { background: var(--warn); }
+  /* What runs outside a VM's containers: the menu bar's "everything else" diagonals, in the bar's own
+     colour, so it reads as part of the figure, only told apart from its containers' solid part. */
+  .fill.hatched { background: repeating-linear-gradient(135deg, var(--bar) 0 2px, transparent 2px 4px); }
+  .inside { background: var(--bar); }
+  .hot .fill.hatched { background: repeating-linear-gradient(135deg, var(--warn) 0 2px, transparent 2px 4px); }
+  .hot .inside { background: var(--warn); }
   .hot .fill.split { opacity: 0.5; }
   .hot .own { background: var(--warn); }
   .quiet .fill { background: var(--soft); }
