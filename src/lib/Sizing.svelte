@@ -8,10 +8,12 @@
   import { inRange, type RangeKey } from './ranges';
   import { inOrder } from './inOrder';
   import type { Marker } from './oom';
+  import type { RichTip } from './richTip';
   import Bar from './Bar.svelte';
   import Chart from './Chart.svelte';
+  import TipRows from './TipRows.svelte';
 
-  let { inst, entity, latest, from, to, over, oomEvents, stalls, eventsFor, series, markers, hints = $bindable([]) }: {
+  let { inst, entity, latest, from, to, over, oomEvents, stalls, eventsFor, series, markers, memoryParts, cpuParts, hints = $bindable([]) }: {
     inst: Instance; entity?: number; latest: Latest; from: number; to: number;
     /** The range [from, to] is, for the verdicts to say. */
     over: RangeKey;
@@ -24,6 +26,10 @@
     series: Series | null;
     /** OOM kills and stalls to mark on the memory chart. */
     markers: Marker[];
+    /** Where its memory and CPU go now (almanac.memoryTip, cpuTip): its bars split as the overview's
+     * are, with these as their cards, and their rows listed under them. None for a VM running no
+     * containers. */
+    memoryParts?: RichTip; cpuParts?: RichTip;
     /** The verdicts, for the page's headline; empty until the history has arrived. */
     hints?: Hint[];
   } = $props();
@@ -130,7 +136,9 @@
       {@render stat(bytes(summary?.mem_used?.max), `peak ${inRange(summaryOver)}`)}
       {@render stat(bytes(memTotal), 'allocated')}
     </div>
-    <Bar pct={share(latest.mem_used, memTotal)} tick={summary?.mem_used?.max != null ? share(summary.mem_used.max, memTotal) : undefined} label="Memory now, with a tick at the peak, against the allocation" />
+    <Bar pct={share(latest.mem_used, memTotal)} tick={summary?.mem_used?.max != null ? share(summary.mem_used.max, memTotal) : undefined} label="Memory now, with a tick at the peak, against the allocation"
+      inside={memoryParts?.bar?.inside} others={memoryParts?.bar?.others} tip={memoryParts} />
+    {#if memoryParts}<div class="parts"><TipRows rows={memoryParts.rows} /></div>{/if}
     <Chart data={series} format={(v) => bytes(v)} ceiling={inst.memory} {markers}
       lines={[{ key: 'mem_used', label: 'used in the guest', color: '--series-1' }, { key: 'host_rss', label: 'RAM on your computer', color: '--series-3' }]} />
     {#if inst.vmType === 'vz'}
@@ -145,7 +153,9 @@
       {@render stat(cores(cpuBusy), summary?.cpu_mc?.p95 != null ? 'cores, 95th percentile' : 'cores at most')}
       {@render stat(String(inst.cpus), 'cores allocated')}
     </div>
-    <Bar pct={share(latest.cpu_mc, inst.cpus * 1000)} tick={cpuBusy != null ? share(cpuBusy, inst.cpus * 1000) : undefined} label="CPU now, with a tick at the 95th percentile, against the cores" />
+    <Bar pct={share(latest.cpu_mc, inst.cpus * 1000)} tick={cpuBusy != null ? share(cpuBusy, inst.cpus * 1000) : undefined} label="CPU now, with a tick at the 95th percentile, against the cores"
+      inside={cpuParts?.bar?.inside} tip={cpuParts} />
+    {#if cpuParts}<div class="parts"><TipRows rows={cpuParts.rows} /></div>{/if}
     <Chart data={series} format={cpuLabel} ceiling={inst.cpus * 1000}
       lines={[{ key: 'cpu_mc', label: 'guest', color: '--series-1' }, { key: 'host_cpu_mc', label: 'hypervisor on your computer', color: '--series-3' }]} />
   </figure>
@@ -200,6 +210,8 @@
   .stats div { display: grid; gap: 0.1rem; }
   .stats strong { font-size: 1.75rem; font-weight: 600; line-height: 1.1; white-space: nowrap; }
   figcaption { max-width: 34rem; }
+  /* Where it goes now, under the bar: the card's rows, a little larger than in a tooltip. */
+  .parts { font-size: 0.85rem; line-height: 1.4; max-width: 34rem; }
 
   .resize { display: grid; gap: 0.7rem; margin-top: 1.4rem; }
   form { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.6rem 0.8rem; font-size: 1.75rem; line-height: 1.3; }

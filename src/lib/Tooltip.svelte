@@ -9,6 +9,7 @@
   import { tipText } from './richTip';
   import { richOf } from './richTip.svelte';
   import Bar from './Bar.svelte';
+  import TipRows from './TipRows.svelte';
 
   function source(el: Element | null): HTMLElement | SVGElement | null {
     const found = el?.closest(`[${OWN_TIP}], [title], [data-tip]`) as HTMLElement | SVGElement | null;
@@ -64,14 +65,7 @@
     style:left={`${place.left}px`} style:top={`${place.top}px`}>
     <div class="head"><span class="title">{card.title}</span>{#if card.figure}<span class="figure">{card.figure}</span>{/if}</div>
     {#if card.bar}<Bar {...card.bar} />{/if}
-    <div class="rows">
-      {#each card.rows as r, i (i)}
-        <span class="sw {r.swatch ?? 'none'}" class:indent={r.indent}></span>
-        <span class="name" class:indent={r.indent} class:flag={r.flag}>{r.name}</span>
-        <span class="value" class:flag={r.flag}>{r.value ?? ''}</span>
-        {#if r.sub}<span class="sub" class:indent={r.indent} class:flag={r.flag}>{r.sub}</span>{/if}
-      {/each}
-    </div>
+    <TipRows rows={card.rows} />
     {#if card.foot}<p class="foot">{card.foot}</p>{/if}
   </div>
 {:else if tooltip.shown && place}
@@ -95,16 +89,5 @@
   .head { display: flex; justify-content: space-between; align-items: baseline; gap: 0.8rem; flex-wrap: wrap; }
   .title { font-family: var(--serif); font-size: 1rem; font-weight: 600; }
   .figure { color: var(--muted); white-space: nowrap; }
-  .rows { display: grid; grid-template-columns: 10px minmax(0, 1fr) auto; gap: 0.25rem 0.5rem; align-items: baseline; }
-  .sw { width: 9px; height: 9px; align-self: center; }
-  .sw.solid { background: var(--bar); }
-  .sw.soft { background: var(--soft); }
-  .sw.strong { background: var(--fg); }
-  .sw.hatch { background: repeating-linear-gradient(135deg, var(--bar) 0 2px, transparent 2px 4px); box-shadow: inset 0 0 0 1px var(--bar); }
-  .name.indent, .sub.indent { padding-left: 0.8rem; }
-  .name.indent { color: var(--muted); }
-  .value { text-align: right; font-weight: 600; white-space: nowrap; }
-  .sub { grid-column: 2 / -1; color: var(--muted); margin-top: -0.15rem; }
-  .flag, .name.indent.flag { color: var(--warn); }
   .foot { margin: 0; color: var(--muted); border-top: 1px solid var(--border); padding-top: 0.4rem; }
 </style>

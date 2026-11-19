@@ -4,7 +4,7 @@
   import { live } from '$lib/live.svelte';
   import { api, type OomEvent, type Series, type VmStall } from '$lib/api';
   import { bytes } from '$lib/format';
-  import { containersSentence, vmHeadline } from '$lib/almanac';
+  import { containersPart, containersSentence, cpuTip, gauges, memoryTip, vmHeadline } from '$lib/almanac';
   import { History } from '$lib/history.svelte';
   import type { Hint } from '$lib/rightsize';
   import { rangeReaching, theLast, type RangeKey } from '$lib/ranges';
@@ -158,6 +158,11 @@
     return new Date(ts).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'medium' });
   }
 
+  // Where its memory and CPU go now, as the overview's bars say it (almanac.containersPart).
+  const parts = $derived(vm ? containersPart(vm) : {});
+  const memoryParts = $derived(vm && parts.memory ? memoryTip(name, gauges(vm).memory, parts.memory) : undefined);
+  const cpuParts = $derived(vm && parts.cpu ? cpuTip(name, gauges(vm).cpu, parts.cpu, vm.instance.cpus) : undefined);
+
   const ordering = new Ordering('vm-containers', CONTAINER_SORTS, BY_MEMORY);
   // Those in no compose project first, under no heading; then each project, ordered as its
   // containers are, by the column chosen (the most memory first by default).
@@ -216,7 +221,7 @@
   {#if vm.probeError}<p class="error">metrics: {vm.probeError}</p>{/if}
   {#if vm.podmanError}<p class="error">podman: {vm.podmanError}</p>{/if}
 
-  <Sizing inst={i} entity={vm.entity} latest={l} {from} {to} over={range.key} series={seriesShown} markers={memoryMarkers}
+  <Sizing inst={i} entity={vm.entity} latest={l} {from} {to} over={range.key} series={seriesShown} markers={memoryMarkers} memoryParts={memoryParts} cpuParts={cpuParts}
     oomEvents={eventsShown === undefined ? undefined : eventsShown && eventsShown.oom} stalls={eventsShown === undefined ? undefined : eventsShown && eventsShown.stalls}
     eventsFor={eventsShown === undefined ? null : { vm: name, over: range.key }} bind:hints />
 

@@ -74,7 +74,7 @@ Two levels, kept apart in the masthead (`lib/Masthead.svelte`): **VMs** (`routes
 | `lib/almanac.ts` | the UI's sentences (how full in quarters, what is past three quarters, each page's headline) and a series turned into a sketch: columns over time, and where the time was spent |
 | `lib/ranges.ts`, `lib/range.svelte.ts` | the time ranges and how a sentence says each (and 2 min, which only the menu bar popover offers); the one chosen in the masthead for the whole app, kept for next time, and its window (live up to 6 h) |
 | `lib/history.svelte.ts` | the chosen range of whatever a page sketches, fetched as entities appear or the range changes, then as a new column comes due (at most once a minute) |
-| `lib/richTip.ts`, `lib/richTip.svelte.ts` | a tooltip as a card (title and figure, the bar again, a row per part, a footnote) and its plain text; `use:richTip` gives an element one, and `Tooltip.svelte` draws it |
+| `lib/richTip.ts`, `lib/richTip.svelte.ts`, `lib/TipRows.svelte` | a tooltip as a card (title and figure, the bar again, a row per part, a footnote) and its plain text; `use:richTip` gives an element one, and `Tooltip.svelte` draws it; its rows, drawn in a card and listed on a VM's page |
 | `lib/Sketch.svelte`, `lib/Bar.svelte`, `lib/Capacity.svelte` | the three drawings: the range's history (its distribution on hover), a bar notched at quarters, and the host's bar (in use, allocated, what the computer has) |
 | `lib/Sizing.svelte` | a VM's four figures with their verdicts (`lib/rightsize.ts`), and the resize form |
 | `lib/ContainerLine.svelte` | one container as a line, shared by the Containers view and a VM's page |

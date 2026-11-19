@@ -976,6 +976,28 @@ test("A VM's memory bar shows a card: its parts, what runs the VM parted, and wh
   await close();
 });
 
+test("A VM's page lists where its memory and CPU go under their bars, as their cards do", async () => {
+  const { page, errors, close } = await open('/vm/harbor');
+  const memory = page.locator('figure', { has: page.locator('h2', { hasText: /^Memory$/ }) });
+  const cpu = page.locator('figure', { has: page.locator('h2', { hasText: /^CPU$/ }) });
+  await memory.locator('.rows').waitFor();
+  const rows = await memory.locator('.rows .name').allInnerTexts();
+  assert.deepEqual(rows, ['Containers', 'Running the VM', 'Podman and your services', "The VM's system", 'SSH sessions', 'Other processes', 'Kernel and cache']);
+  // What's worth a look is in the warning colour, as in the card.
+  assert.deepEqual(await memory.locator('.rows .name.flag').allInnerTexts(), ['SSH sessions']);
+  assert.match(await memory.locator('.rows').innerText(), /64 open: Lima's own/);
+  // The bar is split as the overview's is, keeping its tick at the peak.
+  const bar = memory.locator('.bar').first();
+  assert.equal(await bar.locator('.inside').count(), 1);
+  assert.equal(await bar.locator('.others').count(), 1);
+  assert.equal(await bar.locator('.tick').count(), 1);
+  assert.match(await bar.getAttribute('aria-description'), /^harbor's memory: /);
+  assert.deepEqual(await cpu.locator('.rows .name').allInnerTexts(), ['In containers', 'Outside them']);
+  assert.equal(await cpu.locator('.bar .inside').count(), 1);
+  assert.deepEqual(errors, []);
+  await close();
+});
+
 test('On a narrow window the order is chosen from a word, as the heads are gone', async () => {
   const { page, errors, close } = await open('/', { width: 420, height: 900 });
   await page.locator('article').first().waitFor();
