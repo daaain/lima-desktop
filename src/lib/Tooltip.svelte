@@ -27,7 +27,11 @@
 
   function move(e: PointerEvent) {
     const target = e.target as Element | null;
-    if (target?.closest(`[${OWN_TIP}]`)) return; // it says what it says itself
+    // It says what it says itself; and what the pointer was over before (a bar's card) is left.
+    if (target?.closest(`[${OWN_TIP}]`)) {
+      over = null;
+      return;
+    }
     const el = source(target);
     over = el;
     tooltip.point(el, el ? textOf(el) : null, e.clientX, e.clientY);

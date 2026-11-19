@@ -1228,9 +1228,28 @@ test("An open card follows its bar's reading as it changes, as the bar's descrip
   // says what its bar now says.
   await page.clock.setFixedTime(new Date(NOW.getTime() + 30 * 60_000));
   await page.waitForFunction(({ el, was }) => !el.getAttribute('aria-description').startsWith(`harbor's memory: ${was}`), { el: await bar.elementHandle(), was: before }, { timeout: 15_000 });
-  await page.waitForFunction(() => true);
   assert.notEqual(await described(), before);
-  assert.equal(await figure.innerText(), await described());
+  const now = await described();
+  await page.waitForFunction(({ el, want }) => el.textContent === want, { el: await figure.elementHandle(), want: now }, { timeout: 1500 });
+  assert.deepEqual(errors, []);
+  await close();
+});
+
+test("Moving from a bar's card up onto its chart shows the chart's own reading, not the card", async () => {
+  const { page, errors, close } = await open('/containers');
+  const line = page.locator('.line', { hasText: 'harbor-devbox' });
+  const bar = line.locator('.bar').first();
+  await bar.evaluate((el) => el.scrollIntoView({ block: 'center' }));
+  const b = await bar.boundingBox();
+  await page.mouse.move(b.x + 20, b.y + b.height / 2);
+  await page.mouse.move(b.x + 22, b.y + b.height / 2);
+  await page.locator('[role=tooltip].card').waitFor({ timeout: 1500 });
+  // Straight up onto the chart above it, skipping the gap between them.
+  const chart = await line.locator('.share').first().boundingBox();
+  await page.mouse.move(b.x + 22, chart.y + chart.height / 2);
+  await page.mouse.move(b.x + 24, chart.y + chart.height / 2);
+  await page.waitForFunction(() => document.querySelector('[role=tooltip]')?.textContent?.includes('this container'), null, { timeout: 1500 });
+  assert.equal(await page.locator('[role=tooltip].card').count(), 0);
   assert.deepEqual(errors, []);
   await close();
 });

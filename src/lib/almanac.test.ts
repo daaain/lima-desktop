@@ -729,7 +729,7 @@ describe("a container's memory card", () => {
     expect(m.tip.rows.map((r) => r.name)).toEqual(["Its processes' own", 'File cache and kernel', 'Peak in the last 24 h']);
     expect(m.tip.foot).toBe("Full width is the VM's 8.0 GiB.");
   });
-    it('says no peak it has no reading of: now is all that is known', () => {
+  it('says no peak it has no reading of: now is all that is known', () => {
     const m = rowMemory({ mem: 900 * 1024 ** 2 }, { vmMemory: 8 * GiB, over: '1h', startedAt: null });
     expect(m.tip.rows.map((r) => r.name)).toEqual(['Now']);
   });
