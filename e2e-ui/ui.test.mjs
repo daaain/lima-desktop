@@ -934,25 +934,40 @@ test("An OOM kill opens its container's detail even in a folded project, unfoldi
   await close();
 });
 
-for (const dark of [false, true]) {
-  test(`A project's heading sits on a faint hatch, its charts on the page's own ground${dark ? ' (dark)' : ''}`, async () => {
-    const { page, errors, close } = await open('/containers', { dark });
-    const project = page.getByRole('group', { name: 'Compose project atlas' });
-    await project.locator('.share').waitFor();
-    // The popover's "everything else" diagonals, faint: it stands out from its lines as the list is scrolled.
-    assert.match(await project.evaluate((el) => getComputedStyle(el).backgroundImage), /^repeating-linear-gradient\(135deg/);
-    // Behind its charts, the page itself, so their shapes read as they do on a line.
-    const bg = await page.evaluate(() => getComputedStyle(document.body).backgroundColor);
-    for (const chart of ['.share', '.sketch']) {
-      assert.equal(await project.locator(chart).first().evaluate((el) => getComputedStyle(el).backgroundColor), bg, `${chart} on the page's ground`);
-    }
-    // Its first line hangs from it, and a line's hover stays the plain wash.
-    const line = project.locator('xpath=following-sibling::div[1]').locator('.line').first();
-    assert.equal(await line.evaluate((el) => getComputedStyle(el).backgroundImage), 'none');
-    assert.deepEqual(errors, []);
-    await close();
+test("A project's lines hang in a bracket in the gutter, in the columns of the lines in no project", async () => {
+  const { page, errors, close } = await open('/containers');
+  const atlas = page.locator('section', { has: page.locator('h2 a', { hasText: 'atlas' }) });
+  const project = atlas.getByRole('group', { name: 'Compose project atlas' });
+  await project.locator('.share').waitFor();
+  // No texture: the heading is told apart by its name and the bracket.
+  assert.equal(await project.evaluate((el) => getComputedStyle(el).backgroundImage), 'none');
+  const bracket = await project.evaluate((el) => {
+    const b = getComputedStyle(el.parentElement, '::before');
+    return { left: parseFloat(b.borderLeftWidth) > 0, top: parseFloat(b.borderTopWidth) > 0, bottom: parseFloat(b.borderBottomWidth) > 0, right: parseFloat(b.borderRightWidth) > 0 };
   });
-}
+  // Open to the right: a bracket, not a box.
+  assert.deepEqual(bracket, { left: true, top: true, bottom: true, right: false });
+  // Hung in the gutter: a project's heading and lines start their columns where harbor-devbox's do,
+  // a running line in no project.
+  const harbor = page.locator('section', { has: page.locator('h2 a', { hasText: 'harbor' }) });
+  const columns = (line) => line.evaluate((el) => [...el.children].slice(0, 5).map((c) => Math.round(c.getBoundingClientRect().left)));
+  const loose = await columns(harbor.locator('.line', { hasText: 'harbor-devbox' }));
+  assert.deepEqual(await columns(harbor.locator('.compose .line').first()), loose);
+  assert.deepEqual(await columns(harbor.getByRole('group', { name: 'Compose project harbor' })), loose);
+  assert.deepEqual(errors, []);
+  await close();
+});
+
+test('On a narrow window a project indents its lines rather than hang its bracket in the thin gutter', async () => {
+  const { page, errors, close } = await open('/containers', { width: 420, height: 900 });
+  const group = page.locator('.compose').first();
+  await group.waitFor();
+  const [groupLeft, mainLeft] = await group.evaluate((el) => [el.getBoundingClientRect().left, document.querySelector('main').getBoundingClientRect().left]);
+  assert.equal(Math.round(groupLeft), Math.round(mainLeft));
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth), 420);
+  assert.deepEqual(errors, []);
+  await close();
+});
 
 test('On a narrow window the order is chosen from a word, as the heads are gone', async () => {
   const { page, errors, close } = await open('/', { width: 420, height: 900 });

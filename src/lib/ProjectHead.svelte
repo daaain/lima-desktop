@@ -56,19 +56,12 @@
 </div>
 
 <style>
-  /* On the menu bar's "everything else" diagonals, faint (`--hatch`), so a busy VM's projects stand
-     out from their lines as the list is scrolled; `--wash` stays a line's hover. The band reaches
-     0.9rem past the columns on each side (the page's gutter is wider), so its content keeps their
-     alignment and the texture never meets a letter's edge. */
+  /* A heading in the lines' own columns, told apart by its name (a step over a line's, under the
+     VM's) and its smaller drawings, and by the bracket its group hangs in the gutter (ProjectGroup). */
   .project {
     display: grid; grid-template-columns: var(--container-columns); column-gap: 1.4rem; align-items: end;
-    margin: 1.1rem -0.9rem 0; padding: 0.9rem 0.9rem 0.6rem; border-top: 1px solid var(--muted);
-    background: repeating-linear-gradient(135deg, var(--hatch) 0 2px, transparent 2px 4px);
+    padding: 0.5rem 0 0.45rem; border-top: 1px solid var(--border);
   }
-  /* Its charts on the page's own ground: their shapes read as they do on a line, not through stripes. */
-  .drawn :global(.share), .drawn :global(.sketch) { background: var(--bg); }
-  /* Its first line hangs from it: no rule between them. */
-  .project + :global(.rows) > :global(:first-child) > :global(.line) { border-top: 0; }
   .who { display: grid; gap: 0.1rem; min-width: 0; }
   .project { cursor: pointer; }
   /* The name as it was, a button only in what it does. */
@@ -78,12 +71,12 @@
   .folded .mark { transform: rotate(-90deg); }
   .text { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
   @media (prefers-reduced-motion: reduce) { .mark { transition: none; } }
-  .name { margin: 0; font-size: 1.5rem; font-weight: 500; line-height: 1.15; letter-spacing: -0.01em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .name { margin: 0; font-size: 1.4rem; font-weight: 500; line-height: 1.15; letter-spacing: -0.01em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .second { font-size: 0.82rem; color: var(--muted); }
   /* As a container's line draws them (ContainerLine.svelte), so the columns read alike. */
-  .drawn { display: grid; gap: 4px; min-width: 0; padding-bottom: 0.35rem; --sketch-height: 22px; --bar-height: 7px; }
+  .drawn { display: grid; gap: 4px; min-width: 0; padding-bottom: 0.35rem; --sketch-height: 14px; --bar-height: 7px; }
   .said { display: grid; gap: 0.05rem; min-width: 0; }
-  .said strong { font-size: 1rem; font-weight: 600; white-space: nowrap; }
+  .said strong { font-size: 0.92rem; font-weight: 600; white-space: nowrap; }
   .said strong .label { font-weight: 400; }
   .said .label { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   @media (max-width: 860px) {

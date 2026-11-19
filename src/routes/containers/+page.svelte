@@ -6,13 +6,13 @@
   import { History } from '$lib/history.svelte';
   import { range, rangeWindow } from '$lib/range.svelte';
   import { theLast } from '$lib/ranges';
-  import { BY_MEMORY, CONTAINER_COLUMNS, CONTAINER_SORTS, containerRows, filterContainers, groupContainers, lineHistory, readContainerFilter, type ContainerSort } from '$lib/containers';
+  import { BY_MEMORY, CONTAINER_COLUMNS, CONTAINER_SORTS, containerRows, filterContainers, groupContainers, lineHistory, readContainerFilter, type ContainerRow, type ContainerSort } from '$lib/containers';
   import type { ContainerLive } from '$lib/api';
   import { podmanFailures, podmanScope } from '$lib/perVm';
   import { withParam } from '$lib/url';
   import ContainerLine from '$lib/ContainerLine.svelte';
   import ContainerDetail from '$lib/ContainerDetail.svelte';
-  import ProjectHead from '$lib/ProjectHead.svelte';
+  import ProjectGroup from '$lib/ProjectGroup.svelte';
   import UnlistedVms from '$lib/UnlistedVms.svelte';
   import VmSelect from '$lib/VmSelect.svelte';
   import OrderPicker from '$lib/OrderPicker.svelte';
@@ -124,6 +124,20 @@
     <span></span>
   </div>
   <div class="narrow-order"><OrderPicker columns={CONTAINER_COLUMNS} {ordering} /></div>
+  {#snippet lines(g: (typeof groups)[number], rows: ContainerRow[])}
+    {#each rows as { vm, c } (c.id)}
+      {@const key = keyOf(vm, c.id)}
+      <div animate:glide>
+        <ContainerLine {vm} {c} history={history.get(lineHistory(vm, c))} vmHistory={history.get(g.live?.entity)} vmCpus={g.live?.instance.cpus ?? 1} vmMemory={g.live?.instance.memory ?? 0} second="image"
+          now={live.snapshot?.updated} selected={key in open} onselect={() => toggle(key)} onerror={(e) => (actionError = e)} />
+        {#if open[key] != null}
+          <div transition:unfold>
+            <ContainerDetail {vm} {c} from={span.from} to={span.to} over={range.key} vmMemory={g.live?.instance.memory ?? 0} onclose={() => close(key)} />
+          </div>
+        {/if}
+      </div>
+    {/each}
+  {/snippet}
   <div class="lines">
     {#each groups as g (g.vm)}
       <section animate:glide>
@@ -132,25 +146,13 @@
           <div animate:glide>
             {#if p.project}
               {@const project = p.project}
-              <ProjectHead {project} containers={projectContainers.get(keyOf(g.vm, project)) ?? []} history={history.get({ vm: g.vm, project })}
+              <ProjectGroup {project} containers={projectContainers.get(keyOf(g.vm, project)) ?? []} history={history.get({ vm: g.vm, project })}
                 vmHistory={history.get(g.live?.entity)} vmMemory={g.live?.instance.memory ?? 0} vmCpus={g.live?.instance.cpus ?? 1}
-                folded={folds.has(g.vm, project)} ontoggle={() => folds.toggle(g.vm, project)} />
-            {/if}
-            {#if !p.project || listsLines({ folded: folds.has(g.vm, p.project), searching })}
-            <div class="rows" transition:unfold>
-              {#each p.rows as { vm, c } (c.id)}
-                {@const key = keyOf(vm, c.id)}
-                <div animate:glide>
-                  <ContainerLine {vm} {c} history={history.get(lineHistory(vm, c))} vmHistory={history.get(g.live?.entity)} vmCpus={g.live?.instance.cpus ?? 1} vmMemory={g.live?.instance.memory ?? 0} second="image"
-                    now={live.snapshot?.updated} selected={key in open} onselect={() => toggle(key)} onerror={(e) => (actionError = e)} />
-                  {#if open[key] != null}
-                    <div transition:unfold>
-                      <ContainerDetail {vm} {c} from={span.from} to={span.to} over={range.key} vmMemory={g.live?.instance.memory ?? 0} onclose={() => close(key)} />
-                    </div>
-                  {/if}
-                </div>
-              {/each}
-            </div>
+                folded={folds.has(g.vm, project)} ontoggle={() => folds.toggle(g.vm, project)} listed={listsLines({ folded: folds.has(g.vm, project), searching })}>
+                {@render lines(g, p.rows)}
+              </ProjectGroup>
+            {:else}
+              <div class="rows">{@render lines(g, p.rows)}</div>
             {/if}
           </div>
         {/each}
