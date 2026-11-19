@@ -572,7 +572,7 @@ describe('containersPart', () => {
     const vm = { ...tangible([up('a', { cpu_mc: 300, mem_own: GiB })]), podmanError: 'connection refused' };
     expect(containersPart(vm)).toEqual({});
   });
-    it('splits nothing without a reading of the VM', () => {
+  it('splits nothing without a reading of the VM', () => {
     expect(containersPart(tangible([up('a', { cpu_mc: 300, mem_own: GiB })], {}))).toEqual({});
   });
 });
