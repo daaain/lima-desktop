@@ -2,7 +2,7 @@
   import { live } from '$lib/live.svelte';
   import { bytes, cores, permille } from '$lib/format';
   import type { Instance, VmLive } from '$lib/api';
-  import { band, bandRise, countWord, fleetHeadline, gauges, hostRamSentence, restartNote, share, sketch, vmSentence } from '$lib/almanac';
+  import { band, bandRise, containersPart, countWord, fleetHeadline, gauges, hostRamSentence, MEMORY_PARTS_TIP, partSaid, partsLabel, restartNote, share, sketch, vmSentence, type Part } from '$lib/almanac';
   import { History } from '$lib/history.svelte';
   import { range } from '$lib/range.svelte';
   import { theLast } from '$lib/ranges';
@@ -103,6 +103,16 @@
       </div>
       <!-- Where the heads aren't there to click, the order is chosen in words. -->
       <div class="narrow-order"><OrderPicker columns={VM_COLUMNS} {ordering} /></div>
+      <!-- Under a meter its bar's two parts, each by a swatch of how it's drawn: its containers' solid,
+           what runs outside them hatched. -->
+      {#snippet part(what: 'memory' | 'cpu', p: Part)}
+        {@const said = partSaid(what, p)}
+        <p class="label part" title={what === 'memory' ? MEMORY_PARTS_TIP : undefined}>
+          <span><span class="sw in"></span>{said.inside}</span>
+          {#if said.others}<span><span class="sw others"></span>{said.others}</span>{/if}
+          <span><span class="sw out"></span>{said.outside}</span>
+        </p>
+      {/snippet}
       {#each running as vm (vm.instance.name)}
         {@const i = vm.instance}
         {@const l = vm.latest}
@@ -111,6 +121,7 @@
         {@const h = history.get(vm.entity)}
         {@const ctRunning = vm.containers.filter((c) => c.state === 'running').length}
         {@const issues = problems(vm)}
+        {@const parts = containersPart(vm)}
         <article class="row vm" animate:glide>
           <div class="who">
             <div class="name-line"><a class="name serif" href={href(i)} title={i.name}>{i.name}</a>{@render badges(vm)}</div>
@@ -122,15 +133,17 @@
             <span class="label narrow">Memory</span>
             <p class="figure"><strong class:hot={g.memory.hot}>{bytes(g.memory.used)}</strong> <span class="muted">of {bytes(g.memory.size)}</span></p>
             <Sketch sketch={sketch(band(h, 'mem_used'), g.memory.size)} hot={g.memory.hot} label="Memory" />
-            <Bar pct={g.memory.pct} label={`Memory: ${g.memory.pct.toFixed(0)} % of the allocation`} />
+            <Bar pct={g.memory.pct} inside={parts.memory && share(parts.memory.inside, g.memory.size)} others={parts.memory?.others != null ? share(parts.memory.others, g.memory.size) : undefined} label={`Memory: ${g.memory.pct.toFixed(0)} % of the allocation${partsLabel('memory', parts.memory)}`} />
             <p class="label" title="Pressure (Linux's PSI): the share of the last measurement in which at least one task waited for memory">{g.memory.pct.toFixed(0)} % · waiting {permille(l.psi_mem_some)}</p>
+            {#if parts.memory}{@render part('memory', parts.memory)}{/if}
           </div>
           <div class="meter num">
             <span class="label narrow">CPU</span>
             <p class="figure"><strong class:hot={g.cpu.hot}>{cores(l.cpu_mc)}</strong> <span class="muted">of {i.cpus} cores</span></p>
             <Sketch sketch={sketch(band(h, 'cpu_mc'), g.cpu.size)} hot={g.cpu.hot} label="CPU" />
-            <Bar pct={g.cpu.pct} label={`CPU: ${g.cpu.pct.toFixed(0)} % of the cores`} />
+            <Bar pct={g.cpu.pct} inside={parts.cpu && share(parts.cpu.inside, g.cpu.size)} label={`CPU: ${g.cpu.pct.toFixed(0)} % of the cores${partsLabel('cpu', parts.cpu)}`} />
             <p class="label" title="Pressure (Linux's PSI): the share of the last measurement in which at least one task waited for a CPU">{g.cpu.pct.toFixed(0)} % · waiting {permille(l.psi_cpu_some)}</p>
+            {#if parts.cpu}{@render part('cpu', parts.cpu)}{/if}
           </div>
           <div class="meter num">
             <span class="label narrow">Disk</span>
@@ -208,6 +221,14 @@
   .figure { margin: 0; font-size: 1.05rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .figure strong { font-size: 1.55rem; font-weight: 600; }
   p.label { margin: 0; }
+  /* The swatches: the bar's solid part, and its hatch (Bar.svelte), hot or not, as the key is to a shape. */
+  /* A line each: side by side, the meter's column cuts the second short. */
+  .part { display: grid; gap: 0.1rem; }
+  .part > span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .sw { display: inline-block; width: 9px; height: 9px; margin-right: 0.3rem; vertical-align: -1px; }
+  .sw.in { background: var(--bar); }
+  .sw.others { background: var(--soft); }
+  .sw.out { background: repeating-linear-gradient(135deg, var(--bar) 0 2px, transparent 2px 4px); box-shadow: inset 0 0 0 1px var(--bar); }
   .narrow { display: none; }
   .dots { display: flex; flex-wrap: wrap; gap: 4px; padding-top: 0.6rem; }
   .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--bar); box-sizing: border-box; }

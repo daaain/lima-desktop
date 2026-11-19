@@ -141,6 +141,7 @@ pub fn vm_row(prev: Option<&Block>, cur: &Block, ncpus: u32) -> Vec<i64> {
         ABSENT, // host_cpu_mc
         ABSENT, // host_disk_alloc
         ABSENT, // host_mem
+        or_absent(mem("AnonPages").zip(mem("Shmem")).map(|(a, s)| a + s)),
     ]
 }
 
@@ -214,6 +215,8 @@ M MemTotal: 8000000
 M MemAvailable: 6000000
 M SwapTotal: 1000
 M SwapFree: 1000
+M AnonPages: 1500000
+M Shmem: 100000
 P memory some total=1000
 P memory full total=0
 P cpu some total=5000
@@ -283,6 +286,22 @@ G abcdef 1 1 -
         assert_eq!(col("swap_used"), 0);
         assert_eq!(col("disk_used"), 20_000_000 * 1024);
         assert_eq!(col("host_rss"), ABSENT);
+    }
+
+    #[test]
+    fn the_guests_processes_own_memory_is_its_anon_and_shmem() {
+        let a = parse(BLOCK_A);
+        let row = vm_row(None, &a, 4);
+        let col = |name: &str| row[VM_METRICS.iter().position(|m| *m == name).unwrap()];
+        assert_eq!(col("mem_own"), 1_600_000 * 1024);
+        // An older probe sent neither: absent, not nothing.
+        let older: String = BLOCK_A
+            .lines()
+            .filter(|l| !l.starts_with("M AnonPages") && !l.starts_with("M Shmem"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let row = vm_row(None, &parse(&older), 4);
+        assert_eq!(row[VM_METRICS.iter().position(|m| *m == "mem_own").unwrap()], ABSENT);
     }
 
     #[test]

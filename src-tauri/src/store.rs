@@ -67,7 +67,8 @@ impl Kind {
     }
 }
 
-/// Guest-side unless prefixed `host_`. cpu in millicores; memory/disk in bytes; psi in ‰ of the
+/// Guest-side unless prefixed `host_`. cpu in millicores; memory/disk in bytes (mem_own: the
+/// guest's anon + shmem, its processes' own memory, as a container's is); psi in ‰ of the
 /// interval stalled (`some`: at least one task, `full`: all tasks); oom_kills cumulative.
 pub const VM_METRICS: &[&str] = &[
     "cpu_mc",
@@ -87,6 +88,7 @@ pub const VM_METRICS: &[&str] = &[
     "host_cpu_mc",
     "host_disk_alloc",
     "host_mem",
+    "mem_own",
 ];
 /// cpu in millicores; memory in bytes (mem: podman's figure, the cgroup's memory less its inactive
 /// file cache; mem_peak: the cgroup's high-water mark since start; mem_own: its anon + shmem, the

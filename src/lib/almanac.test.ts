@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
   bandPeak, bandRise, containersHeadline, containersSentence, countWord, projectSaid, exitedSentence, fullWindow, holdsSentence, intervalPhrase, ownLimit, pressureSentence, rowMemory,
-  restartNote, runsSentence, vmHeadMemory, fleetHeadline, hostBar, hostRamSentence, quarters, selfMemory, vzMemoryNote, share, shareChart, shareTip, sketch, unusedHeadline, unusedLede, vmHeadline, vmSentence, stalledSaid,
+  restartNote, runsSentence, containersPart, partSaid, partsLabel, vmHeadMemory, fleetHeadline, hostBar, hostRamSentence, quarters, selfMemory, vzMemoryNote, share, shareChart, shareTip, sketch, unusedHeadline, unusedLede, vmHeadline, vmSentence, stalledSaid,
 } from './almanac';
+import type { Latest } from './api';
 import type { Hint } from './rightsize';
 import { container, vm } from './testing';
 
@@ -535,5 +536,95 @@ describe('stalledSaid', () => {
     const now = Date.UTC(2026, 10, 10, 14, 30);
     const v = { ...vm({ name: 'ember' }), stalledSince: now - 4 * 60_000 };
     expect(vmSentence(v, '24h', undefined, now)).toBe(stalledSaid(now - 4 * 60_000, now));
+  });
+});
+
+describe('containersPart', () => {
+  const GiB = 1024 ** 3;
+  const up = (id: string, latest: Latest) => container({ id, latest });
+  const tangible = (containers: ReturnType<typeof container>[], latest: Latest = { mem_used: 13.6 * GiB, cpu_mc: 6300 }) =>
+    ({ ...vm({ name: 'tangible', cpus: 8 }, containers), latest });
+
+  it("splits the VM's CPU into what its running containers use and the rest", () => {
+    const p = containersPart(tangible([up('a', { cpu_mc: 300 }), up('b', { cpu_mc: 100 })]));
+    expect(p.cpu).toEqual({ inside: 400, outside: 5900 });
+  });
+  it("counts the containers' memory as their processes' own, which the VM's in-use figure counts too", () => {
+    const p = containersPart(tangible([up('a', { mem: 9 * GiB, mem_own: 8 * GiB }), up('b', { mem: 5 * GiB, mem_own: 2.8 * GiB })]));
+    expect(p.memory!.inside / GiB).toBeCloseTo(10.8);
+    expect(p.memory!.outside / GiB).toBeCloseTo(2.8);
+    expect(p.memory!.others).toBeUndefined();
+  });
+  it("parts the rest of the memory into other processes' own and the kernel's and cache, from the VM's own", () => {
+    const vmOwn = { mem_used: 13.7 * GiB, mem_own: 11.4 * GiB, cpu_mc: 6300 };
+    const p = containersPart(tangible([up('a', { mem_own: 8 * GiB, cpu_mc: 100 }), up('b', { mem_own: 2.8 * GiB })], vmOwn));
+    expect(p.memory!.inside / GiB).toBeCloseTo(10.8);
+    expect(p.memory!.others! / GiB).toBeCloseTo(0.6);
+    expect(p.memory!.outside / GiB).toBeCloseTo(2.3);
+    // CPU has no such part.
+    expect(p.cpu!.others).toBeUndefined();
+  });
+  it('holds the other processes to what is left, as the VM and its containers are read a moment apart', () => {
+    const behind = { mem_used: 10 * GiB, mem_own: 7 * GiB, cpu_mc: 100 };
+    expect(containersPart(tangible([up('a', { mem_own: 8 * GiB })], behind)).memory).toEqual({ inside: 8 * GiB, others: 0, outside: 2 * GiB });
+    const over = { mem_used: 10 * GiB, mem_own: 12 * GiB, cpu_mc: 100 };
+    expect(containersPart(tangible([up('a', { mem_own: 8 * GiB })], over)).memory).toEqual({ inside: 8 * GiB, others: 2 * GiB, outside: 0 });
+  });
+  it("leaves the memory unsplit where a running container's own memory isn't read", () => {
+    expect(containersPart(tangible([up('a', { mem: GiB, mem_own: GiB }), up('b', { mem: GiB })])).memory).toBeUndefined();
+  });
+  it("counts a running container's CPU that wasn't read yet as nothing, while others were read", () => {
+    // Just started, or recreated: no rate yet. A container that keeps restarting is mostly this.
+    const p = containersPart(tangible([up('a', { cpu_mc: 300 }), up('b', {})]));
+    expect(p.cpu).toEqual({ inside: 300, outside: 6000 });
+  });
+  it("doesn't split the CPU while no running container has been read, as just after the app starts", () => {
+    expect(containersPart(tangible([up('a', { mem_own: GiB }), up('b', { mem_own: GiB })])).cpu).toBeUndefined();
+  });
+  it("counts a paused container's memory with the containers', not its CPU", () => {
+    const paused = container({ id: 'p', state: 'paused', latest: { mem_own: 2 * GiB, cpu_mc: 900 } });
+    const p = containersPart(tangible([up('a', { mem_own: GiB, cpu_mc: 300 }), paused]));
+    expect(p.memory!.inside).toBe(3 * GiB);
+    expect(p.cpu).toEqual({ inside: 300, outside: 6000 });
+    // Paused alone: its memory is the containers', and there's no CPU of theirs to split.
+    const only = containersPart(tangible([paused]));
+    expect(only.memory!.inside).toBe(2 * GiB);
+    expect(only.cpu).toBeUndefined();
+  });
+  it('leaves out what has stopped', () => {
+    const p = containersPart(tangible([up('a', { cpu_mc: 300 }), container({ id: 'b', state: 'exited', latest: { cpu_mc: 900 } })]));
+    expect(p.cpu).toEqual({ inside: 300, outside: 6000 });
+  });
+  it('never puts more in the containers than the VM uses: they are read a moment apart', () => {
+    expect(containersPart(tangible([up('a', { cpu_mc: 7000 })])).cpu).toEqual({ inside: 6300, outside: 0 });
+  });
+  it('splits nothing for a VM running no containers, where everything would be outside them', () => {
+    expect(containersPart(tangible([]))).toEqual({});
+    expect(containersPart(tangible([container({ state: 'exited', latest: { cpu_mc: 10 } })]))).toEqual({});
+  });
+  it("splits nothing while podman can't be read: its containers' last readings are from before", () => {
+    const vm = { ...tangible([up('a', { cpu_mc: 300, mem_own: GiB })]), podmanError: 'connection refused' };
+    expect(containersPart(vm)).toEqual({});
+  });
+  it('splits nothing without a reading of the VM', () => {
+    expect(containersPart(tangible([up('a', { cpu_mc: 300, mem_own: GiB })], {}))).toEqual({});
+  });
+});
+
+describe('partSaid', () => {
+  it('says each part, in the figures of the meter it splits', () => {
+    expect(partSaid('cpu', { inside: 400, outside: 5900 })).toEqual({ inside: '0.40 in containers', outside: '5.9 outside them' });
+    expect(partSaid('memory', { inside: 10.8 * 1024 ** 3, outside: 2.8 * 1024 ** 3 })).toEqual({ inside: '10.8 GiB in containers', outside: '2.8 GiB outside them' });
+  });
+  it("names the memory's rest for what it is once other processes are told apart from it", () => {
+    expect(partSaid('memory', { inside: 10.8 * 1024 ** 3, others: 0.6 * 1024 ** 3, outside: 2.3 * 1024 ** 3 }))
+      .toEqual({ inside: '10.8 GiB in containers', others: '614.4 MiB in other processes', outside: '2.3 GiB kernel and cache' });
+  });
+});
+
+describe('partsLabel', () => {
+  it("goes on a bar's label with its parts, where it has them", () => {
+    expect(partsLabel('cpu', { inside: 400, outside: 5900 })).toBe(': 0.40 in containers, 5.9 outside them');
+    expect(partsLabel('memory', undefined)).toBe('');
   });
 });

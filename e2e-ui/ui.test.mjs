@@ -1092,6 +1092,43 @@ test('On a narrow window a project indents its lines rather than hang its bracke
   await close();
 });
 
+test("A VM's memory and CPU bars on the overview split what its containers use from what runs outside them", async () => {
+  const { page, errors, close } = await open('/');
+  const atlas = page.locator('article', { has: page.locator('a.name', { hasText: /^atlas$/ }) });
+  await atlas.locator('.meter').first().waitFor();
+  for (const [i, what] of [[0, 'Memory'], [1, 'CPU']]) {
+    const meter = atlas.locator('.meter').nth(i);
+    // Its containers' part solid, the rest of the bar hatched, inside the bar's own width.
+    const bar = meter.locator('.bar');
+    assert.equal(await bar.locator('.inside').count(), 1, what);
+    assert.match(await bar.locator('.fill').evaluate((el) => getComputedStyle(el).backgroundImage), /^repeating-linear-gradient\(135deg/, what);
+    const [inside, fill] = await bar.evaluate((el) => ['.inside', '.fill'].map((s) => el.querySelector(s).getBoundingClientRect().width));
+    assert.ok(inside > 0 && inside <= fill, `${what}: ${inside} within ${fill}`);
+    // Said under it, and in the bar's label: CPU's rest is what runs outside its containers; memory's
+    // is parted again into its other processes' own, a paler solid part, and the kernel's and cache.
+    if (what === 'CPU') {
+      assert.match(await meter.locator('.part').innerText(), /^.+ in containers\n.+ outside them$/);
+      assert.match(await bar.getAttribute('aria-label'), /: .+ in containers, .+ outside them$/);
+      assert.equal(await bar.locator('.others').count(), 0);
+    } else {
+      assert.match(await meter.locator('.part').innerText(), /^.+ in containers\n.+ in other processes\n.+ kernel and cache$/);
+      assert.match(await bar.getAttribute('aria-label'), /: .+ in containers, .+ in other processes, .+ kernel and cache$/);
+      const [inEnd, othersStart, othersEnd, fillEnd] = await bar.evaluate((el) => {
+        const r = (s) => el.querySelector(s).getBoundingClientRect();
+        return [r('.inside').right, r('.others').left, r('.others').right, r('.fill').right];
+      });
+      assert.ok(Math.abs(othersStart - inEnd) < 1 && othersEnd <= fillEnd + 0.5, `others from ${othersStart} to ${othersEnd}, after ${inEnd}, within ${fillEnd}`);
+    }
+  }
+  // A VM whose containers can't be read isn't split: it would all be "outside".
+  const ember = page.locator('article', { has: page.locator('a.name', { hasText: /^ember$/ }) });
+  await ember.locator('.meter').first().waitFor();
+  assert.equal(await ember.locator('.bar .inside').count(), 0);
+  assert.equal(await ember.locator('.part').count(), 0);
+  assert.deepEqual(errors, []);
+  await close();
+});
+
 test('On a narrow window the order is chosen from a word, as the heads are gone', async () => {
   const { page, errors, close } = await open('/', { width: 420, height: 900 });
   await page.locator('article').first().waitFor();

@@ -143,6 +143,9 @@
       mem_used: needed,
       mem_avail: (t, e) => mem - needed(t, e),
       mem_total: mem,
+      // Its processes' own memory (anon and shmem): most of what it needs, the rest the kernel's and
+      // cache it can't drop at once. atlas, whose memory leaks, leaks it outside its containers.
+      mem_own: (t, e) => (o.ownShare ?? 0.75) * needed(t, e),
       swap_used: 0,
       psi_mem_some: scaled(shape.psiMem ?? shapes.flat(0, 0), 1000),
       psi_mem_full: scaled(shape.psiMemFull ?? shapes.flat(0, 0), 1000),
