@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   bandPeak, bandRise, containersHeadline, containersSentence, countWord, projectSaid, exitedSentence, fullWindow, holdsSentence, intervalPhrase, ownLimit, pressureSentence, rowMemory,
-  restartNote, runsSentence, containersPart, partSaid, memoryFlags, memoryTip, cpuTip, fleetHeadline, hostBar, hostRamSentence, quarters, selfMemory, vzMemoryNote, share, shareChart, shareTip, sketch, unusedHeadline, unusedLede, vmHeadline, vmSentence,
+  restartNote, runsSentence, containersPart, partSaid, partsLabel, memoryFlags, memoryTip, cpuTip, fleetHeadline, hostBar, hostRamSentence, quarters, selfMemory, vzMemoryNote, share, shareChart, shareTip, sketch, unusedHeadline, unusedLede, vmHeadline, vmSentence,
 } from './almanac';
 import type { Latest } from './api';
 import type { Hint } from './rightsize';
@@ -523,7 +523,7 @@ describe('containersPart', () => {
   });
   it("parts the rest of the memory into other processes' own and the kernel's and cache, from the VM's own", () => {
     const vmOwn = { mem_used: 13.7 * GiB, mem_own: 11.4 * GiB, cpu_mc: 6300 };
-    const p = containersPart(tangible([up('a', { mem_own: 8 * GiB }), up('b', { mem_own: 2.8 * GiB })], vmOwn));
+    const p = containersPart(tangible([up('a', { mem_own: 8 * GiB, cpu_mc: 100 }), up('b', { mem_own: 2.8 * GiB })], vmOwn));
     expect(p.memory!.inside / GiB).toBeCloseTo(10.8);
     expect(p.memory!.others! / GiB).toBeCloseTo(0.6);
     expect(p.memory!.outside / GiB).toBeCloseTo(2.3);
@@ -538,6 +538,24 @@ describe('containersPart', () => {
   });
   it("leaves the memory unsplit where a running container's own memory isn't read", () => {
     expect(containersPart(tangible([up('a', { mem: GiB, mem_own: GiB }), up('b', { mem: GiB })])).memory).toBeUndefined();
+  });
+  it("counts a running container's CPU that wasn't read yet as nothing, while others were read", () => {
+    // Just started, or recreated: no rate yet. A container that keeps restarting is mostly this.
+    const p = containersPart(tangible([up('a', { cpu_mc: 300 }), up('b', {})]));
+    expect(p.cpu).toEqual({ inside: 300, outside: 6000 });
+  });
+  it("doesn't split the CPU while no running container has been read, as just after the app starts", () => {
+    expect(containersPart(tangible([up('a', { mem_own: GiB }), up('b', { mem_own: GiB })])).cpu).toBeUndefined();
+  });
+  it("counts a paused container's memory with the containers', not its CPU", () => {
+    const paused = container({ id: 'p', state: 'paused', latest: { mem_own: 2 * GiB, cpu_mc: 900 } });
+    const p = containersPart(tangible([up('a', { mem_own: GiB, cpu_mc: 300 }), paused]));
+    expect(p.memory!.inside).toBe(3 * GiB);
+    expect(p.cpu).toEqual({ inside: 300, outside: 6000 });
+    // Paused alone: its memory is the containers', and there's no CPU of theirs to split.
+    const only = containersPart(tangible([paused]));
+    expect(only.memory!.inside).toBe(2 * GiB);
+    expect(only.cpu).toBeUndefined();
   });
   it('leaves out what has stopped', () => {
     const p = containersPart(tangible([up('a', { cpu_mc: 300 }), container({ id: 'b', state: 'exited', latest: { cpu_mc: 900 } })]));
@@ -652,5 +670,12 @@ describe("a container's memory card", () => {
     expect(m.tip.figure).toBe('900.0 MiB of its 1.0 GiB limit');
     expect(m.tip.rows.map((r) => r.name)).toEqual(['Now', 'Peak since it started']);
     expect(m.tip.foot).toBe('Full width is its 1.0 GiB limit.');
+  });
+});
+
+describe('partsLabel', () => {
+  it("goes on a bar's label with its parts, where it has them", () => {
+    expect(partsLabel('cpu', { inside: 400, outside: 5900 })).toBe(': 0.40 in containers, 5.9 outside them');
+    expect(partsLabel('memory', undefined)).toBe('');
   });
 });

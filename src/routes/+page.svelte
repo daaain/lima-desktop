@@ -2,7 +2,7 @@
   import { live } from '$lib/live.svelte';
   import { bytes, cores, permille } from '$lib/format';
   import type { Instance, VmLive } from '$lib/api';
-  import { band, bandRise, containersPart, countWord, cpuTip, fleetHeadline, gauges, hostRamSentence, memoryFlags, memoryTip, partSaid, restartNote, share, sketch, vmSentence, type Part } from '$lib/almanac';
+  import { band, bandRise, containersPart, countWord, cpuTip, fleetHeadline, gauges, hostRamSentence, memoryFlags, memoryTip, partSaid, partsLabel, restartNote, share, sketch, vmSentence, type Part } from '$lib/almanac';
   import type { RichTip } from '$lib/richTip';
   import { richTip } from '$lib/richTip.svelte';
   import { History } from '$lib/history.svelte';
@@ -19,12 +19,6 @@
   import { BY_NAME, sortRunning, sortStopped, VM_COLUMNS, VM_SORTS, type VmSort } from '$lib/vmSort';
 
   const vms = $derived(live.snapshot?.vms ?? []);
-  /** A bar's label goes on with its parts, where it has them. */
-  function partLabel(what: 'memory' | 'cpu', p: Part | undefined): string {
-    if (!p) return '';
-    const said = partSaid(what, p);
-    return `: ${[said.inside, said.others, said.outside].filter(Boolean).join(', ')}`;
-  }
   // By name unless a column head was chosen; the choice is kept for next time. A live order (the
   // fullest memory first, say) can change at every measurement: the rows glide to their places.
   const ordering = new Ordering('vms', VM_SORTS, BY_NAME);
@@ -145,7 +139,7 @@
             <span class="label narrow">Memory</span>
             <p class="figure"><strong class:hot={g.memory.hot}>{bytes(g.memory.used)}</strong> <span class="muted">of {bytes(g.memory.size)}</span></p>
             <Sketch sketch={sketch(band(h, 'mem_used'), g.memory.size)} hot={g.memory.hot} label="Memory" />
-            <Bar pct={g.memory.pct} inside={parts.memory && share(parts.memory.inside, g.memory.size)} others={parts.memory?.others != null ? share(parts.memory.others, g.memory.size) : undefined} label={`Memory: ${g.memory.pct.toFixed(0)} % of the allocation${partLabel('memory', parts.memory)}`} tip={memTip} />
+            <Bar pct={g.memory.pct} inside={parts.memory && share(parts.memory.inside, g.memory.size)} others={parts.memory?.others != null ? share(parts.memory.others, g.memory.size) : undefined} label={`Memory: ${g.memory.pct.toFixed(0)} % of the allocation${partsLabel('memory', parts.memory)}`} tip={memTip} />
             <p class="label" title="Pressure (Linux's PSI): the share of the last measurement in which at least one task waited for memory">{g.memory.pct.toFixed(0)} % · waiting {permille(l.psi_mem_some)}</p>
             {#if parts.memory && memTip}{@render part('memory', parts.memory, memTip)}{/if}
           </div>
@@ -153,7 +147,7 @@
             <span class="label narrow">CPU</span>
             <p class="figure"><strong class:hot={g.cpu.hot}>{cores(l.cpu_mc)}</strong> <span class="muted">of {i.cpus} cores</span></p>
             <Sketch sketch={sketch(band(h, 'cpu_mc'), g.cpu.size)} hot={g.cpu.hot} label="CPU" />
-            <Bar pct={g.cpu.pct} inside={parts.cpu && share(parts.cpu.inside, g.cpu.size)} label={`CPU: ${g.cpu.pct.toFixed(0)} % of the cores${partLabel('cpu', parts.cpu)}`} tip={cpuCard} />
+            <Bar pct={g.cpu.pct} inside={parts.cpu && share(parts.cpu.inside, g.cpu.size)} label={`CPU: ${g.cpu.pct.toFixed(0)} % of the cores${partsLabel('cpu', parts.cpu)}`} tip={cpuCard} />
             <p class="label" title="Pressure (Linux's PSI): the share of the last measurement in which at least one task waited for a CPU">{g.cpu.pct.toFixed(0)} % · waiting {permille(l.psi_cpu_some)}</p>
             {#if parts.cpu && cpuCard}{@render part('cpu', parts.cpu, cpuCard)}{/if}
           </div>
