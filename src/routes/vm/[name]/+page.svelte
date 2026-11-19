@@ -2,7 +2,7 @@
   import { tick } from 'svelte';
   import { page } from '$app/state';
   import { live } from '$lib/live.svelte';
-  import { api, type OomEvent, type Series, type VmStall } from '$lib/api';
+  import { api, type ContainerLive, type OomEvent, type Series, type VmStall } from '$lib/api';
   import { bytes } from '$lib/format';
   import { containersSentence, vmHeadline } from '$lib/almanac';
   import { History } from '$lib/history.svelte';
@@ -15,11 +15,12 @@
   import Sizing from '$lib/Sizing.svelte';
   import ContainerLine from '$lib/ContainerLine.svelte';
   import ContainerDetail from '$lib/ContainerDetail.svelte';
-  import ProjectHead from '$lib/ProjectHead.svelte';
+  import ProjectGroup from '$lib/ProjectGroup.svelte';
   import OrderPicker from '$lib/OrderPicker.svelte';
   import SortHead from '$lib/SortHead.svelte';
   import { BY_MEMORY, byProject, CONTAINER_COLUMNS, CONTAINER_SORTS, lineHistory, type ContainerSort } from '$lib/containers';
   import { Ordering } from '$lib/ordering.svelte';
+  import { folds } from '$lib/folds.svelte';
   import { glide, unfold } from '$lib/motion';
 
   const name = $derived(decodeURIComponent(page.params.name ?? ''));
@@ -168,9 +169,11 @@
   function toggle(id: string) {
     open = open.includes(id) ? open.filter((o) => o !== id) : [...open, id];
   }
-  /** From an OOM kill: open its container's detail (if it isn't) and bring it into view. */
+  /** From an OOM kill: open its container's detail (if it isn't, unfolding its project) and bring it into view. */
   function show(id: string) {
     if (!open.includes(id)) open = [...open, id];
+    const project = vm?.containers.find((c) => c.id === id)?.composeProject;
+    if (project && folds.has(name, project)) folds.toggle(name, project);
     tick().then(() => document.getElementById(`detail-${id}`)?.scrollIntoView({ block: 'center', behavior: 'smooth' }));
   }
 
@@ -294,8 +297,21 @@
     {#if vm.containers.length}
       <p class="note">
         Memory: full width is the container's own limit, else this VM's {bytes(i.memory)}; the bar is what it uses now, its strongest part, where that's read, what its processes hold themselves (the rest is file cache and kernel memory, most of which the VM can reclaim), and faintest behind it the peak since it started; the tick is the peak in {theLast(range.key)}.
-        Above it, the VM over {theLast(range.key)}: its memory in use, soft, and this container's part in front. CPU: full width is this VM's {i.cpus} cores, with {theLast(range.key)} above. Compose projects are read-only groups. <a href={`/containers?vm=${encodeURIComponent(name)}`}>Filter and search them in Containers.</a>
+        Above it, the VM over {theLast(range.key)}: its memory in use, soft, and this container's part in front. CPU: full width is this VM's {i.cpus} cores, with {theLast(range.key)} above. Compose projects are read-only groups; click one's heading to fold it. <a href={`/containers?vm=${encodeURIComponent(name)}`}>Filter and search them in Containers.</a>
       </p>
+      {#snippet lines(rows: ContainerLive[])}
+        {#each rows as c (c.id)}
+          <div class="row" animate:glide>
+            <ContainerLine vm={name} {c} history={history.get(lineHistory(name, c))} vmHistory={history.get(vm.entity)} vmCpus={i.cpus} vmMemory={i.memory} second="activity" now={live.snapshot?.updated}
+              selected={open.includes(c.id)} onselect={() => toggle(c.id)} onerror={(e) => (actionError = e)} />
+            {#if open.includes(c.id)}
+              <div id={`detail-${c.id}`} transition:unfold>
+                <ContainerDetail vm={name} {c} {from} {to} over={range.key} vmMemory={i.memory} oomMarkers={oomCurrent ? oomMarkers(oom, c.id) : []} onclose={() => toggle(c.id)} />
+              </div>
+            {/if}
+          </div>
+        {/each}
+      {/snippet}
       <div class="lines">
         <div class="narrow-order"><OrderPicker columns={CONTAINER_COLUMNS} {ordering} /></div>
         <div class="column-heads" role="group" aria-label="Order the containers by">
@@ -307,19 +323,14 @@
         </div>
         {#each groups as g (g.project)}
           {#if g.project}
-            <ProjectHead project={g.project} containers={g.rows} history={history.get({ vm: name, project: g.project })} vmHistory={history.get(vm.entity)} vmMemory={i.memory} vmCpus={i.cpus} />
+            {@const project = g.project}
+            <ProjectGroup {project} containers={g.rows} history={history.get({ vm: name, project })} vmHistory={history.get(vm.entity)} vmMemory={i.memory} vmCpus={i.cpus}
+              folded={folds.has(name, project)} ontoggle={() => folds.toggle(name, project)} listed={!folds.has(name, project)}>
+              {@render lines(g.rows)}
+            </ProjectGroup>
+          {:else}
+            <div class="rows">{@render lines(g.rows)}</div>
           {/if}
-          {#each g.rows as c (c.id)}
-            <div class="row" animate:glide>
-              <ContainerLine vm={name} {c} history={history.get(lineHistory(name, c))} vmHistory={history.get(vm.entity)} vmCpus={i.cpus} vmMemory={i.memory} second="activity" now={live.snapshot?.updated}
-                selected={open.includes(c.id)} onselect={() => toggle(c.id)} onerror={(e) => (actionError = e)} />
-              {#if open.includes(c.id)}
-                <div id={`detail-${c.id}`} transition:unfold>
-                  <ContainerDetail vm={name} {c} {from} {to} over={range.key} vmMemory={i.memory} oomMarkers={oomCurrent ? oomMarkers(oom, c.id) : []} onclose={() => toggle(c.id)} />
-                </div>
-              {/if}
-            </div>
-          {/each}
         {/each}
       </div>
     {/if}
@@ -336,7 +347,7 @@
   .panel { display: grid; gap: 0.7rem; margin-top: 1.4rem; }
   .lines { --container-columns: minmax(13rem, 1.3fr) minmax(9rem, 1fr) 9.5rem minmax(7rem, 0.6fr) 5.5rem 6.5rem 10rem; border-bottom: 1px solid var(--border); }
   .column-heads { grid-template-columns: var(--container-columns); column-gap: 1.4rem; margin-top: 0.1rem; } /* 0.3rem less: SortHead's min-height */
-  .column-heads + :global(.project), .column-heads + .row > :global(.line) { border-top: 0; }
+  .column-heads + :global(.compose) > :global(.project), .column-heads + .rows > .row:first-child > :global(.line) { border-top: 0; }
   .narrow-order { display: none; }
   .cname { font-weight: 500; }
   .cid { margin-left: 0.4rem; }
