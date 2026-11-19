@@ -486,8 +486,9 @@ export function rowMemory(
   };
 }
 
-/** Of the share chart's height, the VM's memory: the rest is room for its dashed line. */
-const SHARE_HEADROOM = 0.92;
+/** Of a chart's height above a bar, the full scale: the rest is room for the dashed line drawn at it
+ * (Sketch, MemoryShare), so a chart that reaches the whole scale still shows where that is. */
+export const CHART_HEADROOM = 0.92;
 
 export interface ShareChart {
   /** Path data in a 100 × 100 box, one stepped area per run of samples, gaps left open. */
@@ -509,7 +510,7 @@ export function shareChart(me: Band | undefined, vm: Band | undefined, vmMemory:
   if (bandPeak(me) == null && bandPeak(vm) == null) return null;
   const w = 100 / columns;
   const n = (x: number) => String(+x.toFixed(2));
-  const y = (v: number) => n(100 - share(v, vmMemory) * SHARE_HEADROOM);
+  const y = (v: number) => n(100 - share(v, vmMemory) * CHART_HEADROOM);
   const area = (values: (number | null)[] | undefined) => {
     let d = '';
     let open = false;
@@ -525,7 +526,7 @@ export function shareChart(me: Band | undefined, vm: Band | undefined, vmMemory:
     }
     return open ? `${d}V100Z` : d;
   };
-  return { vm: area(vm?.max), me: area(me?.max), ceiling: +(100 * (1 - SHARE_HEADROOM)).toFixed(2), columns };
+  return { vm: area(vm?.max), me: area(me?.max), ceiling: +(100 * (1 - CHART_HEADROOM)).toFixed(2), columns };
 }
 
 const percent = (p: number) => `${p < 1 ? p.toFixed(1) : p.toFixed(0)} %`;

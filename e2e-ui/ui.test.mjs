@@ -1254,6 +1254,29 @@ test("Moving from a bar's card up onto its chart shows the chart's own reading, 
   await close();
 });
 
+test("Every chart above a bar has a dashed line at the full scale, as a container's memory chart has", async () => {
+  const { page, errors, close } = await open('/');
+  const meter = page.locator('article', { has: page.locator('a.name', { hasText: /^harbor$/ }) }).locator('.meter');
+  await meter.first().locator('.sketch svg').first().waitFor();
+  // Where the line is in each chart: a VM's memory, CPU and disk, and a container's memory and CPU.
+  const lineAt = (chart) => chart.evaluate((el) => {
+    const svg = el.querySelector('svg');
+    const line = svg.querySelector('line.ceiling');
+    return line && { y: +line.getAttribute('y1'), dashed: getComputedStyle(line).strokeDasharray !== 'none' };
+  });
+  for (let i = 0; i < 3; i++) assert.deepEqual(await lineAt(meter.nth(i).locator('.sketch')), { y: 8, dashed: true }, `meter ${i}`);
+  // Nothing drawn reaches above it: the columns, at most the whole scale, stop at the line.
+  const top = await meter.first().locator('.sketch svg.time').evaluate((svg) => Math.min(...[...svg.querySelectorAll('path, rect')].map((e) => e.getBBox().y)));
+  assert.ok(top >= 8 - 0.01, `drawn from ${top}`);
+  await page.goto(page.url().replace(/\/$/, '/containers'));
+  const line = page.locator('.line', { hasText: 'harbor-devbox' });
+  await line.locator('.share svg').waitFor();
+  assert.deepEqual(await lineAt(line.locator('.share')), { y: 8, dashed: true });
+  assert.deepEqual(await lineAt(line.locator('.sketch')), { y: 8, dashed: true });
+  assert.deepEqual(errors, []);
+  await close();
+});
+
 test('On a narrow window the order is chosen from a word, as the heads are gone', async () => {
   const { page, errors, close } = await open('/', { width: 420, height: 900 });
   await page.locator('article').first().waitFor();
