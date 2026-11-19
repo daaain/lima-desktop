@@ -53,6 +53,10 @@ export function gauges(vm: VmLive): { memory: Gauge; cpu: Gauge; disk: Gauge } {
   };
 }
 
+/** A VM that has stopped answering, said wherever its last figures are drawn: they're from before. */
+export const stalledSaid = (since: number, now: number = Date.now()) =>
+  `It hasn't answered for ${uptime(since / 1000, now)}, though Lima still says it's running. Its figures are from before.`;
+
 /**
  * One sentence about a running VM: its memory in quarters, then what else is worth a look. What
  * is now is said as now; processes killed are those in the range (`kills`, from its history), and
@@ -60,9 +64,7 @@ export function gauges(vm: VmLive): { memory: Gauge; cpu: Gauge; disk: Gauge } {
  */
 export function vmSentence(vm: VmLive, over: RangeKey, kills?: number, now: number = Date.now()): string {
   // Silent, its last reading says nothing about now: say so rather than describe it.
-  if (vm.stalledSince != null) {
-    return `It hasn't answered for ${uptime(vm.stalledSince / 1000, now)}, though Lima still says it's running. Its figures are from before.`;
-  }
+  if (vm.stalledSince != null) return stalledSaid(vm.stalledSince, now);
   const g = gauges(vm);
   const parts = [g.memory.used == null ? 'No memory reading yet.' : `${quarters(g.memory.pct)} of its memory is in use.`];
   if (g.disk.hot) parts.push('Its disk is past three quarters too.');

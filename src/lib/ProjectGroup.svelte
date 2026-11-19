@@ -7,16 +7,13 @@
   import ProjectHead from './ProjectHead.svelte';
   import { unfold } from './motion';
 
-  let { listed, children, ...head }: ComponentProps<typeof ProjectHead> & {
-    /** Its lines are listed: unfolded, or found by a search (folds.listsLines). */
-    listed: boolean;
-    children: Snippet;
-  } = $props();
+  // `listed`: its lines are listed, unfolded or found by a search (folds.listsLines).
+  let { children, ...head }: ComponentProps<typeof ProjectHead> & { children: Snippet } = $props();
 </script>
 
 <div class="compose">
   <ProjectHead {...head} />
-  {#if listed}
+  {#if head.listed}
     <div class="rows" transition:unfold>{@render children()}</div>
   {/if}
 </div>

@@ -175,14 +175,15 @@
   <div class="narrow-order"><OrderPicker columns={ITEM_COLUMNS} {ordering} /></div>
   <div class="lines items">
     {#each groups as g (g.vm)}
+      {@const listed = listsLines({ folded: vmFolds.volumes.has(g.vm), searching: query.trim() !== '' || vmFilter != null })}
       <section animate:glide>
         <GroupHead vm={g.vm} live={g.live} sentence={g.sentence} what="volumes" said={said[g.vm]}
-          folded={vmFolds.volumes.has(g.vm)} ontoggle={() => vmFolds.volumes.toggle(g.vm)}>
+          folded={vmFolds.volumes.has(g.vm)} listed={listed} ontoggle={() => vmFolds.volumes.toggle(g.vm)}>
           {#snippet actions()}
             <VolumePrune vm={g.vm} count={g.count} unused={g.unused} onpruned={() => changed(g.vm)} bind:said={said[g.vm]} />
           {/snippet}
         </GroupHead>
-        {#if listsLines({ folded: vmFolds.volumes.has(g.vm), searching: query.trim() !== '' || vmFilter != null })}
+        {#if listed}
         <div class="vm-lines" transition:unfold>
           {#each g.lines as row (row.v.name)}
             {@const u = usageOf(row)}

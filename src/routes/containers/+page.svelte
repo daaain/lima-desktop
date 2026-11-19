@@ -142,10 +142,11 @@
   {/snippet}
   <div class="lines">
     {#each groups as g (g.vm)}
+      {@const listed = listsLines({ folded: vmFolds.containers.has(g.vm), searching: searching || urlFilter.vm != null })}
       <section animate:glide>
         <VmHead vm={g.vm} live={g.live} sentence={runsSentence(g.rows.map((r) => r.c))} history={history.get(g.live?.entity)}
-          folded={vmFolds.containers.has(g.vm)} ontoggle={() => vmFolds.containers.toggle(g.vm)} />
-        {#if listsLines({ folded: vmFolds.containers.has(g.vm), searching: searching || urlFilter.vm != null })}
+          folded={vmFolds.containers.has(g.vm)} listed={listed} now={live.snapshot?.updated} ontoggle={() => vmFolds.containers.toggle(g.vm)} />
+        {#if listed}
         <div class="vm-lines" transition:unfold>
           {#each g.projects as p (p.project)}
             <div animate:glide>

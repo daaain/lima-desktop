@@ -12,16 +12,18 @@
   import { range } from './range.svelte';
   import Bar from './Bar.svelte';
   import FoldMark from './FoldMark.svelte';
+  import { foldAction } from './folds';
   import MemoryShare from './MemoryShare.svelte';
   import Sketch from './Sketch.svelte';
 
-  let { project, containers, history, vmHistory, vmMemory, vmCpus, folded, ontoggle }: {
+  let { project, containers, history, vmHistory, vmMemory, vmCpus, folded, listed, ontoggle }: {
     project: string; containers: readonly ContainerLive[];
     /** The project's range (api.composeSeries), and its VM's (history.svelte.ts). */
     history: Series | undefined; vmHistory: Series | undefined;
     vmMemory: number; vmCpus: number;
-    /** Its lines folded away; `ontoggle` folds or unfolds them. */
-    folded: boolean; ontoggle: () => void;
+    /** Its lines folded away, as kept; `ontoggle` folds or unfolds them. `listed`: its lines are
+     * shown, unfolded or for now (a search finds them), which its chevron and `aria-expanded` say. */
+    folded: boolean; listed: boolean; ontoggle: () => void;
   } = $props();
 
   const t = $derived(projectTotals(containers));
@@ -35,7 +37,7 @@
 <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions -->
 <div class="project num" role="group" aria-label={`Compose project ${project}`} onclick={ontoggle}>
   <div class="who">
-    <h3 class="name serif"><button class="fold" aria-expanded={!folded} title={folded ? 'Show its containers' : 'Fold its containers away'}><FoldMark {folded} /><span class="text">{project}</span></button></h3>
+    <h3 class="name serif"><button class="fold" aria-expanded={listed} title={foldAction({ folded, listed }, 'its containers')}><FoldMark folded={!listed} /><span class="text">{project}</span></button></h3>
     <span class="second">{projectSaid(t)}</span>
   </div>
   <div class="drawn">

@@ -18,12 +18,15 @@
   import { bytes } from './format';
   import Bar from './Bar.svelte';
   import FoldMark from './FoldMark.svelte';
+  import { foldAction } from './folds';
 
-  let { vm, live, sentence, what, folded, ontoggle, actions, said = null }: {
+  let { vm, live, sentence, what, folded, listed, ontoggle, actions, said = null }: {
     vm: string; live?: VmLive | null; sentence: string;
     /** What its lines are, for its chevron's label: "images", "volumes". */
     what: string;
-    folded: boolean; ontoggle: () => void;
+    /** Folded, as kept; `listed`: its lines shown, unfolded or for now (a search finds them, or the
+     * list is narrowed to it), which its chevron and `aria-expanded` say. */
+    folded: boolean; listed: boolean; ontoggle: () => void;
     actions?: Snippet; said?: Said | null;
   } = $props();
 
@@ -37,10 +40,10 @@
 </script>
 
 <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions -->
-<div class="group-head" class:folded role="group" aria-label={`VM ${vm}`} onclick={clicked}>
+<div class="group-head" class:folded={!listed} role="group" aria-label={`VM ${vm}`} onclick={clicked}>
   <h2 class="head">
     <span class="title">
-      <button class="fold" aria-expanded={!folded} aria-label={folded ? `Show ${vm}'s ${what}` : `Fold ${vm}'s ${what} away`}><FoldMark {folded} /></button>
+      <button class="fold" aria-expanded={listed} aria-label={foldAction({ folded, listed }, `${vm}'s ${what}`)}><FoldMark folded={!listed} /></button>
       <a href={`/vm/${encodeURIComponent(vm)}`}>{vm}</a>
     </span>
     <span class="sentence">{sentence}</span>

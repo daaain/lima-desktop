@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   bandPeak, bandRise, containersHeadline, containersSentence, countWord, projectSaid, exitedSentence, fullWindow, holdsSentence, intervalPhrase, ownLimit, pressureSentence, rowMemory,
-  restartNote, runsSentence, vmHeadMemory, fleetHeadline, hostBar, hostRamSentence, quarters, selfMemory, vzMemoryNote, share, shareChart, shareTip, sketch, unusedHeadline, unusedLede, vmHeadline, vmSentence,
+  restartNote, runsSentence, vmHeadMemory, fleetHeadline, hostBar, hostRamSentence, quarters, selfMemory, vzMemoryNote, share, shareChart, shareTip, sketch, unusedHeadline, unusedLede, vmHeadline, vmSentence, stalledSaid,
 } from './almanac';
 import type { Hint } from './rightsize';
 import { container, vm } from './testing';
@@ -523,5 +523,17 @@ describe('vmHeadMemory', () => {
   });
   it('is a dash without a reading yet', () => {
     expect(vmHeadMemory({ ...tangible, latest: {} }, undefined, '1h').figure).toBe('–');
+  });
+});
+
+describe('stalledSaid', () => {
+  it("says how long a VM hasn't answered and that its figures are from before, as the overview does", () => {
+    const now = Date.UTC(2026, 10, 10, 14, 30);
+    expect(stalledSaid(now - 4 * 60_000, now)).toBe("It hasn't answered for 4 min, though Lima still says it's running. Its figures are from before.");
+  });
+  it("is the overview's sentence for a stalled VM", () => {
+    const now = Date.UTC(2026, 10, 10, 14, 30);
+    const v = { ...vm({ name: 'ember' }), stalledSince: now - 4 * 60_000 };
+    expect(vmSentence(v, '24h', undefined, now)).toBe(stalledSaid(now - 4 * 60_000, now));
   });
 });

@@ -191,14 +191,15 @@
   <div class="narrow-order"><OrderPicker columns={ITEM_COLUMNS} {ordering} /></div>
   <div class="lines items">
     {#each groups as g (g.vm)}
+      {@const listed = listsLines({ folded: vmFolds.images.has(g.vm), searching: query.trim() !== '' || vmFilter != null })}
       <section animate:glide>
         <GroupHead vm={g.vm} live={g.live} sentence={g.sentence} what="images" said={said[g.vm]}
-          folded={vmFolds.images.has(g.vm)} ontoggle={() => vmFolds.images.toggle(g.vm)}>
+          folded={vmFolds.images.has(g.vm)} listed={listed} ontoggle={() => vmFolds.images.toggle(g.vm)}>
           {#snippet actions()}
             <ImagePrune vm={g.vm} dangling={g.dangling} unused={g.unused.length} onpruned={() => changed(g.vm)} bind:said={said[g.vm]} />
           {/snippet}
         </GroupHead>
-        {#if listsLines({ folded: vmFolds.images.has(g.vm), searching: query.trim() !== '' || vmFilter != null })}
+        {#if listed}
         <div class="vm-lines" transition:unfold>
           {#each g.lines as row (row.reference)}
             {@const h = heldOf(row.vm, row.id)}

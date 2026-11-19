@@ -19,3 +19,11 @@ export const formatFolds = (folds: ReadonlySet<string>) => JSON.stringify([...fo
 /** Whether a project's lines are listed under its heading: unfolded, or while a search is typed, so
  * what it finds is never hidden in a folded project. */
 export const listsLines = ({ folded, searching }: { folded: boolean; searching: boolean }) => !folded || searching;
+
+/** What a group's fold button does, as its label says it: fold its lines away, or show them; or,
+ * folded but listed for now (a search finds them, or the list is narrowed to its VM), keep them shown,
+ * as a click unfolds it for good. */
+export function foldAction({ folded, listed }: { folded: boolean; listed: boolean }, what: string): string {
+  if (!folded) return `Fold ${what} away`;
+  return listed ? `Keep ${what} shown: folded, listed for now` : `Show ${what}`;
+}

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { foldKey, formatFolds, listsLines, parseFolds } from './folds';
+import { foldAction, foldKey, formatFolds, listsLines, parseFolds } from './folds';
 
 describe('foldKey', () => {
   it('names a VM by itself, as each page keeps its own folded VMs', () => {
@@ -37,5 +37,15 @@ describe('listsLines', () => {
   });
   it("lists a folded project's lines while a search is typed: what it finds is never hidden", () => {
     expect(listsLines({ folded: true, searching: true })).toBe(true);
+  });
+});
+
+describe('foldAction', () => {
+  it('says what a click does: fold the lines away, or show them', () => {
+    expect(foldAction({ folded: false, listed: true }, "atlas's containers")).toBe("Fold atlas's containers away");
+    expect(foldAction({ folded: true, listed: false }, "atlas's containers")).toBe("Show atlas's containers");
+  });
+  it('says a folded group is listed for now while a search or the filter shows it, and a click keeps it shown', () => {
+    expect(foldAction({ folded: true, listed: true }, "atlas's containers")).toBe("Keep atlas's containers shown: folded, listed for now");
   });
 });

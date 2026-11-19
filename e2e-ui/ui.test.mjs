@@ -1007,6 +1007,56 @@ test("A VM's group on Images folds from its heading, but not from its clean-up, 
   await close();
 });
 
+test("A stalled VM's heading on Containers says its figures are from before, and draws them quiet", async () => {
+  const { page, errors, close } = await open('/containers', { init: `window.__fakeStalled = { harbor: ${NOW.getTime() - 4 * 60_000} };` });
+  const head = page.getByRole('group', { name: 'VM harbor' });
+  await head.locator('.bar').first().waitFor();
+  assert.equal(await head.locator('.stalled').innerText(), "It hasn't answered for 4 min, though Lima still says it's running. Its figures are from before.");
+  assert.equal(await head.locator('.bar.quiet').count(), 2);
+  // One that answers is drawn as before.
+  const atlas = page.getByRole('group', { name: 'VM atlas' });
+  assert.equal(await atlas.locator('.stalled').count(), 0);
+  assert.equal(await atlas.locator('.bar.quiet').count(), 0);
+  assert.deepEqual(errors, []);
+  await close();
+});
+
+test("A folded group's chevron says it's listed while a search or the filter lists its lines, and folded again after", async () => {
+  const { page, errors, close } = await open('/containers', {
+    init: () => { localStorage.setItem('folded-projects', '["atlas/atlas"]'); localStorage.setItem('folded-vms:containers', '["harbor"]'); },
+  });
+  await page.locator('.line').first().waitFor();
+  const project = page.getByRole('group', { name: 'Compose project atlas' }).getByRole('button', { name: 'atlas' });
+  const harbor = page.getByRole('group', { name: 'VM harbor' }).locator('button.fold');
+  assert.equal(await project.getAttribute('aria-expanded'), 'false');
+  assert.equal(await harbor.getAttribute('aria-expanded'), 'false');
+  // A search lists atlas's postgres and harbor's valkey: both say so, and that they're folded.
+  await page.getByPlaceholder(/^Search/).fill('postgres');
+  await page.locator('.compose .line').first().waitFor();
+  assert.equal(await project.getAttribute('aria-expanded'), 'true');
+  assert.equal(await project.getAttribute('title'), 'Keep its containers shown: folded, listed for now');
+  assert.equal(await project.locator('.mark.folded').count(), 0);
+  await page.getByPlaceholder(/^Search/).fill('valkey');
+  await page.getByRole('group', { name: 'VM harbor' }).locator('xpath=following-sibling::*').locator('.line').first().waitFor();
+  assert.equal(await harbor.getAttribute('aria-expanded'), 'true');
+  assert.equal(await harbor.getAttribute('aria-label'), "Keep harbor's containers shown: folded, listed for now");
+  // Cleared, both are folded as they were kept.
+  await page.getByPlaceholder(/^Search/).fill('');
+  await page.locator('.compose .line').first().waitFor({ state: 'detached' });
+  assert.equal(await project.getAttribute('aria-expanded'), 'false');
+  assert.equal(await harbor.getAttribute('aria-expanded'), 'false');
+  assert.equal(await harbor.getAttribute('aria-label'), "Show harbor's containers");
+  // Images narrowed to a folded VM lists its images, and says so.
+  await page.evaluate(() => localStorage.setItem('folded-vms:images', '["harbor"]'));
+  await page.goto(page.url().replace(/\/containers.*$/, '/images?vm=harbor'));
+  const images = page.getByRole('group', { name: 'VM harbor' }).locator('button.fold');
+  await page.locator('.line', { hasText: 'valkey' }).waitFor();
+  assert.equal(await images.getAttribute('aria-expanded'), 'true');
+  assert.equal(await images.getAttribute('aria-label'), "Keep harbor's images shown: folded, listed for now");
+  assert.deepEqual(errors, []);
+  await close();
+});
+
 test("A project's lines hang in a bracket in the gutter, in the columns of the lines in no project", async () => {
   const { page, errors, close } = await open('/containers');
   const atlas = page.locator('section', { has: page.locator('h2 a', { hasText: 'atlas' }) });

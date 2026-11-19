@@ -5,50 +5,58 @@
   // whose containers they are is never out of view. A click on it, but for its name (a link to its
   // page), folds its lines away; its chevron is the button a keyboard or a screen reader uses.
   import type { Series, VmLive } from './api';
-  import { band, gauges, sketch, vmHeadMemory } from './almanac';
+  import { band, gauges, sketch, stalledSaid, vmHeadMemory } from './almanac';
+  import { foldAction } from './folds';
   import { cores } from './format';
   import { range } from './range.svelte';
   import Bar from './Bar.svelte';
   import FoldMark from './FoldMark.svelte';
   import Sketch from './Sketch.svelte';
 
-  let { vm, live, sentence, history, folded, ontoggle }: {
+  let { vm, live, sentence, history, folded, listed, now, ontoggle }: {
     vm: string; live: VmLive | null | undefined;
     /** What it runs, after its name: "runs three, two in harbor." */
     sentence: string;
     /** Its range (history.svelte.ts). */
     history: Series | undefined;
-    folded: boolean; ontoggle: () => void;
+    /** Folded, as kept; `listed`: its lines shown, unfolded or for now (a search finds them, or the
+     * list is narrowed to it), which its chevron and `aria-expanded` say. */
+    folded: boolean; listed: boolean; ontoggle: () => void;
+    /** The snapshot's time, for how long a stalled VM hasn't answered. */
+    now?: number;
   } = $props();
+  // Not answering, its figures are its last: said, and drawn quiet, never as now.
+  const stalled = $derived(live?.stalledSince ?? null);
 
   const g = $derived(live ? gauges(live) : null);
   const memory = $derived(live ? vmHeadMemory(live, band(history, 'mem_used'), range.key) : null);
 </script>
 
 <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions -->
-<div class="vm-head num" class:folded role="group" aria-label={`VM ${vm}`} onclick={(e) => { if (!(e.target as Element).closest('a')) ontoggle(); }}>
+<div class="vm-head num" class:folded={!listed} role="group" aria-label={`VM ${vm}`} onclick={(e) => { if (!(e.target as Element).closest('a')) ontoggle(); }}>
   <h2 class="head">
     <span class="title">
-      <button class="fold" aria-expanded={!folded} aria-label={folded ? `Show ${vm}'s containers` : `Fold ${vm}'s containers away`}><FoldMark {folded} /></button>
+      <button class="fold" aria-expanded={listed} aria-label={foldAction({ folded, listed }, `${vm}'s containers`)}><FoldMark folded={!listed} /></button>
       <a href={`/vm/${encodeURIComponent(vm)}`}>{vm}</a>
     </span>
     <span class="sentence">{sentence}</span>
+    {#if stalled != null}<span class="stalled">{stalledSaid(stalled, now)}</span>{/if}
   </h2>
   {#if g && memory && live}
     <div class="drawn">
-      <Sketch sketch={sketch(band(history, 'mem_used'), g.memory.size)} hot={memory.hot} label="Memory" />
-      <Bar pct={memory.pct} hot={memory.hot} label={`${vm}'s memory: ${memory.figure} ${memory.of}, ${memory.pct.toFixed(0)} %`} />
+      <Sketch sketch={sketch(band(history, 'mem_used'), g.memory.size)} hot={stalled == null && memory.hot} label="Memory" />
+      <Bar pct={memory.pct} hot={stalled == null && memory.hot} quiet={stalled != null} label={`${vm}'s memory: ${memory.figure} ${memory.of}, ${memory.pct.toFixed(0)} %`} />
     </div>
-    <div class="said">
-      <strong class:hot={memory.hot}>{memory.figure} <span class="label">{memory.of}</span></strong>
+    <div class="said" class:stale={stalled != null}>
+      <strong class:hot={stalled == null && memory.hot}>{memory.figure} <span class="label">{memory.of}</span></strong>
       <span class="label">{memory.peakSaid}</span>
     </div>
     <div class="drawn">
-      <Sketch sketch={sketch(band(history, 'cpu_mc'), g.cpu.size)} hot={g.cpu.hot} label="CPU" />
-      <Bar pct={g.cpu.pct} hot={g.cpu.hot} label={`${vm}'s CPU: ${cores(live.latest.cpu_mc)} of its ${live.instance.cpus} cores`} />
+      <Sketch sketch={sketch(band(history, 'cpu_mc'), g.cpu.size)} hot={stalled == null && g.cpu.hot} label="CPU" />
+      <Bar pct={g.cpu.pct} hot={stalled == null && g.cpu.hot} quiet={stalled != null} label={`${vm}'s CPU: ${cores(live.latest.cpu_mc)} of its ${live.instance.cpus} cores`} />
     </div>
-    <div class="said">
-      <strong class:hot={g.cpu.hot}>{cores(live.latest.cpu_mc)}</strong>
+    <div class="said" class:stale={stalled != null}>
+      <strong class:hot={stalled == null && g.cpu.hot}>{cores(live.latest.cpu_mc)}</strong>
       <span class="label">of {live.instance.cpus} cores</span>
     </div>
   {/if}
@@ -71,6 +79,9 @@
   .fold { all: unset; display: flex; align-self: center; cursor: pointer; padding: 0.1rem; }
   .fold:focus-visible { outline: 2px solid var(--fg); outline-offset: 2px; }
   .sentence { font-size: 1.05rem; line-height: 1.35; letter-spacing: 0; }
+  /* As the overview says a stalled VM, in the alert colour; its figures muted, as they're not now. */
+  .stalled { font-size: 1.05rem; line-height: 1.35; letter-spacing: 0; color: var(--alert); }
+  .stale strong { color: var(--muted); }
   /* As a container's line draws them (ContainerLine.svelte), so the columns read alike. */
   .drawn { display: grid; gap: 4px; min-width: 0; padding-bottom: 0.35rem; --sketch-height: 22px; --bar-height: 7px; }
   .said { display: grid; gap: 0.05rem; min-width: 0; }
