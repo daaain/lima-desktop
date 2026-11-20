@@ -1259,6 +1259,37 @@ test("An open chart card follows its chart as the history moves on, without the 
   await close();
 });
 
+test("A chart card put away stays away as the history moves on, until the pointer moves again", async () => {
+  const { page, errors, close } = await open('/containers');
+  await page.getByRole('group', { name: 'Time range' }).getByRole('button', { name: '1 h' }).click();
+  const line = page.locator('.line', { hasText: 'harbor-devbox' });
+  const card = page.locator('[role=tooltip].card');
+  for (const [chart, drawn] of [[line.locator('.sketch'), 'path.col'], [line.locator('.share'), 'path.me']]) {
+    await chart.locator('svg').waitFor();
+    await chart.evaluate((el) => el.scrollIntoView({ block: 'center' }));
+    const b = await chart.boundingBox();
+    await page.mouse.move(b.x + b.width - 3, b.y + b.height / 2);
+    await page.mouse.move(b.x + b.width - 1, b.y + b.height / 2);
+    await card.waitFor({ timeout: 1500 });
+    // A key puts it away; the pointer rests where it was while the chart is drawn anew.
+    await page.keyboard.press('Shift');
+    await card.waitFor({ state: 'detached', timeout: 1500 });
+    const path = chart.locator(drawn);
+    const was = await path.getAttribute('d');
+    await page.clock.setFixedTime(new Date((await page.evaluate(() => Date.now())) + 2 * 60_000));
+    await page.waitForFunction(({ el, was }) => el.getAttribute('d') !== was, { el: await path.elementHandle(), was }, { timeout: 15_000 });
+    await page.waitForTimeout(500);
+    assert.equal(await card.count(), 0, 'stays away');
+    // Moved again, it's back, with the stretch now under the pointer.
+    await page.mouse.move(b.x + b.width - 2, b.y + b.height / 2);
+    await card.waitFor({ timeout: 1500 });
+    await page.mouse.move(0, 0);
+    await card.waitFor({ state: 'detached', timeout: 1500 });
+  }
+  assert.deepEqual(errors, []);
+  await close();
+});
+
 test("Moving from a bar's card up onto its chart shows the chart's own card, not the bar's", async () => {
   const { page, errors, close } = await open('/containers');
   const line = page.locator('.line', { hasText: 'harbor-devbox' });

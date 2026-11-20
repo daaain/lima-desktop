@@ -36,8 +36,10 @@
 
   // The column under the pointer, read out by the app's tooltip as a card (Tooltip.svelte): its
   // stretch of time, its average and highest, the range's peak, and the dashed line. Read again as
-  // the history moves on under a resting pointer, so an open card never says an old stretch.
+  // the history moves on under a resting pointer, so an open card never says an old stretch; one put away
+  // (a click, a key, a scroll, the window left: Tooltip.svelte) stays away until the pointer moves.
   let pointer = $state<{ el: HTMLElement; x: number; y: number } | null>(null);
+  let moved = false;
   $effect(() => {
     if (!pointer || !drawn || !band || !scale) return;
     const { el, x, y } = pointer;
@@ -51,9 +53,16 @@
       // reading need not (a CPU rate's jitter can top its cores), and the card's rows must agree.
       peak: bandPeak(band) ?? (drawn.max / 100) * scale, over: range.key, say, of, column: columnSaid(width),
     });
-    untrack(() => { showCard(el, card); tooltip.point(el, tipText(card), x, y); });
+    untrack(() => {
+      showCard(el, card);
+      if (moved || tooltip.shown) tooltip.point(el, tipText(card), x, y);
+      moved = false;
+    });
   });
-  const move = (e: PointerEvent) => (pointer = { el: e.currentTarget as HTMLElement, x: e.clientX, y: e.clientY });
+  const move = (e: PointerEvent) => {
+    moved = true;
+    pointer = { el: e.currentTarget as HTMLElement, x: e.clientX, y: e.clientY };
+  };
   const leave = () => { pointer = null; tooltip.hide(); };
 </script>
 

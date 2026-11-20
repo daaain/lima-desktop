@@ -22,8 +22,10 @@
 
   const chart = $derived(shareChart(me, vm, vmMemory));
   // The column under the pointer, read out by the app's tooltip (Tooltip.svelte). Read again as the
-  // history moves on under a resting pointer, so an open card never says an old stretch.
+  // history moves on under a resting pointer, so an open card never says an old stretch; one put away
+  // (a click, a key, a scroll, the window left: Tooltip.svelte) stays away until the pointer moves.
   let pointer = $state<{ el: HTMLElement; x: number; y: number } | null>(null);
+  let moved = false;
   $effect(() => {
     if (!pointer || !chart) return;
     const { el, x, y } = pointer;
@@ -34,9 +36,16 @@
       stretch: stretchSaid(ts?.[i], width, range.key), me: me?.max[i], vm: vm?.max[i], vmMemory, who, column: columnSaid(width),
       peak: bandPeak(me), over: range.key,
     });
-    untrack(() => { showCard(el, card); tooltip.point(el, tipText(card), x, y); });
+    untrack(() => {
+      showCard(el, card);
+      if (moved || tooltip.shown) tooltip.point(el, tipText(card), x, y);
+      moved = false;
+    });
   });
-  const move = (e: PointerEvent) => (pointer = { el: e.currentTarget as HTMLElement, x: e.clientX, y: e.clientY });
+  const move = (e: PointerEvent) => {
+    moved = true;
+    pointer = { el: e.currentTarget as HTMLElement, x: e.clientX, y: e.clientY };
+  };
   const leave = () => { pointer = null; tooltip.hide(); };
 </script>
 
