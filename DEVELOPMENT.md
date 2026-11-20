@@ -160,6 +160,8 @@ Exercised against real Lima 2.1 VMs (by recording `snapshot-1`): the probe over 
 
 ## End to end against a real Lima: `just e2e`
 
+What it has been run against, and what differs between versions of Lima, podman and the guest: [docs/supported-versions.md](./docs/supported-versions.md). A new Lima, podman or Fedora release goes there once `just e2e` has run on it.
+
 Four layers, each catching what the one before can't:
 
 |  | what it runs against | catches |

@@ -2,7 +2,7 @@
 
 A small desktop app for [Lima](https://lima-vm.io) VMs and the podman containers in them: every instance at once, with a long history of CPU, memory, pressure and disk — for the VM and for each container — so you can see OOMs coming and right-size VMs.
 
-**Status:** early. macOS first (Linux builds too). Podman 5 or newer only (an older one is named, not half-read); compose projects shown read-only.
+**Status:** early. macOS first (Linux builds too). Podman 5 or newer only (an older one is named, not half-read): [what it supports and has been run against](./docs/supported-versions.md); compose projects shown read-only.
 
 <p>
   <img src="https://daaain.github.io/lima-desktop/overview.png" alt="Lima Desktop's VM overview: a headline saying how many VMs are past three quarters of their memory or disk, the host's memory, CPU and disk with what the VMs are allocated and using, then each running VM in a sentence with its memory, CPU and disk as figures, a day of history and a bar, and the stopped VMs below" width="400">
