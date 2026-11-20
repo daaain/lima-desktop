@@ -1235,6 +1235,30 @@ test("An open card follows its bar's reading as it changes, as the bar's descrip
   await close();
 });
 
+test("An open chart card follows its chart as the history moves on, without the pointer moving", async () => {
+  const { page, errors, close } = await open('/containers');
+  // 1 h: a column is 36 s and the charts fetch again every minute.
+  await page.getByRole('group', { name: 'Time range' }).getByRole('button', { name: '1 h' }).click();
+  const line = page.locator('.line', { hasText: 'harbor-devbox' });
+  const title = page.locator('[role=tooltip].card .title');
+  // The newest column of a container's CPU sketch, then of its memory share chart.
+  for (const chart of [line.locator('.sketch'), line.locator('.share')]) {
+    await chart.locator('svg').waitFor();
+    await chart.evaluate((el) => el.scrollIntoView({ block: 'center' }));
+    const b = await chart.boundingBox();
+    await page.mouse.move(b.x + b.width - 3, b.y + b.height / 2);
+    await page.mouse.move(b.x + b.width - 1, b.y + b.height / 2);
+    await title.waitFor({ timeout: 1500 });
+    const before = await title.textContent();
+    await page.clock.setFixedTime(new Date((await page.evaluate(() => Date.now())) + 2 * 60_000));
+    await page.waitForFunction(({ el, was }) => el.isConnected && el.textContent !== was, { el: await title.elementHandle(), was: before }, { timeout: 15_000 });
+    await page.mouse.move(0, 0);
+    await title.waitFor({ state: 'detached', timeout: 1500 });
+  }
+  assert.deepEqual(errors, []);
+  await close();
+});
+
 test("Moving from a bar's card up onto its chart shows the chart's own card, not the bar's", async () => {
   const { page, errors, close } = await open('/containers');
   const line = page.locator('.line', { hasText: 'harbor-devbox' });

@@ -4,6 +4,7 @@
   // MemoryShare draws a container's memory: CHART_HEADROOM of the height is the scale, the rest room
   // for the line). Hover reads the column under the pointer as a card, as MemoryShare does. The columns
   // are one stepped path, so touching columns leave no anti-aliased seam between them.
+  import { untrack } from 'svelte';
   import type { Band } from './api';
   import { bandPeak, CHART_HEADROOM, columnSaid, sketch, sketchCard, stretchSaid } from './almanac';
   import { tipText } from './richTip';
@@ -34,13 +35,15 @@
   const ceiling = +(100 * (1 - CHART_HEADROOM)).toFixed(2);
 
   // The column under the pointer, read out by the app's tooltip as a card (Tooltip.svelte): its
-  // stretch of time, its average and highest, the range's peak (the ground), and the dashed line.
-  function move(e: PointerEvent) {
-    if (!drawn || !band || !scale) return;
-    const el = e.currentTarget as HTMLElement;
+  // stretch of time, its average and highest, the range's peak, and the dashed line. Read again as
+  // the history moves on under a resting pointer, so an open card never says an old stretch.
+  let pointer = $state<{ el: HTMLElement; x: number; y: number } | null>(null);
+  $effect(() => {
+    if (!pointer || !drawn || !band || !scale) return;
+    const { el, x, y } = pointer;
     const r = el.getBoundingClientRect();
     const n = drawn.columns.length;
-    const i = Math.max(0, Math.min(n - 1, Math.floor(((e.clientX - r.left) / r.width) * n)));
+    const i = Math.max(0, Math.min(n - 1, Math.floor(((x - r.left) / r.width) * n)));
     const width = ts && ts.length > 1 ? ts[1] - ts[0] : rangeMs(range.key) / SKETCH_POINTS;
     const card = sketchCard({
       label, stretch: stretchSaid(ts?.[i], width, range.key), avg: band.avg[i], max: band.max[i],
@@ -48,14 +51,15 @@
       // reading need not (a CPU rate's jitter can top its cores), and the card's rows must agree.
       peak: bandPeak(band) ?? (drawn.max / 100) * scale, over: range.key, say, of, column: columnSaid(width),
     });
-    showCard(el, card);
-    tooltip.point(el, tipText(card), e.clientX, e.clientY);
-  }
+    untrack(() => { showCard(el, card); tooltip.point(el, tipText(card), x, y); });
+  });
+  const move = (e: PointerEvent) => (pointer = { el: e.currentTarget as HTMLElement, x: e.clientX, y: e.clientY });
+  const leave = () => { pointer = null; tooltip.hide(); };
 </script>
 
 {#if drawn}
   <div class="sketch" class:hot role="img" aria-label={`${label}, ${theLast(range.key)}: up to ${drawn.max.toFixed(0)} % of the scale`}
-    {...{ [OWN_TIP]: '' }} onpointermove={move} onpointerleave={() => tooltip.hide()}>
+    {...{ [OWN_TIP]: '' }} onpointermove={move} onpointerleave={leave}>
     <svg viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
       <line class="ceiling" x1="0" x2="100" y1={ceiling} y2={ceiling} />
       <rect class="ground" x="0" y={100 - drawn.max * CHART_HEADROOM} width="100" height={drawn.max * CHART_HEADROOM} />

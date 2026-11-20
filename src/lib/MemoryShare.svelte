@@ -3,6 +3,7 @@
   // in use, drawn soft, the container's own in front, under a dashed line at the VM's memory. Hover
   // reads the column under the pointer as a card: its stretch of time, and the most each held in it. The geometry is almanac.shareChart's; it changes only when the history does
   // (a minute apart at most), not with every live reading.
+  import { untrack } from 'svelte';
   import type { Band } from './api';
   import { bandPeak, columnSaid, shareCard, shareChart, stretchSaid } from './almanac';
   import { tipText } from './richTip';
@@ -20,25 +21,28 @@
   } = $props();
 
   const chart = $derived(shareChart(me, vm, vmMemory));
-  // The moment under the pointer, read out by the app's tooltip (Tooltip.svelte).
-  function move(e: PointerEvent) {
-    if (!chart) return;
-    const el = e.currentTarget as HTMLElement;
+  // The column under the pointer, read out by the app's tooltip (Tooltip.svelte). Read again as the
+  // history moves on under a resting pointer, so an open card never says an old stretch.
+  let pointer = $state<{ el: HTMLElement; x: number; y: number } | null>(null);
+  $effect(() => {
+    if (!pointer || !chart) return;
+    const { el, x, y } = pointer;
     const r = el.getBoundingClientRect();
-    const i = Math.max(0, Math.min(chart.columns - 1, Math.floor(((e.clientX - r.left) / r.width) * chart.columns)));
+    const i = Math.max(0, Math.min(chart.columns - 1, Math.floor(((x - r.left) / r.width) * chart.columns)));
     const width = ts && ts.length > 1 ? ts[1] - ts[0] : rangeMs(range.key) / SKETCH_POINTS;
     const card = shareCard({
       stretch: stretchSaid(ts?.[i], width, range.key), me: me?.max[i], vm: vm?.max[i], vmMemory, who, column: columnSaid(width),
       peak: bandPeak(me), over: range.key,
     });
-    showCard(el, card);
-    tooltip.point(el, tipText(card), e.clientX, e.clientY);
-  }
+    untrack(() => { showCard(el, card); tooltip.point(el, tipText(card), x, y); });
+  });
+  const move = (e: PointerEvent) => (pointer = { el: e.currentTarget as HTMLElement, x: e.clientX, y: e.clientY });
+  const leave = () => { pointer = null; tooltip.hide(); };
 </script>
 
 {#if chart}
   <div class="share" class:hot role="img" aria-label={`Memory, ${theLast(range.key)}: ${who}'s part of its VM's memory in use`}
-    {...{ [OWN_TIP]: '' }} onpointermove={move} onpointerleave={() => tooltip.hide()}>
+    {...{ [OWN_TIP]: '' }} onpointermove={move} onpointerleave={leave}>
     <svg viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
       <line class="ceiling" x1="0" x2="100" y1={chart.ceiling} y2={chart.ceiling} />
       <path class="vm" d={chart.vm} />
