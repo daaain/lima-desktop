@@ -136,8 +136,8 @@ jobs:
     name: Linux (.deb, AppImage)
     needs: version
     if: github.event_name == 'push' || inputs.builds
-    # The oldest Ubuntu with Tauri's WebKitGTK 4.1, not CI's 26.04: a binary runs on systems with
-    # the glibc it was built against or newer, so building on 24.04 reaches more of them.
+    # Not CI's 26.04: a binary runs on systems with the glibc it was built against or newer, so an
+    # older build host reaches more of them (24.04's glibc is 2.39: docs/supported-versions.md).
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
