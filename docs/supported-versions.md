@@ -6,7 +6,7 @@ What Lima Desktop works with, what it has been run against, and what differs bet
 
 |  | supported | run against |
 | --- | --- | --- |
-| **Your computer** | macOS on Apple silicon and Intel (one universal `.dmg`; no minimum version is set, and only recent ones have been tried); Linux on x86_64 with WebKitGTK 4.1 (Ubuntu 22.04+, Debian 12+, Fedora 39+) | macOS 27 on Apple silicon; Ubuntu 26.04 in CI |
+| **Your computer** | macOS on Apple silicon and Intel (one universal `.dmg`; no minimum version is set, and only recent ones have been tried); Linux on x86_64: the released `.deb` and AppImage need glibc 2.39 or newer (they're built on Ubuntu 24.04) and WebKitGTK 4.1, so Ubuntu 24.04+, Debian 13+, Fedora 40+; built from source, WebKitGTK 4.1 is enough (Ubuntu 22.04+, Debian 12+, Fedora 39+) | macOS 27 on Apple silicon; Ubuntu 26.04 in CI |
 | **Lima** | 2.x (`limactl` on your `PATH`, or where Homebrew puts it) | 2.1.3 and 2.3.0 with `vz` on Apple silicon; 2.3.0 with QEMU in CI (`LIMA_VERSION` in `.github/workflows/ci.yml`) |
 | **VM type** | `vz` on macOS, `qemu` on Linux | both |
 | **Podman in the VM** | 5.0 or newer. An older one is named and refused ("podman 4.3.1 in this VM is too old"), not half-read | 5.8.9 and 6.2.0; 4.3.1 refused, as the e2e checks |
