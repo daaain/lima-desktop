@@ -2,6 +2,12 @@
 
 Notable changes, per release. Follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow [SemVer](https://semver.org/). What's merged but not yet released waits in [`.changes/`](./.changes/README.md), one file per change, until a release folds it in here. How a release is cut: [DEVELOPMENT.md](./DEVELOPMENT.md#releasing).
 
+## 0.9.0 — 2026-11-20
+
+### Changed
+
+- **Every chart above a bar reads alike, and says what it shows.** Each now shows a dashed line at its full scale, as a container's memory chart already did, so you can see how close a VM came to its limit at a glance. Pointing at any of them shows a card for the stretch of time under the pointer (a chart's hundred columns each cover a hundredth of the range, 14 minutes over 24 hours): its average and highest in that slice ("Highest in these 14 min"), the peak over the whole range ("Peak in the last 24 h": the grey behind the columns, or for a container its bar's tick), and what the dashed line is. The VM and CPU charts used to switch to how long was spent at each level instead. A compose project's charts are now as tall as its containers'.
+
 ## 0.8.0 — 2026-11-19
 
 Compose projects and VMs now fold away, and the lists show at a glance which VM and project each container belongs to, each VM heading its containers with its own memory and CPU. A VM's memory and CPU bars now show how much its containers use and what else runs in the VM, with a warning when something there is worth a look, such as ssh sessions a client left open; pointing at a bar shows a small card that lays it out, and a VM's page lists it under its bars. A container's detail also lists the ports it publishes, with links to open them.
