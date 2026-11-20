@@ -5,7 +5,7 @@
   // for the line). Hover reads the column under the pointer as a card, as MemoryShare does. The columns
   // are one stepped path, so touching columns leave no anti-aliased seam between them.
   import type { Band } from './api';
-  import { CHART_HEADROOM, columnSaid, sketch, sketchCard, stretchSaid } from './almanac';
+  import { bandPeak, CHART_HEADROOM, columnSaid, sketch, sketchCard, stretchSaid } from './almanac';
   import { tipText } from './richTip';
   import { showCard } from './richTip.svelte';
   import { OWN_TIP, tooltip } from './tipState.svelte';
@@ -44,7 +44,9 @@
     const width = ts && ts.length > 1 ? ts[1] - ts[0] : rangeMs(range.key) / SKETCH_POINTS;
     const card = sketchCard({
       label, stretch: stretchSaid(ts?.[i], width, range.key), avg: band.avg[i], max: band.max[i],
-      peak: (drawn.max / 100) * scale, over: range.key, say, of, column: columnSaid(width),
+      // The range's real peak, as the VM's heading says it: the ground stops at the full scale, a
+      // reading need not (a CPU rate's jitter can top its cores), and the card's rows must agree.
+      peak: bandPeak(band) ?? (drawn.max / 100) * scale, over: range.key, say, of, column: columnSaid(width),
     });
     showCard(el, card);
     tooltip.point(el, tipText(card), e.clientX, e.clientY);

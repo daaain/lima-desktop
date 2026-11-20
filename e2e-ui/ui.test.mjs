@@ -1271,7 +1271,9 @@ test("Every chart above a bar has a dashed line at the full scale, as a containe
   assert.ok(top >= 8 - 0.01, `drawn from ${top}`);
   await page.goto(page.url().replace(/\/$/, '/containers'));
   const line = page.locator('.line', { hasText: 'harbor-devbox' });
+  // Its memory and CPU histories come separately, in either order: wait for both charts.
   await line.locator('.share svg').waitFor();
+  await line.locator('.sketch svg').waitFor();
   assert.deepEqual(await lineAt(line.locator('.share')), { y: 8, dashed: true });
   assert.deepEqual(await lineAt(line.locator('.sketch')), { y: 8, dashed: true });
   assert.deepEqual(errors, []);
@@ -1282,6 +1284,8 @@ test("Every chart above a bar reads out the column under the pointer as a card, 
   const { page, errors, close } = await open('/');
   const meter = page.locator('article', { has: page.locator('a.name', { hasText: /^harbor$/ }) }).locator('.meter');
   const point = async (chart) => {
+    // Drawn first: before its history arrives a chart is an empty box whose title is its own tip.
+    await chart.locator('svg').waitFor();
     await chart.evaluate((el) => el.scrollIntoView({ block: 'center' }));
     const b = await chart.boundingBox();
     await page.mouse.move(b.x + b.width / 2, b.y + b.height / 2);

@@ -166,17 +166,18 @@ describe('sketch', () => {
 });
 
 describe('stretchSaid', () => {
-  const at = Date.UTC(2026, 10, 10, 13, 32);
+  // In local time, as it is said: built from local parts, so the tests hold in any time zone.
+  const at = new Date(2026, 10, 10, 13, 32).getTime();
   const min = 60_000;
   it("says a column's stretch of time, from its start", () => {
-    expect(stretchSaid(at, 14.4 * min, '24h')).toMatch(/^\d\d:32–\d\d:46$/);
+    expect(stretchSaid(at, 14.4 * min, '24h')).toBe('13:32–13:46');
   });
   it('says seconds where a column is shorter than two minutes', () => {
-    expect(stretchSaid(at, 36_000, '1h')).toMatch(/^\d\d:32:00–\d\d:32:36$/);
+    expect(stretchSaid(at, 36_000, '1h')).toBe('13:32:00–13:32:36');
   });
   it('says the day past a day, and the end day only where it differs', () => {
-    expect(stretchSaid(at, 101 * min, '7d')).toMatch(/^10 Nov \d\d:32–\d\d:13$/);
-    expect(stretchSaid(Date.UTC(2026, 10, 10, 23, 30), 7.2 * 60 * min, '30d')).toMatch(/^10 Nov \d\d:30–11 Nov \d\d:42$/);
+    expect(stretchSaid(at, 101 * min, '7d')).toBe('10 Nov 13:32–15:13');
+    expect(stretchSaid(new Date(2026, 10, 10, 23, 30).getTime(), 7.2 * 60 * min, '30d')).toBe('10 Nov 23:30–11 Nov 06:42');
   });
   it('is nothing without a time', () => {
     expect(stretchSaid(undefined, min, '1h')).toBe('');
