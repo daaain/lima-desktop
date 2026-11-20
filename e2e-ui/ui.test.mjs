@@ -102,6 +102,34 @@ for (const dark of [false, true]) {
     assert.match(await page.locator('.capacity', { hasText: 'Disk' }).innerText(), /foundry not running · 61\.0 GiB/);
     await page.mouse.move(0, 0);
     await shoot(page, `overview${suffix}`);
+    // A chart's card, for the gallery: harbor's memory chart, pointed at a stretch three quarters of
+    // the way in, cropped to the VM and its card.
+    const vm = page.locator('article', { has: page.locator('a.name', { hasText: /^harbor$/ }) });
+    const chart = vm.locator('.meter').first().locator('.sketch');
+    await chart.locator('svg').waitFor();
+    await vm.evaluate((el) => el.scrollIntoView({ block: 'center' }));
+    const c = await chart.boundingBox();
+    await page.mouse.move(c.x + c.width * 0.75, c.y + c.height / 2);
+    await page.mouse.move(c.x + c.width * 0.75 + 1, c.y + c.height / 2);
+    const card = page.locator('[role=tooltip].card');
+    await card.waitFor({ timeout: 1500 });
+    assert.match(await card.innerText(), /^Memory, \d\d:\d\d–\d\d:\d\d\s+of 7\.8 GiB\nAverage in these 14 min\n[\s\S]*Peak in the last 24 h\n/);
+    // The rows below are hidden while it's taken, so the card hangs over the page, not half a VM.
+    const below = (hide) => vm.evaluate((el, hide) => {
+      for (const o of document.querySelectorAll('main article, main .stopped'))
+        if (o !== el && el.compareDocumentPosition(o) & Node.DOCUMENT_POSITION_FOLLOWING) o.style.visibility = hide ? 'hidden' : '';
+    }, hide);
+    await below(true);
+    await page.evaluate(() => document.fonts.ready);
+    const [a, t] = [await vm.boundingBox(), await card.boundingBox()];
+    const pad = 16;
+    const x = Math.max(0, Math.min(a.x, t.x) - pad), y = Math.max(0, Math.min(a.y, t.y) - pad);
+    await page.screenshot({
+      path: join(shots, `overview-card${suffix}.png`), animations: 'disabled',
+      clip: { x, y, width: Math.max(a.x + a.width, t.x + t.width) + pad - x, height: Math.max(a.y + a.height, t.y + t.height) + pad - y },
+    });
+    await below(false);
+    await page.mouse.move(0, 0);
     assert.deepEqual(errors, []);
     await close();
   });
