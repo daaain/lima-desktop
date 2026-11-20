@@ -1,11 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import {
   bandPeak, bandRise, containersHeadline, containersSentence, countWord, projectSaid, exitedSentence, fullWindow, holdsSentence, intervalPhrase, ownLimit, pressureSentence, rowMemory,
-  restartNote, runsSentence, containersPart, partSaid, partsLabel, memoryFlags, memoryTip, cpuTip, fleetHeadline, hostBar, hostRamSentence, quarters, selfMemory, vzMemoryNote, share, shareChart, shareTip, sketch, unusedHeadline, unusedLede, vmHeadline, vmSentence, vmHeadMemory, stalledSaid,
+  restartNote, runsSentence, sketchTip, momentSaid, containersPart, partSaid, partsLabel, memoryFlags, memoryTip, cpuTip, fleetHeadline, hostBar, hostRamSentence, quarters, selfMemory, vzMemoryNote, share, shareChart, shareTip, sketch, unusedHeadline, unusedLede, vmHeadline, vmSentence, vmHeadMemory, stalledSaid,
 } from './almanac';
 import type { Latest } from './api';
 import type { Hint } from './rightsize';
 import { container, vm } from './testing';
+import { bytes, cores } from './format';
 
 const GiB = 1024 ** 3;
 const running = (name: string, memUsed: number, extra: Record<string, number> = {}) => ({
@@ -158,13 +159,33 @@ describe('sketch', () => {
     expect(sketch(b, 0)).toBeNull();
     expect(sketch({ min: [null], max: [null], avg: [null] }, 10)).toBeNull();
   });
-  it('gives columns over time, the maximum, and where the time went', () => {
+  it('gives columns over time and the maximum', () => {
     const s = sketch(b, 10)!;
-    expect(s.columns).toEqual([20, 20, 80, null]);
-    expect(s.max).toBe(90);
-    expect(s.distribution[20]).toBe(1);
-    expect(s.distribution[80]).toBe(0.5);
-    expect(s.distribution[50]).toBe(0);
+    expect(s).toEqual({ columns: [20, 20, 80, null], max: 90 });
+  });
+});
+
+describe('sketchTip', () => {
+  const GiB = 1024 ** 3;
+  it('reads one moment: its average against the scale, and its peak where that is higher', () => {
+    expect(sketchTip('13:32', 2.4 * GiB, 2.9 * GiB, bytes, 'of 7.8 GiB')).toBe('13:32 · 2.4 GiB of 7.8 GiB, at most 2.9 GiB');
+    expect(sketchTip('13:32', 2100, 3400, cores, 'of 4 cores')).toBe('13:32 · 2.1 of 4 cores, at most 3.4');
+  });
+  it("leaves out a peak that's no higher than the average said", () => {
+    expect(sketchTip('13:32', 2.4 * GiB, 2.42 * GiB, bytes, 'of 7.8 GiB')).toBe('13:32 · 2.4 GiB of 7.8 GiB');
+    expect(sketchTip('13:32', 2.4 * GiB, null, bytes, 'of 7.8 GiB')).toBe('13:32 · 2.4 GiB of 7.8 GiB');
+  });
+  it('says when the moment has no reading', () => {
+    expect(sketchTip('13:32', null, null, bytes, 'of 7.8 GiB')).toBe('13:32 · no readings');
+  });
+});
+
+describe('momentSaid', () => {
+  const at = Date.UTC(2026, 10, 10, 13, 32);
+  it('says the time, and past a day the day too', () => {
+    expect(momentSaid(at, '24h')).toMatch(/^\d\d:\d\d$/);
+    expect(momentSaid(at, '7d')).toMatch(/^10 Nov(,| at)? \d\d:\d\d$/);
+    expect(momentSaid(undefined, '24h')).toBe('');
   });
 });
 

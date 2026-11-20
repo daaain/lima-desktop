@@ -1,10 +1,10 @@
 // The words and small drawings of the UI (docs/design/ui.md): how full something is, said in
-// quarters; who is past three quarters; and a series turned into columns and a distribution.
+// quarters; who is past three quarters; and a series turned into columns, and a moment of it read out.
 import type { Band, Latest, Series, Summary, VmLive } from './api';
 import type { Hint } from './rightsize';
 import { bytes, cores, MiB, permille, uptime } from './format';
 import type { RichTip, TipRow } from './richTip';
-import { inRange, theLast, type RangeKey } from './ranges';
+import { inRange, rangeMs, theLast, type RangeKey } from './ranges';
 
 /** Past this share of an allocation a figure, its bar and its sentence turn to the warning colour. */
 export const WARN_PCT = 75;
@@ -320,11 +320,9 @@ export interface Sketch {
   columns: (number | null)[];
   /** The highest value in the window, in percent of the scale. */
   max: number;
-  /** Time spent at each percent of the scale (index 0–99), relative to the level most time was spent at (0–1). */
-  distribution: number[];
 }
 
-/** A metric's recent history drawn two ways: over time, and as where the time was spent. */
+/** A metric's recent history as columns over time, each its bucket's average, on the bar's scale. */
 export function sketch(band: Band | undefined, scale: number | undefined): Sketch | null {
   if (!band || !scale || scale <= 0) return null;
   const pct = (v: number | null) => (v == null || v < 0 ? null : Math.min(100, (v / scale) * 100));
@@ -332,10 +330,23 @@ export function sketch(band: Band | undefined, scale: number | undefined): Sketc
   const seen = columns.filter((c): c is number => c != null);
   if (seen.length === 0) return null;
   const peaks = band.max.map(pct).filter((c): c is number => c != null);
-  const counts = new Array<number>(100).fill(0);
-  for (const c of seen) counts[Math.min(99, Math.floor(c))]++;
-  const most = Math.max(...counts);
-  return { columns, max: Math.max(...peaks, ...seen), distribution: counts.map((n) => n / most) };
+  return { columns, max: Math.max(...peaks, ...seen) };
+}
+
+/** A moment over a range, as a chart's readout says it: its time, and past a day its day too. */
+export function momentSaid(at: number | undefined, over: RangeKey): string {
+  if (at == null) return '';
+  return new Date(at).toLocaleString('en-GB', rangeMs(over) > 86_400_000
+    ? { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }
+    : { hour: '2-digit', minute: '2-digit' });
+}
+
+/** One moment of a sketch, for its readout: the column's average against the scale ("of 7.8 GiB"),
+ * and its peak where that says more ("at most 2.9 GiB"); `at` is the time, already said. */
+export function sketchTip(at: string, avg: number | null | undefined, max: number | null | undefined, say: (v: number) => string, of: string): string {
+  if (avg == null) return `${at} · no readings`;
+  const peak = max != null && say(max) !== say(avg) && max > avg ? `, at most ${say(max)}` : '';
+  return `${at} · ${say(avg)} ${of}${peak}`;
 }
 
 /**

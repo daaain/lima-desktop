@@ -1266,13 +1266,43 @@ test("Every chart above a bar has a dashed line at the full scale, as a containe
   });
   for (let i = 0; i < 3; i++) assert.deepEqual(await lineAt(meter.nth(i).locator('.sketch')), { y: 8, dashed: true }, `meter ${i}`);
   // Nothing drawn reaches above it: the columns, at most the whole scale, stop at the line.
-  const top = await meter.first().locator('.sketch svg.time').evaluate((svg) => Math.min(...[...svg.querySelectorAll('path, rect')].map((e) => e.getBBox().y)));
+  const top = await meter.first().locator('.sketch svg').evaluate((svg) => Math.min(...[...svg.querySelectorAll('path, rect')].map((e) => e.getBBox().y)));
   assert.ok(top >= 8 - 0.01, `drawn from ${top}`);
   await page.goto(page.url().replace(/\/$/, '/containers'));
   const line = page.locator('.line', { hasText: 'harbor-devbox' });
   await line.locator('.share svg').waitFor();
   assert.deepEqual(await lineAt(line.locator('.share')), { y: 8, dashed: true });
   assert.deepEqual(await lineAt(line.locator('.sketch')), { y: 8, dashed: true });
+  assert.deepEqual(errors, []);
+  await close();
+});
+
+test("Every chart above a bar reads out the moment under the pointer, and a list's charts are all one height", async () => {
+  const { page, errors, close } = await open('/');
+  const meter = page.locator('article', { has: page.locator('a.name', { hasText: /^harbor$/ }) }).locator('.meter');
+  const point = async (chart) => {
+    await chart.evaluate((el) => el.scrollIntoView({ block: 'center' }));
+    const b = await chart.boundingBox();
+    await page.mouse.move(b.x + b.width / 2, b.y + b.height / 2);
+    await page.mouse.move(b.x + b.width / 2 + 2, b.y + b.height / 2);
+    await page.getByRole('tooltip').waitFor({ timeout: 1500 });
+    return page.getByRole('tooltip').innerText();
+  };
+  // A VM's memory, CPU and disk: the moment, its average against the scale, and its peak if higher.
+  assert.match(await point(meter.nth(0).locator('.sketch')), /^\d\d:\d\d · \d+(\.\d)? [KMG]iB of 7\.8 GiB(, at most .+)?$/);
+  assert.match(await point(meter.nth(1).locator('.sketch')), /^\d\d:\d\d · \d+\.\d+ of 4 cores(, at most .+)?$/);
+  assert.match(await point(meter.nth(2).locator('.sketch')), /^\d\d:\d\d · .+ of 59\.9 GiB(, at most .+)?$/);
+  // On Containers, a container's CPU reads out the same way its memory does.
+  await page.goto(page.url().replace(/\/$/, '/containers'));
+  const harbor = page.locator('section', { has: page.locator('h2 a', { hasText: 'harbor' }) });
+  const line = harbor.locator('.line', { hasText: 'harbor-devbox' });
+  await line.locator('.sketch svg').waitFor();
+  assert.match(await point(line.locator('.sketch')), /^\d\d:\d\d · .+ of 4 cores/);
+  assert.match(await point(line.locator('.share')), /^\d\d:\d\d · this container /);
+  // Every chart in the list one height: a VM's heading, a project's and a line's.
+  const heights = await harbor.evaluate((el) => [...el.querySelectorAll('.vm-head .sketch, .project .sketch, .project .share, .line .sketch, .line .share')].map((c) => Math.round(c.getBoundingClientRect().height)));
+  assert.ok(heights.length >= 6, `${heights.length} charts`);
+  assert.deepEqual([...new Set(heights)], [22]);
   assert.deepEqual(errors, []);
   await close();
 });

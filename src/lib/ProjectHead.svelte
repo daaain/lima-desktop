@@ -6,7 +6,7 @@
   // removed or recreated included, each for the part of the range it ran). Read-only: a project
   // isn't acted on whole. A click on it folds its lines away under it, or unfolds them (`folds`).
   import type { ContainerLive, Series } from './api';
-  import { band, projectSaid, rowMemory, share, sketch } from './almanac';
+  import { band, projectSaid, rowMemory, share } from './almanac';
   import { projectTotals } from './containers';
   import { bytes, cores } from './format';
   import { range } from './range.svelte';
@@ -49,7 +49,7 @@
     <span class="label">{memory.peakSaid}</span>
   </div>
   <div class="drawn">
-    <Sketch sketch={sketch(band(history, 'cpu_mc'), vmCpus * 1000)} label="CPU" />
+    <Sketch band={band(history, 'cpu_mc')} ts={history?.ts} scale={vmCpus * 1000} say={cores} of={`of ${vmCpus} cores`} label="CPU" />
     <Bar pct={share(t.cpu, vmCpus * 1000)} label={`CPU ${cores(t.cpu)} of the VM's ${vmCpus} cores`} />
   </div>
   <div class="said">
@@ -74,7 +74,7 @@
   .name { margin: 0; font-size: 1.4rem; font-weight: 500; line-height: 1.15; letter-spacing: -0.01em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .second { font-size: 0.82rem; color: var(--muted); }
   /* As a container's line draws them (ContainerLine.svelte), so the columns read alike. */
-  .drawn { display: grid; gap: 4px; min-width: 0; padding-bottom: 0.35rem; --sketch-height: 14px; --bar-height: 7px; }
+  .drawn { display: grid; gap: 4px; min-width: 0; padding-bottom: 0.35rem; --sketch-height: 22px; --bar-height: 7px; }
   .said { display: grid; gap: 0.05rem; min-width: 0; }
   .said strong { font-size: 0.92rem; font-weight: 600; white-space: nowrap; }
   .said strong .label { font-weight: 400; }

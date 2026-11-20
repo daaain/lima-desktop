@@ -5,9 +5,9 @@
   // whose containers they are is never out of view. A click on it, but for its name (a link to its
   // page), folds its lines away; its chevron is the button a keyboard or a screen reader uses.
   import type { Series, VmLive } from './api';
-  import { band, gauges, sketch, stalledSaid, vmHeadMemory } from './almanac';
+  import { band, gauges, stalledSaid, vmHeadMemory } from './almanac';
   import { foldAction } from './folds';
-  import { cores } from './format';
+  import { bytes, cores } from './format';
   import { range } from './range.svelte';
   import Bar from './Bar.svelte';
   import FoldMark from './FoldMark.svelte';
@@ -44,7 +44,7 @@
   </h2>
   {#if g && memory && live}
     <div class="drawn">
-      <Sketch sketch={sketch(band(history, 'mem_used'), g.memory.size)} hot={stalled == null && memory.hot} label="Memory" />
+      <Sketch band={band(history, 'mem_used')} ts={history?.ts} scale={g.memory.size} say={(v) => bytes(v)} of={`of ${bytes(g.memory.size)}`} hot={stalled == null && memory.hot} label="Memory" />
       <Bar pct={memory.pct} hot={stalled == null && memory.hot} quiet={stalled != null} label={`${vm}'s memory: ${memory.figure} ${memory.of}, ${memory.pct.toFixed(0)} %`} />
     </div>
     <div class="said" class:stale={stalled != null}>
@@ -52,7 +52,7 @@
       <span class="label">{memory.peakSaid}</span>
     </div>
     <div class="drawn">
-      <Sketch sketch={sketch(band(history, 'cpu_mc'), g.cpu.size)} hot={stalled == null && g.cpu.hot} label="CPU" />
+      <Sketch band={band(history, 'cpu_mc')} ts={history?.ts} scale={g.cpu.size} say={cores} of={`of ${live.instance.cpus} cores`} hot={stalled == null && g.cpu.hot} label="CPU" />
       <Bar pct={g.cpu.pct} hot={stalled == null && g.cpu.hot} quiet={stalled != null} label={`${vm}'s CPU: ${cores(live.latest.cpu_mc)} of its ${live.instance.cpus} cores`} />
     </div>
     <div class="said" class:stale={stalled != null}>

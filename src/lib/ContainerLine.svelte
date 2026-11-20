@@ -6,7 +6,7 @@
   // The memory bar's strongest part is the processes' own memory, said in its tooltip: the figure beside
   // it is podman's, and the line has no room for a second one.
   import type { ContainerLive, Series } from './api';
-  import { band, rowMemory, share, sketch } from './almanac';
+  import { band, rowMemory, share } from './almanac';
   import { bytes, cores, rate, uptime } from './format';
   import { range } from './range.svelte';
   import Bar from './Bar.svelte';
@@ -49,7 +49,7 @@
       <span class="label">{memory.peakSaid}</span>
     </div>
     <div class="drawn">
-      <Sketch sketch={sketch(band(history, 'cpu_mc'), vmCpus * 1000)} label="CPU" />
+      <Sketch band={band(history, 'cpu_mc')} ts={history?.ts} scale={vmCpus * 1000} say={cores} of={`of ${vmCpus} cores`} label="CPU" />
       <Bar pct={share(l.cpu_mc, vmCpus * 1000)} label={`CPU ${cores(l.cpu_mc)} of the VM's ${vmCpus} cores`} />
     </div>
     <div class="said">
