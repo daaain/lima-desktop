@@ -71,7 +71,7 @@ Two levels, kept apart in the masthead (`lib/Masthead.svelte`): **VMs** (`routes
 | where | what |
 | --- | --- |
 | `lib/api.ts` | the backend's commands, typed |
-| `lib/almanac.ts` | the UI's sentences (how full in quarters, what is past three quarters, each page's headline) and a series turned into a sketch: columns over time, and a moment of it read out (`sketchTip`, `momentSaid`, shared with a container's memory chart) |
+| `lib/almanac.ts` | the UI's sentences (how full in quarters, what is past three quarters, each page's headline) and a series turned into a sketch: columns over time, and a column under the pointer read out as a card (`sketchCard`, `shareCard`, `stretchSaid`: a column is a stretch of time, not a moment) |
 | `lib/ranges.ts`, `lib/range.svelte.ts` | the time ranges and how a sentence says each (and 2 min, which only the menu bar popover offers); the one chosen in the masthead for the whole app, kept for next time, and its window (live up to 6 h) |
 | `lib/history.svelte.ts` | the chosen range of whatever a page sketches, fetched as entities appear or the range changes, then as a new column comes due (at most once a minute) |
 | `lib/richTip.ts`, `lib/richTip.svelte.ts`, `lib/TipRows.svelte` | a tooltip as a card (title and figure, the bar again, a row per part, a footnote) and its plain text; `use:richTip` gives an element one, and `Tooltip.svelte` draws it; its rows, drawn in a card and listed on a VM's page |

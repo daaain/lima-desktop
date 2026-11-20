@@ -27,9 +27,11 @@
 
   function move(e: PointerEvent) {
     const target = e.target as Element | null;
-    // It says what it says itself; and what the pointer was over before (a bar's card) is left.
-    if (target?.closest(`[${OWN_TIP}]`)) {
-      over = null;
+    // It says what it says itself, with the card for what's under the pointer where it has one
+    // (a chart's column); what the pointer was over before (a bar's card) is left behind.
+    const own = target?.closest(`[${OWN_TIP}]`);
+    if (own) {
+      over = own;
       return;
     }
     const el = source(target);

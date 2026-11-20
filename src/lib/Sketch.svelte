@@ -2,13 +2,15 @@
   // A metric over the app's range above its bar: columns over time, each its stretch's average,
   // touching, on a ground that rises to the maximum, under a dashed line at the full scale (as
   // MemoryShare draws a container's memory: CHART_HEADROOM of the height is the scale, the rest room
-  // for the line). Hover reads one moment, as MemoryShare's and a VM's page's charts do. The columns
+  // for the line). Hover reads the column under the pointer as a card, as MemoryShare does. The columns
   // are one stepped path, so touching columns leave no anti-aliased seam between them.
   import type { Band } from './api';
-  import { CHART_HEADROOM, momentSaid, sketch, sketchTip } from './almanac';
+  import { CHART_HEADROOM, columnSaid, sketch, sketchCard, stretchSaid } from './almanac';
+  import { tipText } from './richTip';
+  import { showCard } from './richTip.svelte';
   import { OWN_TIP, tooltip } from './tipState.svelte';
   import { range } from './range.svelte';
-  import { theLast } from './ranges';
+  import { rangeMs, SKETCH_POINTS, theLast } from './ranges';
 
   let { band, ts, scale, say, of, hot = false, label }: {
     /** The metric over the range (history.svelte.ts), its times, and its full scale. */
@@ -31,14 +33,21 @@
   const columns = $derived(steps((drawn?.columns ?? []).map((c) => (c == null ? 0 : Math.max(1.5, c)) * CHART_HEADROOM)));
   const ceiling = +(100 * (1 - CHART_HEADROOM)).toFixed(2);
 
-  // The moment under the pointer, read out by the app's tooltip (Tooltip.svelte).
+  // The column under the pointer, read out by the app's tooltip as a card (Tooltip.svelte): its
+  // stretch of time, its average and highest, the range's peak (the ground), and the dashed line.
   function move(e: PointerEvent) {
-    if (!drawn || !band) return;
+    if (!drawn || !band || !scale) return;
     const el = e.currentTarget as HTMLElement;
     const r = el.getBoundingClientRect();
     const n = drawn.columns.length;
     const i = Math.max(0, Math.min(n - 1, Math.floor(((e.clientX - r.left) / r.width) * n)));
-    tooltip.point(el, sketchTip(momentSaid(ts?.[i], range.key), band.avg[i], band.max[i], say, of), e.clientX, e.clientY);
+    const width = ts && ts.length > 1 ? ts[1] - ts[0] : rangeMs(range.key) / SKETCH_POINTS;
+    const card = sketchCard({
+      label, stretch: stretchSaid(ts?.[i], width, range.key), avg: band.avg[i], max: band.max[i],
+      peak: (drawn.max / 100) * scale, over: range.key, say, of, column: columnSaid(width),
+    });
+    showCard(el, card);
+    tooltip.point(el, tipText(card), e.clientX, e.clientY);
   }
 </script>
 

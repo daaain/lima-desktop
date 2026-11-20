@@ -30,6 +30,8 @@
   .sw.solid { background: var(--bar); }
   .sw.soft { background: var(--soft); }
   .sw.strong { background: var(--fg); }
+  /* A chart's ground (Sketch): the range's peak. */
+  .sw.ground { background: var(--track); box-shadow: inset 0 0 0 1px var(--soft); }
   .sw.hatch { background: repeating-linear-gradient(135deg, var(--bar) 0 2px, transparent 2px 4px); box-shadow: inset 0 0 0 1px var(--bar); }
   .indent .name { color: var(--muted); }
   .value { text-align: right; font-weight: 600; white-space: nowrap; }

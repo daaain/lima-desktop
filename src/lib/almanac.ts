@@ -333,20 +333,45 @@ export function sketch(band: Band | undefined, scale: number | undefined): Sketc
   return { columns, max: Math.max(...peaks, ...seen) };
 }
 
-/** A moment over a range, as a chart's readout says it: its time, and past a day its day too. */
-export function momentSaid(at: number | undefined, over: RangeKey): string {
+/** A chart column's stretch of time, from its start `at`, `width` long: "13:32–13:46"; with seconds
+ * where a column is under two minutes, and past a day its day too (the end's only where it differs). */
+export function stretchSaid(at: number | undefined, width: number, over: RangeKey): string {
   if (at == null) return '';
-  return new Date(at).toLocaleString('en-GB', rangeMs(over) > 86_400_000
-    ? { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }
-    : { hour: '2-digit', minute: '2-digit' });
+  const end = at + width;
+  const time = (t: number) =>
+    new Date(t).toLocaleTimeString('en-GB', width < 120_000 ? { hour: '2-digit', minute: '2-digit', second: '2-digit' } : { hour: '2-digit', minute: '2-digit' });
+  const day = (t: number) => new Date(t).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
+  if (rangeMs(over) <= 86_400_000) return `${time(at)}–${time(end)}`;
+  return `${day(at)} ${time(at)}–${day(end) === day(at) ? '' : `${day(end)} `}${time(end)}`;
 }
 
-/** One moment of a sketch, for its readout: the column's average against the scale ("of 7.8 GiB"),
- * and its peak where that says more ("at most 2.9 GiB"); `at` is the time, already said. */
-export function sketchTip(at: string, avg: number | null | undefined, max: number | null | undefined, say: (v: number) => string, of: string): string {
-  if (avg == null) return `${at} · no readings`;
-  const peak = max != null && say(max) !== say(avg) && max > avg ? `, at most ${say(max)}` : '';
-  return `${at} · ${say(avg)} ${of}${peak}`;
+/** How long a chart's column is: "36 s", "14 min", "1.7 h". */
+export function columnSaid(width: number): string {
+  const s = width / 1000;
+  if (s < 60) return `${Math.round(s)} s`;
+  if (s < 3600) return `${Math.round(s / 60)} min`;
+  const h = s / 3600;
+  return `${h < 10 ? h.toFixed(1) : Math.round(h)} h`;
+}
+
+/** The card for the column of a chart above a bar (Sketch) under the pointer: its stretch, its
+ * average (the column drawn) and highest, the range's peak (the grey ground the columns stand
+ * on), and what the dashed line is. */
+export function sketchCard(o: {
+  label: string; stretch: string; avg: number | null | undefined; max: number | null | undefined; peak: number;
+  over: RangeKey; say: (v: number) => string; of: string; column: string;
+}): RichTip {
+  const { say } = o;
+  // Each row says what span it's about: the column's slice ("these 14 min"), or the whole range.
+  const slice = `in these ${o.column}`;
+  const rows: TipRow[] = o.avg == null
+    ? [{ name: `No readings ${slice}` }]
+    : [
+        { name: `Average ${slice}`, value: say(o.avg), swatch: 'solid' },
+        ...(o.max != null && o.max > o.avg && say(o.max) !== say(o.avg) ? [{ name: `Highest ${slice}`, value: say(o.max) }] : []),
+      ];
+  rows.push({ name: `Peak in ${theLast(o.over)}`, value: say(o.peak), sub: 'the grey behind the columns', swatch: 'ground' });
+  return { title: `${o.label}, ${o.stretch}`, figure: o.of, rows, foot: 'The dashed line is its full scale.' };
 }
 
 /**
@@ -542,11 +567,26 @@ export function shareChart(me: Band | undefined, vm: Band | undefined, vmMemory:
 
 const percent = (p: number) => `${p < 1 ? p.toFixed(1) : p.toFixed(0)} %`;
 
-/** One moment of the share chart, for its tooltip; `at` is the time, already said. */
-export function shareTip(at: string, me: number | null | undefined, vm: number | null | undefined, vmMemory: number, who = 'this container'): string {
-  if (me == null && vm == null) return `${at} · no readings`;
-  const mine = me == null ? `nothing from ${who}` : `${who} ${bytes(me)} (${percent(share(me, vmMemory))} of the VM)`;
-  return vm == null ? `${at} · ${mine}` : `${at} · ${mine} · VM ${bytes(vm)} of ${bytes(vmMemory)} in use`;
+/** The card for the column of a container's memory chart (MemoryShare) under the pointer: its
+ * stretch, and the most this container (or project) and its VM held in it, as the chart draws them;
+ * and its peak in the range (the bar's tick), which stands whatever the stretch has. */
+export function shareCard(o: {
+  stretch: string; me: number | null | undefined; vm: number | null | undefined; vmMemory: number; who: string; column: string;
+  peak: number | undefined; over: RangeKey;
+}): RichTip {
+  const Who = o.who.charAt(0).toUpperCase() + o.who.slice(1);
+  // Each row says what span it's about: the column's slice ("these 14 min"), or the whole range.
+  const slice = `in these ${o.column}`;
+  const rows: TipRow[] = o.me == null && o.vm == null
+    ? [{ name: `No readings ${slice}` }]
+    : [
+        o.me == null
+          ? { name: `Nothing from ${o.who} ${slice}` }
+          : { name: `${Who}'s highest ${slice}`, value: bytes(o.me), sub: `${percent(share(o.me, o.vmMemory))} of the VM`, swatch: 'solid' },
+        ...(o.vm == null ? [] : [{ name: `The VM's highest ${slice}`, value: bytes(o.vm), sub: 'in use', swatch: 'soft' as const }]),
+      ];
+  if (o.peak != null) rows.push({ name: `${Who}'s peak in ${theLast(o.over)}`, value: bytes(o.peak), sub: 'the tick on the bar' });
+  return { title: `Memory, ${o.stretch}`, figure: `of the VM's ${bytes(o.vmMemory)}`, rows, foot: "The dashed line is the VM's memory." };
 }
 
 export interface SelfMemory {

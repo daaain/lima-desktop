@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   bandPeak, bandRise, containersHeadline, containersSentence, countWord, projectSaid, exitedSentence, fullWindow, holdsSentence, intervalPhrase, ownLimit, pressureSentence, rowMemory,
-  restartNote, runsSentence, sketchTip, momentSaid, containersPart, partSaid, partsLabel, memoryFlags, memoryTip, cpuTip, fleetHeadline, hostBar, hostRamSentence, quarters, selfMemory, vzMemoryNote, share, shareChart, shareTip, sketch, unusedHeadline, unusedLede, vmHeadline, vmSentence, vmHeadMemory, stalledSaid,
+  restartNote, runsSentence, stretchSaid, sketchCard, shareCard, containersPart, partSaid, partsLabel, memoryFlags, memoryTip, cpuTip, fleetHeadline, hostBar, hostRamSentence, quarters, selfMemory, vzMemoryNote, share, shareChart, sketch, unusedHeadline, unusedLede, vmHeadline, vmSentence, vmHeadMemory, stalledSaid,
 } from './almanac';
 import type { Latest } from './api';
 import type { Hint } from './rightsize';
@@ -165,27 +165,44 @@ describe('sketch', () => {
   });
 });
 
-describe('sketchTip', () => {
-  const GiB = 1024 ** 3;
-  it('reads one moment: its average against the scale, and its peak where that is higher', () => {
-    expect(sketchTip('13:32', 2.4 * GiB, 2.9 * GiB, bytes, 'of 7.8 GiB')).toBe('13:32 · 2.4 GiB of 7.8 GiB, at most 2.9 GiB');
-    expect(sketchTip('13:32', 2100, 3400, cores, 'of 4 cores')).toBe('13:32 · 2.1 of 4 cores, at most 3.4');
+describe('stretchSaid', () => {
+  const at = Date.UTC(2026, 10, 10, 13, 32);
+  const min = 60_000;
+  it("says a column's stretch of time, from its start", () => {
+    expect(stretchSaid(at, 14.4 * min, '24h')).toMatch(/^\d\d:32–\d\d:46$/);
   });
-  it("leaves out a peak that's no higher than the average said", () => {
-    expect(sketchTip('13:32', 2.4 * GiB, 2.42 * GiB, bytes, 'of 7.8 GiB')).toBe('13:32 · 2.4 GiB of 7.8 GiB');
-    expect(sketchTip('13:32', 2.4 * GiB, null, bytes, 'of 7.8 GiB')).toBe('13:32 · 2.4 GiB of 7.8 GiB');
+  it('says seconds where a column is shorter than two minutes', () => {
+    expect(stretchSaid(at, 36_000, '1h')).toMatch(/^\d\d:32:00–\d\d:32:36$/);
   });
-  it('says when the moment has no reading', () => {
-    expect(sketchTip('13:32', null, null, bytes, 'of 7.8 GiB')).toBe('13:32 · no readings');
+  it('says the day past a day, and the end day only where it differs', () => {
+    expect(stretchSaid(at, 101 * min, '7d')).toMatch(/^10 Nov \d\d:32–\d\d:13$/);
+    expect(stretchSaid(Date.UTC(2026, 10, 10, 23, 30), 7.2 * 60 * min, '30d')).toMatch(/^10 Nov \d\d:30–11 Nov \d\d:42$/);
+  });
+  it('is nothing without a time', () => {
+    expect(stretchSaid(undefined, min, '1h')).toBe('');
   });
 });
 
-describe('momentSaid', () => {
-  const at = Date.UTC(2026, 10, 10, 13, 32);
-  it('says the time, and past a day the day too', () => {
-    expect(momentSaid(at, '24h')).toMatch(/^\d\d:\d\d$/);
-    expect(momentSaid(at, '7d')).toMatch(/^10 Nov(,| at)? \d\d:\d\d$/);
-    expect(momentSaid(undefined, '24h')).toBe('');
+describe('sketchCard', () => {
+  const GiB = 1024 ** 3;
+  const card = (avg: number | null, max: number | null) =>
+    sketchCard({ label: 'Memory', stretch: '13:32–13:46', avg, max, peak: 3.1 * GiB, over: '24h', say: (v) => bytes(v), of: 'of 7.8 GiB', column: '14 min' });
+  it("says the column's stretch, its average and highest, and what the grey and the dashes are", () => {
+    const t = card(2.4 * GiB, 2.9 * GiB);
+    expect([t.title, t.figure]).toEqual(['Memory, 13:32–13:46', 'of 7.8 GiB']);
+    expect(t.rows.map((r) => [r.name, r.value, r.swatch])).toEqual([
+      ['Average in these 14 min', '2.4 GiB', 'solid'],
+      ['Highest in these 14 min', '2.9 GiB', undefined],
+      ['Peak in the last 24 h', '3.1 GiB', 'ground'],
+    ]);
+    expect(t.rows[2].sub).toBe('the grey behind the columns');
+    expect(t.foot).toBe('The dashed line is its full scale.');
+  });
+  it('leaves out a highest that says no more than the average', () => {
+    expect(card(2.4 * GiB, 2.42 * GiB).rows.map((r) => r.name)).toEqual(['Average in these 14 min', 'Peak in the last 24 h']);
+  });
+  it('says when the stretch has no readings', () => {
+    expect(card(null, null).rows.map((r) => r.name)).toEqual(['No readings in these 14 min', 'Peak in the last 24 h']);
   });
 });
 
@@ -409,15 +426,25 @@ describe("a container's memory", () => {
     });
   });
 
-  describe('shareTip', () => {
-    it("says the moment: this container, its share of the VM, the VM's use", () => {
-      expect(shareTip('14:10', 242.2 * MiB, 5.3 * GiB, VM)).toBe('14:10 · this container 242.2 MiB (0.5 % of the VM) · VM 5.3 GiB of 46.9 GiB in use');
-      expect(shareTip('14:10', 30.3 * GiB, 40 * GiB, VM)).toBe('14:10 · this container 30.3 GiB (65 % of the VM) · VM 40.0 GiB of 46.9 GiB in use');
-      expect(shareTip('14:10', 1 * GiB, 40 * GiB, VM, 'this project')).toBe('14:10 · this project 1.0 GiB (2 % of the VM) · VM 40.0 GiB of 46.9 GiB in use');
+  describe('shareCard', () => {
+    it("says the stretch, this container's highest and its share of the VM, and the VM's highest", () => {
+      const t = shareCard({ stretch: '14:10–14:24', me: 30.3 * GiB, vm: 40 * GiB, vmMemory: VM, who: 'this container', column: '14 min', peak: 31 * GiB, over: '24h' });
+      expect([t.title, t.figure]).toEqual(['Memory, 14:10–14:24', 'of the VM\'s 46.9 GiB']);
+      expect(t.rows.map((r) => [r.name, r.value, r.sub, r.swatch])).toEqual([
+        ["This container's highest in these 14 min", '30.3 GiB', '65 % of the VM', 'solid'],
+        ["The VM's highest in these 14 min", '40.0 GiB', 'in use', 'soft'],
+        ["This container's peak in the last 24 h", '31.0 GiB', 'the tick on the bar', undefined],
+      ]);
+      expect(t.foot).toBe("The dashed line is the VM's memory.");
     });
     it('says what was not measured', () => {
-      expect(shareTip('14:10', null, 5.3 * GiB, VM)).toBe('14:10 · nothing from this container · VM 5.3 GiB of 46.9 GiB in use');
-      expect(shareTip('14:10', null, null, VM)).toBe('14:10 · no readings');
+      const t = shareCard({ stretch: '14:10–14:24', me: null, vm: 5.3 * GiB, vmMemory: VM, who: 'this project', column: '14 min', peak: 2 * GiB, over: '24h' });
+      expect(t.rows.map((r) => [r.name, r.value])).toEqual([['Nothing from this project in these 14 min', undefined], ["The VM's highest in these 14 min", '5.3 GiB'], ["This project's peak in the last 24 h", '2.0 GiB']]);
+      // With no readings in the stretch, its peak in the range still stands.
+      expect(shareCard({ stretch: '14:10–14:24', me: null, vm: null, vmMemory: VM, who: 'this container', column: '14 min', peak: 31 * GiB, over: '24h' }).rows.map((r) => r.name))
+        .toEqual(['No readings in these 14 min', "This container's peak in the last 24 h"]);
+      // And none without history of it.
+      expect(shareCard({ stretch: '14:10–14:24', me: null, vm: null, vmMemory: VM, who: 'this container', column: '14 min', peak: undefined, over: '24h' }).rows.map((r) => r.name)).toEqual(['No readings in these 14 min']);
     });
   });
 

@@ -1,13 +1,15 @@
 <script lang="ts">
   // A container over the app's range as its part of its VM, above its memory bar: the VM's memory
   // in use, drawn soft, the container's own in front, under a dashed line at the VM's memory. Hover
-  // reads one moment. The geometry is almanac.shareChart's; it changes only when the history does
+  // reads the column under the pointer as a card: its stretch of time, and the most each held in it. The geometry is almanac.shareChart's; it changes only when the history does
   // (a minute apart at most), not with every live reading.
   import type { Band } from './api';
-  import { momentSaid, shareChart, shareTip } from './almanac';
+  import { bandPeak, columnSaid, shareCard, shareChart, stretchSaid } from './almanac';
+  import { tipText } from './richTip';
+  import { showCard } from './richTip.svelte';
   import { OWN_TIP, tooltip } from './tipState.svelte';
   import { range } from './range.svelte';
-  import { theLast } from './ranges';
+  import { rangeMs, SKETCH_POINTS, theLast } from './ranges';
 
   let { me, vm, ts, vmMemory, hot = false, who = 'this container' }: {
     /** This container's `mem` and its VM's `mem_used`, over the same columns (history.svelte.ts). */
@@ -24,7 +26,13 @@
     const el = e.currentTarget as HTMLElement;
     const r = el.getBoundingClientRect();
     const i = Math.max(0, Math.min(chart.columns - 1, Math.floor(((e.clientX - r.left) / r.width) * chart.columns)));
-    tooltip.point(el, shareTip(momentSaid(ts?.[i], range.key), me?.max[i], vm?.max[i], vmMemory, who), e.clientX, e.clientY);
+    const width = ts && ts.length > 1 ? ts[1] - ts[0] : rangeMs(range.key) / SKETCH_POINTS;
+    const card = shareCard({
+      stretch: stretchSaid(ts?.[i], width, range.key), me: me?.max[i], vm: vm?.max[i], vmMemory, who, column: columnSaid(width),
+      peak: bandPeak(me), over: range.key,
+    });
+    showCard(el, card);
+    tooltip.point(el, tipText(card), e.clientX, e.clientY);
   }
 </script>
 
