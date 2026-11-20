@@ -1235,7 +1235,62 @@ test("An open card follows its bar's reading as it changes, as the bar's descrip
   await close();
 });
 
-test("Moving from a bar's card up onto its chart shows the chart's own reading, not the card", async () => {
+test("An open chart card follows its chart as the history moves on, without the pointer moving", async () => {
+  const { page, errors, close } = await open('/containers');
+  // 1 h: a column is 36 s and the charts fetch again every minute.
+  await page.getByRole('group', { name: 'Time range' }).getByRole('button', { name: '1 h' }).click();
+  const line = page.locator('.line', { hasText: 'harbor-devbox' });
+  const title = page.locator('[role=tooltip].card .title');
+  // The newest column of a container's CPU sketch, then of its memory share chart.
+  for (const chart of [line.locator('.sketch'), line.locator('.share')]) {
+    await chart.locator('svg').waitFor();
+    await chart.evaluate((el) => el.scrollIntoView({ block: 'center' }));
+    const b = await chart.boundingBox();
+    await page.mouse.move(b.x + b.width - 3, b.y + b.height / 2);
+    await page.mouse.move(b.x + b.width - 1, b.y + b.height / 2);
+    await title.waitFor({ timeout: 1500 });
+    const before = await title.textContent();
+    await page.clock.setFixedTime(new Date((await page.evaluate(() => Date.now())) + 2 * 60_000));
+    await page.waitForFunction(({ el, was }) => el.isConnected && el.textContent !== was, { el: await title.elementHandle(), was: before }, { timeout: 15_000 });
+    await page.mouse.move(0, 0);
+    await title.waitFor({ state: 'detached', timeout: 1500 });
+  }
+  assert.deepEqual(errors, []);
+  await close();
+});
+
+test("A chart card put away stays away as the history moves on, until the pointer moves again", async () => {
+  const { page, errors, close } = await open('/containers');
+  await page.getByRole('group', { name: 'Time range' }).getByRole('button', { name: '1 h' }).click();
+  const line = page.locator('.line', { hasText: 'harbor-devbox' });
+  const card = page.locator('[role=tooltip].card');
+  for (const [chart, drawn] of [[line.locator('.sketch'), 'path.col'], [line.locator('.share'), 'path.me']]) {
+    await chart.locator('svg').waitFor();
+    await chart.evaluate((el) => el.scrollIntoView({ block: 'center' }));
+    const b = await chart.boundingBox();
+    await page.mouse.move(b.x + b.width - 3, b.y + b.height / 2);
+    await page.mouse.move(b.x + b.width - 1, b.y + b.height / 2);
+    await card.waitFor({ timeout: 1500 });
+    // A key puts it away; the pointer rests where it was while the chart is drawn anew.
+    await page.keyboard.press('Shift');
+    await card.waitFor({ state: 'detached', timeout: 1500 });
+    const path = chart.locator(drawn);
+    const was = await path.getAttribute('d');
+    await page.clock.setFixedTime(new Date((await page.evaluate(() => Date.now())) + 2 * 60_000));
+    await page.waitForFunction(({ el, was }) => el.getAttribute('d') !== was, { el: await path.elementHandle(), was }, { timeout: 15_000 });
+    await page.waitForTimeout(500);
+    assert.equal(await card.count(), 0, 'stays away');
+    // Moved again, it's back, with the stretch now under the pointer.
+    await page.mouse.move(b.x + b.width - 2, b.y + b.height / 2);
+    await card.waitFor({ timeout: 1500 });
+    await page.mouse.move(0, 0);
+    await card.waitFor({ state: 'detached', timeout: 1500 });
+  }
+  assert.deepEqual(errors, []);
+  await close();
+});
+
+test("Moving from a bar's card up onto its chart shows the chart's own card, not the bar's", async () => {
   const { page, errors, close } = await open('/containers');
   const line = page.locator('.line', { hasText: 'harbor-devbox' });
   const bar = line.locator('.bar').first();
@@ -1248,8 +1303,70 @@ test("Moving from a bar's card up onto its chart shows the chart's own reading, 
   const chart = await line.locator('.share').first().boundingBox();
   await page.mouse.move(b.x + 22, chart.y + chart.height / 2);
   await page.mouse.move(b.x + 24, chart.y + chart.height / 2);
-  await page.waitForFunction(() => document.querySelector('[role=tooltip]')?.textContent?.includes('this container'), null, { timeout: 1500 });
-  assert.equal(await page.locator('[role=tooltip].card').count(), 0);
+  // The chart's own card, for the column under the pointer, not the bar's.
+  await page.waitForFunction(() => document.querySelector('[role=tooltip].card')?.textContent?.includes("This container's highest in these"), null, { timeout: 1500 });
+  assert.doesNotMatch(await page.locator('[role=tooltip].card').innerText(), /Its processes' own/);
+  assert.deepEqual(errors, []);
+  await close();
+});
+
+test("Every chart above a bar has a dashed line at the full scale, as a container's memory chart has", async () => {
+  const { page, errors, close } = await open('/');
+  const meter = page.locator('article', { has: page.locator('a.name', { hasText: /^harbor$/ }) }).locator('.meter');
+  await meter.first().locator('.sketch svg').first().waitFor();
+  // Where the line is in each chart: a VM's memory, CPU and disk, and a container's memory and CPU.
+  const lineAt = (chart) => chart.evaluate((el) => {
+    const svg = el.querySelector('svg');
+    const line = svg.querySelector('line.ceiling');
+    return line && { y: +line.getAttribute('y1'), dashed: getComputedStyle(line).strokeDasharray !== 'none' };
+  });
+  for (let i = 0; i < 3; i++) assert.deepEqual(await lineAt(meter.nth(i).locator('.sketch')), { y: 8, dashed: true }, `meter ${i}`);
+  // Nothing drawn reaches above it: the columns, at most the whole scale, stop at the line.
+  const top = await meter.first().locator('.sketch svg').evaluate((svg) => Math.min(...[...svg.querySelectorAll('path, rect')].map((e) => e.getBBox().y)));
+  assert.ok(top >= 8 - 0.01, `drawn from ${top}`);
+  await page.goto(page.url().replace(/\/$/, '/containers'));
+  const line = page.locator('.line', { hasText: 'harbor-devbox' });
+  // Its memory and CPU histories come separately, in either order: wait for both charts.
+  await line.locator('.share svg').waitFor();
+  await line.locator('.sketch svg').waitFor();
+  assert.deepEqual(await lineAt(line.locator('.share')), { y: 8, dashed: true });
+  assert.deepEqual(await lineAt(line.locator('.sketch')), { y: 8, dashed: true });
+  assert.deepEqual(errors, []);
+  await close();
+});
+
+test("Every chart above a bar reads out the column under the pointer as a card, and a list's charts are all one height", async () => {
+  const { page, errors, close } = await open('/');
+  const meter = page.locator('article', { has: page.locator('a.name', { hasText: /^harbor$/ }) }).locator('.meter');
+  const point = async (chart) => {
+    // Drawn first: before its history arrives a chart is an empty box whose title is its own tip.
+    await chart.locator('svg').waitFor();
+    await chart.evaluate((el) => el.scrollIntoView({ block: 'center' }));
+    const b = await chart.boundingBox();
+    await page.mouse.move(b.x + b.width / 2, b.y + b.height / 2);
+    await page.mouse.move(b.x + b.width / 2 + 2, b.y + b.height / 2);
+    await page.locator('[role=tooltip].card').waitFor({ timeout: 1500 });
+    return page.locator('[role=tooltip].card').innerText();
+  };
+  // A VM's memory, CPU and disk: the column's stretch, its average (and highest, if more), the range's
+  // peak that the grey ground shows, and what the dashed line is.
+  const memory = await point(meter.nth(0).locator('.sketch'));
+  assert.match(memory, /^Memory, \d\d:\d\d–\d\d:\d\d\s+of 7\.8 GiB\nAverage in these 14 min\n\d+\.\d [KMG]iB\n/);
+  assert.match(memory, /Peak in the last 24 h\n.+GiB\nthe grey behind the columns\n/);
+  assert.match(memory, /The dashed line is its full scale\.$/);
+  assert.match(await point(meter.nth(1).locator('.sketch')), /^CPU, \d\d:\d\d–\d\d:\d\d\s+of 4 cores\nAverage in these 14 min\n\d+\.\d+\n/);
+  assert.match(await point(meter.nth(2).locator('.sketch')), /^Disk, \d\d:\d\d–\d\d:\d\d\s+of 59\.9 GiB\n/);
+  // On Containers, a container's CPU reads out the same way its memory does.
+  await page.goto(page.url().replace(/\/$/, '/containers'));
+  const harbor = page.locator('section', { has: page.locator('h2 a', { hasText: 'harbor' }) });
+  const line = harbor.locator('.line', { hasText: 'harbor-devbox' });
+  await line.locator('.sketch svg').waitFor();
+  assert.match(await point(line.locator('.sketch')), /^CPU, \d\d:\d\d–\d\d:\d\d\s+of 4 cores\n/);
+  assert.match(await point(line.locator('.share')), /^Memory, \d\d:\d\d–\d\d:\d\d\s+of the VM's 8\.0 GiB\nThis container's highest in these 14 min\n[\s\S]*This container's peak in the last 24 h\n/);
+  // Every chart in the list one height: a VM's heading, a project's and a line's.
+  const heights = await harbor.evaluate((el) => [...el.querySelectorAll('.vm-head .sketch, .project .sketch, .project .share, .line .sketch, .line .share')].map((c) => Math.round(c.getBoundingClientRect().height)));
+  assert.ok(heights.length >= 6, `${heights.length} charts`);
+  assert.deepEqual([...new Set(heights)], [22]);
   assert.deepEqual(errors, []);
   await close();
 });
@@ -1600,10 +1717,11 @@ test("A container's memory is drawn against its VM or its own limit, its peak fr
   assert.match(await memory('app').innerText(), /^\d+\.\d MiB of 1\.0 GiB limit\npeak \d+\.\d MiB in 24 h$/);
   assert.match(await line('app').locator('.bar').first().getAttribute('aria-label'), /full width is its 1\.0 GiB limit$/);
   assert.equal(await memory('app').locator('strong').evaluate((el) => el.classList.contains('hot')), true);
-  // Hovering the chart above the bar reads one moment of the VM.
+  // Hovering the chart above the bar reads the column under the pointer: its stretch, the most this
+  // container and its VM held in it, and this container's peak in the range.
   const chart = await line('warehouse').locator('.share').boundingBox();
   await page.mouse.move(chart.x + chart.width * 0.97, chart.y + chart.height / 2);
-  assert.match(await page.getByRole('tooltip').innerText(), /^\d\d:\d\d · this container 1\d\.\d GiB \(\d+ % of the VM\) · VM \d+\.\d GiB of 48\.0 GiB in use$/);
+  assert.match(await page.getByRole('tooltip').innerText(), /^Memory, \d\d:\d\d–\d\d:\d\d\s+of the VM's 48\.0 GiB\nThis container's highest in these 14 min\n1\d\.\d GiB\n\d+ % of the VM\nThe VM's highest in these 14 min\n\d+\.\d GiB\nin use\nThis container's peak in the last 24 h\n/);
   await page.mouse.move(0, 0);
   assert.equal(await page.getByRole('tooltip').count(), 0);
   // Its detail measures it against itself over the app's range.

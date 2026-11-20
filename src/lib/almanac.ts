@@ -1,10 +1,10 @@
 // The words and small drawings of the UI (docs/design/ui.md): how full something is, said in
-// quarters; who is past three quarters; and a series turned into columns and a distribution.
+// quarters; who is past three quarters; and a series turned into columns, and a moment of it read out.
 import type { Band, Latest, Series, Summary, VmLive } from './api';
 import type { Hint } from './rightsize';
 import { bytes, cores, MiB, permille, uptime } from './format';
 import type { RichTip, TipRow } from './richTip';
-import { inRange, theLast, type RangeKey } from './ranges';
+import { inRange, rangeMs, theLast, type RangeKey } from './ranges';
 
 /** Past this share of an allocation a figure, its bar and its sentence turn to the warning colour. */
 export const WARN_PCT = 75;
@@ -320,11 +320,9 @@ export interface Sketch {
   columns: (number | null)[];
   /** The highest value in the window, in percent of the scale. */
   max: number;
-  /** Time spent at each percent of the scale (index 0–99), relative to the level most time was spent at (0–1). */
-  distribution: number[];
 }
 
-/** A metric's recent history drawn two ways: over time, and as where the time was spent. */
+/** A metric's recent history as columns over time, each its bucket's average, on the bar's scale. */
 export function sketch(band: Band | undefined, scale: number | undefined): Sketch | null {
   if (!band || !scale || scale <= 0) return null;
   const pct = (v: number | null) => (v == null || v < 0 ? null : Math.min(100, (v / scale) * 100));
@@ -332,10 +330,48 @@ export function sketch(band: Band | undefined, scale: number | undefined): Sketc
   const seen = columns.filter((c): c is number => c != null);
   if (seen.length === 0) return null;
   const peaks = band.max.map(pct).filter((c): c is number => c != null);
-  const counts = new Array<number>(100).fill(0);
-  for (const c of seen) counts[Math.min(99, Math.floor(c))]++;
-  const most = Math.max(...counts);
-  return { columns, max: Math.max(...peaks, ...seen), distribution: counts.map((n) => n / most) };
+  return { columns, max: Math.max(...peaks, ...seen) };
+}
+
+/** A chart column's stretch of time, from its start `at`, `width` long: "13:32–13:46"; with seconds
+ * where a column is under two minutes, and past a day its day too (the end's only where it differs). */
+export function stretchSaid(at: number | undefined, width: number, over: RangeKey): string {
+  if (at == null) return '';
+  const end = at + width;
+  const time = (t: number) =>
+    new Date(t).toLocaleTimeString('en-GB', width < 120_000 ? { hour: '2-digit', minute: '2-digit', second: '2-digit' } : { hour: '2-digit', minute: '2-digit' });
+  const day = (t: number) => new Date(t).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
+  if (rangeMs(over) <= 86_400_000) return `${time(at)}–${time(end)}`;
+  return `${day(at)} ${time(at)}–${day(end) === day(at) ? '' : `${day(end)} `}${time(end)}`;
+}
+
+/** How long a chart's column is: "36 s", "14 min", "1.7 h". */
+export function columnSaid(width: number): string {
+  const s = width / 1000;
+  if (s < 60) return `${Math.round(s)} s`;
+  if (s < 3600) return `${Math.round(s / 60)} min`;
+  const h = s / 3600;
+  return `${h < 10 ? h.toFixed(1) : Math.round(h)} h`;
+}
+
+/** The card for the column of a chart above a bar (Sketch) under the pointer: its stretch, its
+ * average (the column drawn) and highest, the range's peak (the grey ground the columns stand
+ * on), and what the dashed line is. */
+export function sketchCard(o: {
+  label: string; stretch: string; avg: number | null | undefined; max: number | null | undefined; peak: number;
+  over: RangeKey; say: (v: number) => string; of: string; column: string;
+}): RichTip {
+  const { say } = o;
+  // Each row says what span it's about: the column's slice ("these 14 min"), or the whole range.
+  const slice = `in these ${o.column}`;
+  const rows: TipRow[] = o.avg == null
+    ? [{ name: `No readings ${slice}` }]
+    : [
+        { name: `Average ${slice}`, value: say(o.avg), swatch: 'solid' },
+        ...(o.max != null && o.max > o.avg && say(o.max) !== say(o.avg) ? [{ name: `Highest ${slice}`, value: say(o.max) }] : []),
+      ];
+  rows.push({ name: `Peak in ${theLast(o.over)}`, value: say(o.peak), sub: 'the grey behind the columns', swatch: 'ground' });
+  return { title: `${o.label}, ${o.stretch}`, figure: o.of, rows, foot: 'The dashed line is its full scale.' };
 }
 
 /**
@@ -486,8 +522,9 @@ export function rowMemory(
   };
 }
 
-/** Of the share chart's height, the VM's memory: the rest is room for its dashed line. */
-const SHARE_HEADROOM = 0.92;
+/** Of a chart's height above a bar, the full scale: the rest is room for the dashed line drawn at it
+ * (Sketch, MemoryShare), so a chart that reaches the whole scale still shows where that is. */
+export const CHART_HEADROOM = 0.92;
 
 export interface ShareChart {
   /** Path data in a 100 × 100 box, one stepped area per run of samples, gaps left open. */
@@ -509,7 +546,7 @@ export function shareChart(me: Band | undefined, vm: Band | undefined, vmMemory:
   if (bandPeak(me) == null && bandPeak(vm) == null) return null;
   const w = 100 / columns;
   const n = (x: number) => String(+x.toFixed(2));
-  const y = (v: number) => n(100 - share(v, vmMemory) * SHARE_HEADROOM);
+  const y = (v: number) => n(100 - share(v, vmMemory) * CHART_HEADROOM);
   const area = (values: (number | null)[] | undefined) => {
     let d = '';
     let open = false;
@@ -525,16 +562,31 @@ export function shareChart(me: Band | undefined, vm: Band | undefined, vmMemory:
     }
     return open ? `${d}V100Z` : d;
   };
-  return { vm: area(vm?.max), me: area(me?.max), ceiling: +(100 * (1 - SHARE_HEADROOM)).toFixed(2), columns };
+  return { vm: area(vm?.max), me: area(me?.max), ceiling: +(100 * (1 - CHART_HEADROOM)).toFixed(2), columns };
 }
 
 const percent = (p: number) => `${p < 1 ? p.toFixed(1) : p.toFixed(0)} %`;
 
-/** One moment of the share chart, for its tooltip; `at` is the time, already said. */
-export function shareTip(at: string, me: number | null | undefined, vm: number | null | undefined, vmMemory: number, who = 'this container'): string {
-  if (me == null && vm == null) return `${at} · no readings`;
-  const mine = me == null ? `nothing from ${who}` : `${who} ${bytes(me)} (${percent(share(me, vmMemory))} of the VM)`;
-  return vm == null ? `${at} · ${mine}` : `${at} · ${mine} · VM ${bytes(vm)} of ${bytes(vmMemory)} in use`;
+/** The card for the column of a container's memory chart (MemoryShare) under the pointer: its
+ * stretch, and the most this container (or project) and its VM held in it, as the chart draws them;
+ * and its peak in the range (the bar's tick), which stands whatever the stretch has. */
+export function shareCard(o: {
+  stretch: string; me: number | null | undefined; vm: number | null | undefined; vmMemory: number; who: string; column: string;
+  peak: number | undefined; over: RangeKey;
+}): RichTip {
+  const Who = o.who.charAt(0).toUpperCase() + o.who.slice(1);
+  // Each row says what span it's about: the column's slice ("these 14 min"), or the whole range.
+  const slice = `in these ${o.column}`;
+  const rows: TipRow[] = o.me == null && o.vm == null
+    ? [{ name: `No readings ${slice}` }]
+    : [
+        o.me == null
+          ? { name: `Nothing from ${o.who} ${slice}` }
+          : { name: `${Who}'s highest ${slice}`, value: bytes(o.me), sub: `${percent(share(o.me, o.vmMemory))} of the VM`, swatch: 'solid' },
+        ...(o.vm == null ? [] : [{ name: `The VM's highest ${slice}`, value: bytes(o.vm), sub: 'in use', swatch: 'soft' as const }]),
+      ];
+  if (o.peak != null) rows.push({ name: `${Who}'s peak in ${theLast(o.over)}`, value: bytes(o.peak), sub: 'the tick on the bar' });
+  return { title: `Memory, ${o.stretch}`, figure: `of the VM's ${bytes(o.vmMemory)}`, rows, foot: "The dashed line is the VM's memory." };
 }
 
 export interface SelfMemory {

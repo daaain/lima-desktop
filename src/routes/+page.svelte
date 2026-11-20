@@ -2,7 +2,7 @@
   import { live } from '$lib/live.svelte';
   import { bytes, cores, permille } from '$lib/format';
   import type { Instance, VmLive } from '$lib/api';
-  import { band, bandRise, containersPart, countWord, cpuTip, fleetHeadline, gauges, hostRamSentence, memoryFlags, memoryTip, partSaid, partsLabel, restartNote, share, sketch, vmSentence, type Part } from '$lib/almanac';
+  import { band, bandRise, containersPart, countWord, cpuTip, fleetHeadline, gauges, hostRamSentence, memoryFlags, memoryTip, partSaid, partsLabel, restartNote, share, vmSentence, type Part } from '$lib/almanac';
   import type { RichTip } from '$lib/richTip';
   import { richTip } from '$lib/richTip.svelte';
   import { History } from '$lib/history.svelte';
@@ -138,7 +138,7 @@
           <div class="meter num">
             <span class="label narrow">Memory</span>
             <p class="figure"><strong class:hot={g.memory.hot}>{bytes(g.memory.used)}</strong> <span class="muted">of {bytes(g.memory.size)}</span></p>
-            <Sketch sketch={sketch(band(h, 'mem_used'), g.memory.size)} hot={g.memory.hot} label="Memory" />
+            <Sketch band={band(h, 'mem_used')} ts={h?.ts} scale={g.memory.size} say={(v) => bytes(v)} of={`of ${bytes(g.memory.size)}`} hot={g.memory.hot} label="Memory" />
             <Bar pct={g.memory.pct} inside={parts.memory && share(parts.memory.inside, g.memory.size)} others={parts.memory?.others != null ? share(parts.memory.others, g.memory.size) : undefined} label={`Memory: ${g.memory.pct.toFixed(0)} % of the allocation${partsLabel('memory', parts.memory)}`} tip={memTip} />
             <p class="label" title="Pressure (Linux's PSI): the share of the last measurement in which at least one task waited for memory">{g.memory.pct.toFixed(0)} % · waiting {permille(l.psi_mem_some)}</p>
             {#if parts.memory && memTip}{@render part('memory', parts.memory, memTip)}{/if}
@@ -146,7 +146,7 @@
           <div class="meter num">
             <span class="label narrow">CPU</span>
             <p class="figure"><strong class:hot={g.cpu.hot}>{cores(l.cpu_mc)}</strong> <span class="muted">of {i.cpus} cores</span></p>
-            <Sketch sketch={sketch(band(h, 'cpu_mc'), g.cpu.size)} hot={g.cpu.hot} label="CPU" />
+            <Sketch band={band(h, 'cpu_mc')} ts={h?.ts} scale={g.cpu.size} say={cores} of={`of ${i.cpus} cores`} hot={g.cpu.hot} label="CPU" />
             <Bar pct={g.cpu.pct} inside={parts.cpu && share(parts.cpu.inside, g.cpu.size)} label={`CPU: ${g.cpu.pct.toFixed(0)} % of the cores${partsLabel('cpu', parts.cpu)}`} tip={cpuCard} />
             <p class="label" title="Pressure (Linux's PSI): the share of the last measurement in which at least one task waited for a CPU">{g.cpu.pct.toFixed(0)} % · waiting {permille(l.psi_cpu_some)}</p>
             {#if parts.cpu && cpuCard}{@render part('cpu', parts.cpu, cpuCard)}{/if}
@@ -154,7 +154,7 @@
           <div class="meter num">
             <span class="label narrow">Disk</span>
             <p class="figure"><strong class:hot={g.disk.hot}>{bytes(g.disk.used)}</strong> <span class="muted">of {bytes(g.disk.size)}</span></p>
-            <Sketch sketch={sketch(band(h, l.store_used != null ? 'store_used' : 'disk_used'), g.disk.size)} hot={g.disk.hot} label="Disk" />
+            <Sketch band={band(h, l.store_used != null ? 'store_used' : 'disk_used')} ts={h?.ts} scale={g.disk.size} say={(v) => bytes(v)} of={`of ${bytes(g.disk.size)}`} hot={g.disk.hot} label="Disk" />
             <Bar pct={g.disk.pct} label={`Disk: ${g.disk.pct.toFixed(0)} % of the allocation`} />
             <p class="label">{g.disk.pct.toFixed(0)} %</p>
           </div>
@@ -176,8 +176,8 @@
         </article>
       {/each}
       <p class="note">
-        Above each bar: {theLast(range.key)}, left to right, on a ground that rises to the highest value reached. Hover one to see how
-        long was spent at each level instead. Bars are notched at quarters of the allocation; past the third they turn.
+        Above each bar: {theLast(range.key)}, left to right, on a ground that rises to the highest value reached, under a dashed line
+        at the full scale. Hover one to read a moment. Bars are notched at quarters of the allocation; past the third they turn.
       </p>
     </section>
   {/if}

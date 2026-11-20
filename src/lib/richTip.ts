@@ -4,7 +4,7 @@
 // for screen readers (`aria-description`) and wherever a card can't be drawn.
 
 /** How a row's swatch is drawn: as the bar draws its part (Bar.svelte). */
-export type Swatch = 'solid' | 'soft' | 'hatch' | 'strong';
+export type Swatch = 'solid' | 'soft' | 'hatch' | 'strong' | 'ground';
 
 export interface TipRow {
   name: string;

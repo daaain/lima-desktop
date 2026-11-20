@@ -20,6 +20,14 @@ export function richOf(el: Element | null | undefined): RichTip | undefined {
   return el ? cards.get(el) : undefined;
 }
 
+/** A chart that reads itself out (Sketch, MemoryShare) shows the card for the column under the
+ * pointer: kept for Tooltip.svelte to draw, as `use:richTip`'s are, without a description, as
+ * what it says changes with the pointer (its label says what it is). */
+export function showCard(el: Element, tip: RichTip) {
+  cards.set(el, tip);
+  changed();
+}
+
 export function richTip(node: HTMLElement | SVGElement, tip: RichTip | undefined) {
   function set(t: RichTip | undefined) {
     if (!t) {
