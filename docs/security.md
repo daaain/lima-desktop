@@ -17,7 +17,7 @@ A container's name is chosen by whoever ran it, so treat it as untrusted too. As
 - **ssh** into each VM with Lima's `ssh.config` (`probe::ssh`): the probe (`probe.sh`), the journal reader (`journal.rs`) and the file browser (`guest_files.rs`). The remote command is always `/bin/sh -s` with the script on stdin, so nothing is installed and no guest string reaches the command line. Forwarding is off whatever Lima's config says (`ForwardAgent=no`, `ForwardX11=no`, `ClearAllForwardings=yes`), so a long-lived probe session never hands the guest the user's ssh agent; `ControlMaster=no`, so the probe never becomes the shared connection the user's own `limactl shell` would then reuse with its options.
 - **libpod's REST API** over Lima's host-side forwarded unix socket (`podman.rs`); its path comes from the host's `lima.yaml`.
 - **`limactl`**, with a fixed argument list and VM names checked against `limactl list`.
-- **GitHub**, once a day, for the latest release (`updates.rs`): its `html_url` must start with the project's releases URL. Nothing about the user's VMs leaves the computer.
+- **GitHub**, once a day, for the latest release (`updates.rs`): its `html_url` must start with the project's releases URL. When there's a newer one, its `CHANGELOG.md` at the release's tag too, for What's new. Neither request says anything about the user's VMs.
 - **Nothing listens.** No TCP or unix listener, no localhost HTTP.
 
 ## Rules
@@ -39,7 +39,7 @@ A container's name is chosen by whoever ran it, so treat it as untrusted too. As
 
 - Use the bounded readers: `bounded::capped_output` and `bounded::read_tail` for a child's output, `collect_capped` for a libpod body, the probe's line and block caps. Never `read_to_end`, `read_to_string`, `wait_with_output`, `.collect()` or `lines()` without a cap on anything a guest sends.
 - Choose the limit from the largest honest answer, and say so in a comment (e.g. 64 MiB for libpod lists, 8 MiB and 16 KiB a line for logs, 1 KiB a line and 4096 lines a block for the probe). Past it, keep what's most useful (a log's newest lines, stderr's last line), say it was cut, and kill the child.
-- Every guest read also has a timeout.
+- Every one-shot guest read (a libpod request, the journal, the file browser) also has a timeout. The probe's stream is long-lived by design: the stall detector (`stall.rs`) watches it instead, and a VM silent past its threshold is said to have stopped responding.
 
 ### Numbers from a guest
 
@@ -68,7 +68,7 @@ A container's name is chosen by whoever ran it, so treat it as untrusted too. As
 ### What the page can do
 
 - Every Tauri command is something a script in the page could call: stop, delete and resize VMs, remove containers, images and volumes, read inspect output (environment secrets included). A new command, plugin or capability (`src-tauri/capabilities/`) needs a reason, and a destructive one its confirmation.
-- Links opened outside the app (`openUrl`) are `http(s)://localhost:<port>` for a published port (a `u16`), the release page checked in `updates.rs`, or constants. Never a URL from guest data.
+- Links opened outside the app (`openUrl`) are `http(s)://localhost:<port>` for a published port (a `u16`), the release page checked in `updates.rs`, `http(s)` links in the project's own release notes (`CHANGELOG.md` at the release's tag, `releaseNotes.ts`), or constants. Never a URL from guest data.
 - Clipboard copies are constants (commands the user is told to run); never guest text that's meant to be pasted into a shell.
 
 ## Known limits
