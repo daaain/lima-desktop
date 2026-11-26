@@ -24,8 +24,18 @@ export interface LogLine {
 }
 
 const STAMP = /^(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?(?:Z|[+-]\d\d:\d\d)) (.*)$/s;
-// Terminal colours and cursor moves: not text.
-const ESCAPES = /\x1b\[[0-9;?]*[A-Za-z]/g;
+// What a terminal acts on rather than shows (ECMA-48), with ESC or its one-character C1 form: a
+// string (OSC: a title, a hyperlink, the clipboard; DCS, SOS, PM, APC) up to its ST or BEL, or the
+// next ESC if it has none; a CSI (colours, cursor moves, erasing); any other escape.
+const ESCAPES = /(?:\x1b[\]PX^_]|[\x90\x98\x9d\x9e\x9f])[^\x07\x1b\x9c]*(?:\x07|\x1b\\|\x9c)?|(?:\x1b\[|\x9b)[\x30-\x3f]*[\x20-\x2f]*[\x40-\x7e]?|\x1b[\x20-\x2f]*[\x30-\x7e]?/g;
+// The C0 and C1 controls but tab, and DEL. Backspace goes without erasing anything, and a carriage
+// return within a line (a redrawn progress bar, or text hiding what came before it) becomes a space,
+// so everything written is shown.
+const CONTROLS = /[\x00-\x08\x0b-\x0c\x0e-\x1f\x7f-\x9f]/g;
+
+/** A line of a log as text: what would drive a terminal taken out, the characters it wrote kept. */
+export const plainText = (line: string) =>
+  line.replace(ESCAPES, '').replace(/[\r\n]+$/, '').replace(/[\r\n]+/g, ' ').replace(CONTROLS, '');
 
 const dayOf = (at: number) => new Date(at).toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' });
 
@@ -33,7 +43,7 @@ export function logLines(raw: RawLogLine[]): LogLine[] {
   let lastDay = '';
   let lastLevel: Level | null = null;
   return raw.map(({ line, stream }) => {
-    const clean = line.replace(ESCAPES, '').replace(/\r$/, '');
+    const clean = plainText(line);
     const m = STAMP.exec(clean);
     const at = m ? Date.parse(m[1]) : NaN;
     const text = m && !Number.isNaN(at) ? m[2] : clean;
