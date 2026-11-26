@@ -8,8 +8,10 @@
 //! followed) is outside the folder is refused.
 
 use serde::Serialize;
+use std::process::Output;
 use std::time::Duration;
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
+use tokio::process::Child;
 
 use crate::probe;
 
@@ -219,18 +221,84 @@ fn status(stdout: &[u8]) -> Result<(&str, &[u8]), FilesError> {
     }
 }
 
-async fn run(ssh_config: &str, instance: &str, script: String) -> Result<Vec<u8>, FilesError> {
+/// The most the script's answer can be, in bytes; past it the guest is sending what wasn't asked
+/// for. A listing's record is at most some 300 bytes (a name is at most 255), so the most entries
+/// listed come to some 600 kB; a peek is its status line and `MAX_PEEK`.
+fn answer_limit(op: Op) -> usize {
+    match op {
+        Op::List => 1 << 20,
+        Op::Peek => MAX_PEEK + 1024,
+    }
+}
+
+// --- Reading what a guest sends, bounded ---------------------------------------------------------
+//
+// Whoever is root in a guest decides what its ssh session sends back. Reading it whole made the
+// app's memory theirs to grow, until a timeout if there was one. These read at most what an honest
+// answer needs. They're here, used by the journal and the collector as well, as this is where a
+// guest's answers are read most.
+
+/// The most of a guest's stderr kept, its end: the last line is what says why.
+pub const STDERR_KEEP: usize = 4 << 10;
+
+/// Reads `r` to its end, keeping in `kept` only the last `keep` bytes. Memory stays bounded
+/// however much comes; the caller's timeout bounds the time. What's kept so far stays in `kept`
+/// when that timeout drops this.
+pub async fn read_tail<R: AsyncRead + Unpin>(mut r: R, keep: usize, kept: &mut Vec<u8>) -> std::io::Result<()> {
+    let mut buf = [0; 8192];
+    loop {
+        let n = r.read(&mut buf).await?;
+        if n == 0 {
+            return Ok(());
+        }
+        kept.extend_from_slice(&buf[..n]);
+        if kept.len() > keep {
+            kept.drain(..kept.len() - keep);
+        }
+    }
+}
+
+/// What a child sends and how it exits: its stdout up to `limit` bytes, and the end of its stderr
+/// (`STDERR_KEEP`). Past the limit the child is killed, and `true` says its stdout was cut.
+pub async fn capped_output(mut child: Child, limit: usize) -> std::io::Result<(Output, bool)> {
+    let stdout = child.stdout.take().expect("piped stdout");
+    let stderr = child.stderr.take().expect("piped stderr");
+    let mut err = Vec::new();
+    let (out, err_read) = tokio::join!(
+        async {
+            let mut buf = Vec::new();
+            stdout.take(limit as u64 + 1).read_to_end(&mut buf).await?;
+            let cut = buf.len() > limit;
+            if cut {
+                buf.truncate(limit);
+                // Its stderr ends with it, so the read of that ends too.
+                let _ = child.start_kill();
+            }
+            std::io::Result::Ok((buf, cut))
+        },
+        read_tail(stderr, STDERR_KEEP, &mut err),
+    );
+    let (stdout, cut) = out?;
+    err_read?;
+    let status = child.wait().await?;
+    Ok((Output { status, stdout, stderr: err }, cut))
+}
+
+async fn run(ssh_config: &str, instance: &str, script: String, limit: usize) -> Result<Vec<u8>, FilesError> {
     let go = async {
         let mut child = probe::ssh(ssh_config, instance).spawn()?;
         let mut stdin = child.stdin.take().expect("piped stdin");
         stdin.write_all(script.as_bytes()).await?;
         drop(stdin);
-        child.wait_with_output().await
+        capped_output(child, limit).await
     };
-    let out = tokio::time::timeout(TIMEOUT, go)
+    let (out, cut) = tokio::time::timeout(TIMEOUT, go)
         .await
         .map_err(|_| FilesError::Timeout)?
         .map_err(|e| FilesError::Ssh(e.to_string()))?;
+    if cut {
+        return Err(FilesError::Guest("the guest sent more than was asked for".into()));
+    }
     // An answer from the script is the answer, whatever the exit status.
     if out.stdout.starts_with(b"LD-") {
         return Ok(out.stdout);
@@ -253,7 +321,7 @@ pub async fn list(
     rel: &str,
 ) -> Result<Listing, FilesError> {
     let rel = normalise(rel)?;
-    let out = run(ssh_config, instance, script(root, &rel, Op::List)).await?;
+    let out = run(ssh_config, instance, script(root, &rel, Op::List), answer_limit(Op::List)).await?;
     parse_listing(&rel, &out, folder)
 }
 
@@ -262,7 +330,7 @@ pub async fn peek(ssh_config: &str, instance: &str, mountpoint: &str, rel: &str)
     if rel.is_empty() {
         return Err(FilesError::Refused("that's the folder itself, not a file".into()));
     }
-    let out = run(ssh_config, instance, script(mountpoint, &rel, Op::Peek)).await?;
+    let out = run(ssh_config, instance, script(mountpoint, &rel, Op::Peek), answer_limit(Op::Peek)).await?;
     parse_peek(&rel, &out)
 }
 
@@ -342,6 +410,47 @@ mod tests {
         // A character cut at the end of the shown part is still text.
         let p = parse_peek("a", "LD-OK 9\nhé".as_bytes().split_last().unwrap().1).unwrap();
         assert_eq!(p.text.as_deref(), Some("h"));
+    }
+
+    fn sh(script: &str) -> tokio::process::Child {
+        tokio::process::Command::new("/bin/sh")
+            .args(["-c", script])
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_guest_that_sends_without_end_is_stopped_at_the_limit() {
+        let run = capped_output(sh("exec yes"), 1000);
+        let (out, cut) = tokio::time::timeout(Duration::from_secs(5), run).await.expect("stopped").unwrap();
+        assert!(cut);
+        assert_eq!(out.stdout.len(), 1000);
+        assert!(!out.status.success(), "killed");
+        // Within the limit, all of it, and its exit status.
+        let (out, cut) = capped_output(sh("printf hello; exit 3"), 5).await.unwrap();
+        assert_eq!((out.stdout.as_slice(), cut, out.status.code()), (&b"hello"[..], false, Some(3)));
+    }
+
+    #[tokio::test]
+    async fn only_the_end_of_a_long_stderr_is_kept() {
+        let (out, _) = capped_output(sh("seq 1 5000 >&2; echo done"), 100).await.unwrap();
+        assert_eq!(out.stdout, b"done\n");
+        assert_eq!(out.stderr.len(), STDERR_KEEP);
+        assert!(out.stderr.ends_with(b"4999\n5000\n"));
+        let mut kept = Vec::new();
+        read_tail(&b"short"[..], STDERR_KEEP, &mut kept).await.unwrap();
+        assert_eq!(kept, b"short");
+    }
+
+    #[test]
+    fn the_longest_honest_listing_fits_the_limit() {
+        // A record at its longest: a 20-digit size, a time to the nanosecond, a 255-byte name.
+        let record = format!("f\t{}\t{}.0123456789\t{}\0", u64::MAX, i64::MAX, "n".repeat(255));
+        assert!(b"LD-OK\n".len() + (MAX_ENTRIES + 1) * record.len() < answer_limit(Op::List));
+        assert!(b"LD-OK 18446744073709551615\n".len() + MAX_PEEK < answer_limit(Op::Peek));
     }
 
     #[test]
