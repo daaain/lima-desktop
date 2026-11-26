@@ -6,6 +6,7 @@
   import { age, bytes } from '$lib/format';
   import { distinctKeys } from '$lib/keys';
   import Guarded from '$lib/Guarded.svelte';
+  import { visible } from '$lib/visible';
   import { countWord, gauges, holdsSentence, unusedHeadline, unusedLede } from '$lib/almanac';
   import { measured } from '$lib/measured.svelte';
   import { podmanScope } from '$lib/perVm';
@@ -108,13 +109,13 @@
   }
 
   async function remove(row: VolumeRow) {
-    if (!confirm(`Remove the volume '${row.v.name}' from ${row.vm}? Its data is gone for good.`)) return;
+    if (!confirm(`Remove the volume '${visible(row.v.name)}' from ${row.vm}? Its data is gone for good.`)) return;
     removing = `${row.vm}/${row.v.name}`;
     error = null;
     try {
       await api.volumeRemove(row.vm, row.v.name);
     } catch (e) {
-      error = `Couldn't remove ${row.v.name} from ${row.vm}: ${e}`;
+      error = `Couldn't remove ${visible(row.v.name)} from ${row.vm}: ${e}`;
     } finally {
       removing = null;
       changed(row.vm);
@@ -142,7 +143,7 @@
     <div class="dots" role="img" aria-label={headline}>
       {#each held as h}
         <span class="dot" class:off={h.used === false} class:unknown={h.used == null}
-          title={`${h.row.v.name} in ${h.row.vm}: ${h.used == null ? 'not measured' : h.used ? 'in use' : 'unused'}`}></span>
+          title={`${visible(h.row.v.name)} in ${h.row.vm}: ${h.used == null ? 'not measured' : h.used ? 'in use' : 'unused'}`}></span>
       {/each}
     </div>
     {#if lede}<p class="lede">{lede}</p>{/if}
@@ -194,7 +195,7 @@
               {@const disk = g.live ? gauges(g.live).disk.size : undefined}
               {@const key = `${row.vm}/${row.v.name}`}
               <div animate:glide>
-                <ItemLine selected={!!open[key]} onselect={() => toggle(key)} title={row.v.name}
+                <ItemLine selected={!!open[key]} onselect={() => toggle(key)} title={visible(row.v.name)}
                   second={`created ${age(row.created)}${row.v.driver !== 'local' ? ` · ${row.v.driver} driver` : ''}`}
                   secondTitle={`In the VM at ${row.v.mountpoint}; created ${new Date(row.v.createdAt).toLocaleString('en-GB')}`}
                   size={u?.size} {scale} sizeLabel={u ? diskShare(u.size, disk) : 'not measured'}
@@ -202,7 +203,7 @@
                   removable={(u?.users ?? 0) === 0 && removing !== `${row.vm}/${row.v.name}`}
                   removeTitle={(u?.users ?? 0) > 0 ? 'In use — remove its containers first' : 'Deletes its data for good'}
                   onremove={() => remove(row)}>
-                  {#snippet name()}{row.v.name}{/snippet}
+                  {#snippet name()}<bdi>{visible(row.v.name)}</bdi>{/snippet}
                 </ItemLine>
                 {#if open[key]}
                   <div transition:unfold>
@@ -218,7 +219,7 @@
     {/each}
   </div>
   {#if largest}
-    <p class="note">Size bars share one scale: full width is the largest volume listed, {largest.v.name} at {bytes(scale)}. Removing a volume deletes its data for good.</p>
+    <p class="note">Size bars share one scale: full width is the largest volume listed, {visible(largest.v.name)} at {bytes(scale)}. Removing a volume deletes its data for good.</p>
   {/if}
 {/if}
 

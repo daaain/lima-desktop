@@ -9,6 +9,7 @@
   import { band, projectSaid, rowMemory, share } from './almanac';
   import { projectTotals } from './containers';
   import { bytes, cores } from './format';
+  import { visible } from './visible';
   import { range } from './range.svelte';
   import Bar from './Bar.svelte';
   import FoldMark from './FoldMark.svelte';
@@ -35,9 +36,9 @@
 <!-- The whole row folds, as a whole line opens its detail; its name is the button a keyboard or a
      screen reader uses, and a click there reaches the row as any other. -->
 <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions -->
-<div class="project num" role="group" aria-label={`Compose project ${project}`} onclick={ontoggle}>
+<div class="project num" role="group" aria-label={`Compose project ${visible(project)}`} onclick={ontoggle}>
   <div class="who">
-    <h3 class="name serif"><button class="fold" aria-expanded={listed} title={foldAction({ folded, listed }, 'its containers')}><FoldMark folded={!listed} /><span class="text">{project}</span></button></h3>
+    <h3 class="name serif"><button class="fold" aria-expanded={listed} title={foldAction({ folded, listed }, 'its containers')}><FoldMark folded={!listed} /><bdi class="text">{visible(project)}</bdi></button></h3>
     <span class="second">{projectSaid(t)}</span>
   </div>
   <div class="drawn">

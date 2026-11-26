@@ -10,6 +10,7 @@
   import type { ContainerLive } from '$lib/api';
   import { distinctKeys } from '$lib/keys';
   import Guarded from '$lib/Guarded.svelte';
+  import { visible } from '$lib/visible';
   import { podmanFailures, podmanScope } from '$lib/perVm';
   import { withParam } from '$lib/url';
   import ContainerLine from '$lib/ContainerLine.svelte';
@@ -93,7 +94,7 @@
 {#if all.length}
   <div class="summary">
     <div class="dots" role="img" aria-label={containersHeadline(all)}>
-      {#each all as { vm, c }}<span class="dot" class:off={c.state !== 'running'} title={`${c.composeService ?? c.name} in ${vm}: ${c.state}`}></span>{/each}
+      {#each all as { vm, c }}<span class="dot" class:off={c.state !== 'running'} title={`${visible(c.composeService ?? c.name)} in ${vm}: ${c.state}`}></span>{/each}
     </div>
     {#if exitedSentence(all)}<p class="lede">{exitedSentence(all)}</p>{/if}
   </div>

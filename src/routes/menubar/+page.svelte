@@ -273,7 +273,7 @@
             <li class="row sub" class:hl={lit === vmLit(l.name)} data-container={c.name} data-in={l.name} title={containerTip(tab, c)}
               onmouseenter={() => (lit = vmLit(l.name))} onmouseleave={() => (lit = null)}>
               <span></span>
-              <span class="part"><span class="name serif">{c.name}</span><span class="fig num">{amount(tab, c.now)}</span></span>
+              <span class="part"><bdi class="name serif">{c.name}</bdi><span class="fig num">{amount(tab, c.now)}</span></span>
               {@render vmAside(j)}
             </li>
           {/each}

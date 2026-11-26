@@ -4,6 +4,7 @@
 import type { Instance, Snapshot, Stack, StackMetric, TopApp, TopApps, Warn } from './api';
 import { lineName } from './containers';
 import { bytes, decimalBytes } from './format';
+import { visible } from './visible';
 import { inRange, rangeLabel, rangeMs, theLast, type AnyRangeKey } from './ranges';
 
 export { rangeLabel };
@@ -483,7 +484,7 @@ export function topContainers(snap: Snapshot | null | undefined, tab: Tab, n = T
     .flatMap((v) =>
       v.containers
         .filter((c) => c.state === 'running' && c.latest[key] != null)
-        .map((c) => ({ vm: v.instance.name, id: c.id, name: lineName(c), container: c.name, now: c.latest[key] })),
+        .map((c) => ({ vm: v.instance.name, id: c.id, name: visible(lineName(c)), container: visible(c.name), now: c.latest[key] })),
     );
   return pickTop(all.filter((c) => showsAny(tab, c.now)), (c) => c.now, n);
 }

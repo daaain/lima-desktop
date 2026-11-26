@@ -6,6 +6,7 @@
   import { age, bytes, shortId } from '$lib/format';
   import { distinctKeys } from '$lib/keys';
   import Guarded from '$lib/Guarded.svelte';
+  import { visible } from '$lib/visible';
   import { countWord, gauges, holdsSentence, unusedHeadline, unusedLede } from '$lib/almanac';
   import { danglingCount, filterImages, freesLabel, freesTitle, imageRows, imageUsers, inUse, listedImages, removal, splitReference, type ImageRow, type Removal } from '$lib/images';
   import { measured } from '$lib/measured.svelte';
@@ -131,14 +132,14 @@
   }
 
   async function remove(row: ImageRow) {
-    const what = row.tagged ? `the tag '${row.name}' (the image goes with its last tag)` : `the untagged image ${shortId(row.id)}`;
+    const what = row.tagged ? `the tag '${visible(row.name)}' (the image goes with its last tag)` : `the untagged image ${shortId(row.id)}`;
     if (!confirm(`Remove ${what} from ${row.vm}?`)) return;
     removing = `${row.vm}/${row.reference}`;
     error = null;
     try {
       await api.imageRemove(row.vm, row.reference);
     } catch (e) {
-      error = `Couldn't remove ${row.name} from ${row.vm}: ${e}`;
+      error = `Couldn't remove ${visible(row.name)} from ${row.vm}: ${e}`;
     } finally {
       removing = null;
       changed(row.vm);
@@ -158,7 +159,7 @@
   <div class="summary">
     <div class="dots" role="img" aria-label={headline}>
       {#each held as h}
-        <span class="dot" class:off={!h.used} title={`${h.image.tags[0] ?? `untagged ${shortId(h.image.id)}`} in ${h.vm}: ${h.used ? 'in use' : 'unused'}`}></span>
+        <span class="dot" class:off={!h.used} title={`${h.image.tags[0] != null ? visible(h.image.tags[0]) : `untagged ${shortId(h.image.id)}`} in ${h.vm}: ${h.used ? 'in use' : 'unused'}`}></span>
       {/each}
     </div>
     {#if lede}<p class="lede">{lede}</p>{/if}
@@ -213,7 +214,7 @@
               {@const [from, short] = splitReference(row.name)}
               {@const key = `${row.vm}/${row.reference}`}
               <div animate:glide>
-                <ItemLine selected={!!open[key]} onselect={() => toggle(key)} title={row.tagged ? row.name : `untagged image ${row.id}`}
+                <ItemLine selected={!!open[key]} onselect={() => toggle(key)} title={row.tagged ? visible(row.name) : `untagged image ${row.id}`}
                   second={`${shortId(row.id)} · ${row.created ? `built ${age(row.created)}` : 'no build date'}`}
                   secondTitle={row.created ? `Built ${new Date(row.created * 1000).toLocaleString('en-GB')}` : "The image doesn't record when it was built"}
                   size={row.size} frees={r && otherTags.length ? 0 : r?.frees} {scale} sizeLabel={freesLabel(r, row.size, otherTags.length)}
@@ -222,11 +223,11 @@
                   removable={!h?.used && removing !== `${row.vm}/${row.reference}`}
                   removeTitle={h?.used ? 'In use — remove its containers first' : row.tagged ? 'Removes this tag; the image goes with its last one' : undefined}
                   onremove={() => remove(row)}>
-                  {#snippet name()}{#if row.tagged}<span class="from">{from}</span>{short}{:else}<span class="from">untagged</span>{/if}{/snippet}
+                  {#snippet name()}{#if row.tagged}<bdi><span class="from">{visible(from)}</span>{visible(short)}</bdi>{:else}<span class="from">untagged</span>{/if}{/snippet}
                 </ItemLine>
                 {#if open[key]}
                   <div transition:unfold>
-                    <ImageLayers vm={row.vm} id={row.id} title={row.tagged ? row.name : `untagged ${shortId(row.id)}`} onclose={() => toggle(key)} />
+                    <ImageLayers vm={row.vm} id={row.id} title={row.tagged ? visible(row.name) : `untagged ${shortId(row.id)}`} onclose={() => toggle(key)} />
                   </div>
                 {/if}
               </div>
@@ -238,7 +239,7 @@
     {/each}
   </div>
   <p class="note">
-    Size bars share one scale: full width is the largest image listed{#if largest}, {largest.tagged ? largest.name : `untagged ${shortId(largest.id)}`} at {bytes(scale)}{/if}.
+    Size bars share one scale: full width is the largest image listed{#if largest}, {largest.tagged ? visible(largest.name) : `untagged ${shortId(largest.id)}`} at {bytes(scale)}{/if}.
     An image's size counts the layers it shares with others, so sizes don't add up;
     {#if everyMeasured}the solid part is what removing it would free, with the build steps podman hides and removes along with it.{:else}measure sizes to see what removing each would free.{/if}
   </p>

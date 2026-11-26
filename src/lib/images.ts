@@ -3,6 +3,7 @@ import type { Image, Snapshot } from './api';
 import { list } from './almanac';
 import { bytes, shortId } from './format';
 import { matches } from './search';
+import { visible } from './visible';
 
 export interface ImageRow {
   vm: string;
@@ -30,7 +31,7 @@ export function imageRows(vm: string, images: Image[]): ImageRow[] {
 /** The containers in `vm` running (or stopped on) image `imageId`. Images are per VM. */
 export function imageUsers(s: Snapshot | null, vm: string, imageId: string): string[] {
   const v = s?.vms.find((v) => v.instance.name === vm);
-  return (v?.containers ?? []).filter((c) => c.imageId === imageId).map((c) => c.composeService ?? c.name);
+  return (v?.containers ?? []).filter((c) => c.imageId === imageId).map((c) => visible(c.composeService ?? c.name));
 }
 
 /**
@@ -157,7 +158,7 @@ export function freesTitle(r: Removal, size: number, otherTags: string[]): strin
   const n = otherTags.length;
   const lines = [
     n
-      ? `It has ${n === 1 ? 'another tag' : `${n} other tags`}, ${list(otherTags)}: removing this one only untags it. Removing the last would free ${amount}${withIt}.`
+      ? `It has ${n === 1 ? 'another tag' : `${n} other tags`}, ${list(otherTags.map(visible))}: removing this one only untags it. Removing the last would free ${amount}${withIt}.`
       : `Removing it frees ${amount}${withIt}.`,
   ];
   if (!all) {

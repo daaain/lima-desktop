@@ -1787,6 +1787,79 @@ test("A folder whose listing can't be drawn says so under its path, which still 
   await close();
 });
 
+// A hostile guest's names, made to deceive: a right-to-left override that turns the end of a name
+// round ("evil" RLO "gnp.exe" reads "evilexe.png"), a zero-width space that makes two names look
+// alike, and a name 300 characters long.
+function craftedNames() {
+  const RLO = String.fromCodePoint(0x202e), ZWSP = String.fromCodePoint(0x200b);
+  const long = `${'x'.repeat(299)}y`;
+  const modified = 1_794_000_000;
+  window.__fakeAnswer = (cmd, args, answer) => {
+    if (cmd === 'snapshot') return {
+      ...answer,
+      vms: answer.vms.map((v) => v.instance.name !== 'atlas' ? v : {
+        ...v,
+        containers: v.containers.map((c, i) => (
+          i === 0 ? { ...c, name: `evil${RLO}gnp.exe`, composeService: `web${RLO}1`, composeProject: `atlas${ZWSP}` }
+          : i === 1 ? { ...c, name: long, composeService: undefined, composeProject: undefined, image: `localhost/${long}:latest` }
+          : c)),
+      }),
+    };
+    // atlas_pgdata stays as it is, so its files open.
+    if (cmd === 'volumes' && args.vm === 'atlas') return answer.map((v, i) => (i === 3 ? { ...v, name: `data${RLO}txt.exe` } : i === 4 ? { ...v, name: long } : v));
+    if (cmd === 'images' && args.vm === 'atlas') return answer.map((im, i) => (i === 0 ? { ...im, tags: [`localhost/app${RLO}:latest`] } : im));
+    if (cmd === 'guest_files' && args.path === '') return { ...answer, entries: [...answer.entries, { name: `notes${RLO}txt.sh`, kind: 'file', size: 1, modified }, { name: long, kind: 'file', size: 1, modified }] };
+    return answer;
+  };
+}
+
+/** What the page shows that would hide or reorder text, in its text and its tooltips. */
+const hidden = (page) => page.evaluate(() => {
+  // Line breaks and tabs are a tooltip's own.
+  const re = /(?![\n\t])[\p{Cf}\p{Cc}]/u;
+  const texts = [document.body.innerText, ...[...document.querySelectorAll('[title], [aria-label], [aria-description]')].flatMap((e) => [e.getAttribute('title'), e.getAttribute('aria-label'), e.getAttribute('aria-description')]).filter(Boolean)];
+  return texts.filter((t) => re.test(t));
+});
+const sideways = (page) => page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+
+test("A guest's names are shown as they are: what would hide or turn text round is spelt out, and a long one stays in its line", async () => {
+  for (const [path, check] of [
+    ['/containers', async (page) => {
+      await page.locator('.line .name', { hasText: 'web⟨U+202E⟩1' }).waitFor();
+      assert.equal(await page.locator('.line .name', { hasText: 'web⟨U+202E⟩1' }).getAttribute('title'), 'evil⟨U+202E⟩gnp.exe');
+      // Set apart from what's beside it, so it can't reorder that either.
+      assert.equal(await page.locator('.line .name bdi', { hasText: 'web⟨U+202E⟩1' }).count(), 1);
+      assert.match(await page.locator('main').innerText(), /atlas⟨U\+200B⟩/);
+      // The long name is cut short in its line, which keeps to the page.
+      const line = page.locator('.line', { has: page.locator(`.name[title="${'x'.repeat(299)}y"]`) });
+      const [l, lines] = [await line.boundingBox(), await page.locator('.lines').boundingBox()];
+      assert.ok(l.x + l.width <= lines.x + lines.width + 1, 'the line keeps to the list');
+    }],
+    ['/', (page) => page.locator('article .dot[title^="web⟨U+202E⟩1"]').waitFor()],
+    ['/menubar?tab=mem', async (page) => {
+      await page.locator('.legend .row[data-container]').first().waitFor();
+    }],
+    ['/images', (page) => page.locator('.line .name', { hasText: 'app⟨U+202E⟩:latest' }).waitFor()],
+    ['/volumes', async (page) => {
+      await page.locator('.line .name', { hasText: 'data⟨U+202E⟩txt.exe' }).waitFor();
+      await page.locator('.line', { has: page.locator('.name', { hasText: /^atlas_pgdata$/ }) }).first().click();
+      const detail = page.locator('section.detail');
+      await detail.locator('.entries .name', { hasText: 'notes⟨U+202E⟩txt.sh' }).waitFor();
+      const [entry, list] = [await detail.locator('.entries li', { hasText: 'xxxxy' }).boundingBox(), await detail.locator('.entries').boundingBox()];
+      assert.ok(entry.width <= list.width + 1, "the long file name keeps to the folder's list");
+    }],
+  ]) {
+    for (const width of [1320, 420]) {
+      const { page, errors, close } = await open(path, { width, init: craftedNames });
+      await check(page);
+      assert.deepEqual(await hidden(page), [], `${path} at ${width} px: text that would hide or reorder`);
+      assert.ok(await sideways(page) <= 0, `${path} at ${width} px scrolls sideways`);
+      assert.deepEqual(errors, [], path);
+      await close();
+    }
+  }
+});
+
 test('Images and Volumes open on what was already fetched', async () => {
   const { page, errors, close } = await open('/');
   await page.locator('article').first().waitFor();

@@ -5,6 +5,7 @@ import type { Hint } from './rightsize';
 import { bytes, cores, MiB, permille, uptime } from './format';
 import type { RichTip, TipRow } from './richTip';
 import { inRange, rangeMs, theLast, type RangeKey } from './ranges';
+import { visible } from './visible';
 
 /** Past this share of an allocation a figure, its bar and its sentence turn to the warning colour. */
 export const WARN_PCT = 75;
@@ -726,7 +727,7 @@ export function exitedSentence(rows: { vm: string; c: Listed }[]): string {
   const down = rows.filter((r) => r.c.state !== 'running');
   if (down.length === 0) return '';
   if (down.length > 3) return `${countWord(down.length)} are not running.`;
-  const named = down.map((r) => `${r.c.composeService ?? r.c.name} in ${r.vm}`);
+  const named = down.map((r) => `${visible(r.c.composeService ?? r.c.name)} in ${r.vm}`);
   return `${down.length === 1 ? 'One is' : `${countWord(down.length)} are`} not running: ${list(named)}.`;
 }
 

@@ -10,6 +10,7 @@
   import { theLast } from '$lib/ranges';
   import Bar from '$lib/Bar.svelte';
   import Guarded from '$lib/Guarded.svelte';
+  import { visible } from '$lib/visible';
   import Capacity from '$lib/Capacity.svelte';
   import Sketch from '$lib/Sketch.svelte';
   import VmActions from '$lib/VmActions.svelte';
@@ -164,7 +165,7 @@
             <div class="containers num">
               <span class="label narrow">Containers</span>
               <div class="dots" role="img" aria-label={`${ctRunning} of ${vm.containers.length} containers running`}>
-                {#each vm.containers as c}<span class="dot" class:off={c.state !== 'running'} title={`${c.composeService ?? c.name}: ${c.state}`}></span>{/each}
+                {#each vm.containers as c}<span class="dot" class:off={c.state !== 'running'} title={`${visible(c.composeService ?? c.name)}: ${c.state}`}></span>{/each}
               </div>
               {#if vm.podmanError || !i.podmanSocket}
                 <span class="muted">{vm.podmanError ? 'podman not readable' : 'no podman socket'}</span>

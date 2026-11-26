@@ -16,6 +16,7 @@
   import Sizing from '$lib/Sizing.svelte';
   import ContainerLine from '$lib/ContainerLine.svelte';
   import Guarded from '$lib/Guarded.svelte';
+  import { visible } from '$lib/visible';
   import ContainerDetail from '$lib/ContainerDetail.svelte';
   import ProjectGroup from '$lib/ProjectGroup.svelte';
   import OrderPicker from '$lib/OrderPicker.svelte';
@@ -261,7 +262,7 @@
                 <td class="when num">{when(row.ts)}</td>
                 <td>
                   {#if who}
-                    <span class="cname">{who.name}</span>{#if who.context}<span class="muted cid">{who.context}</span>{/if}
+                    <bdi class="cname">{who.name}</bdi>{#if who.context}<bdi class="muted cid">{who.context}</bdi>{/if}
                     {#if who.removed}<span class="badge" title="This container no longer exists; its name comes from the history.">removed</span>{/if}
                   {:else if row.kill}
                     <span class="cname">not in a container</span>
@@ -274,7 +275,7 @@
                   {@const e = row.kill}
                   {@const level = oomLevel(e)}
                   <td>
-                    {e.process ?? '–'}{#if e.pid != null}<span class="muted cid">pid {e.pid}</span>{/if}
+                    <bdi>{e.process != null ? visible(e.process) : '–'}</bdi>{#if e.pid != null}<span class="muted cid">pid {e.pid}</span>{/if}
                     {#if e.anonRss != null}<span class="muted cid" title="anon-rss: the killed process's own memory">{bytes(e.anonRss)}</span>{/if}
                   </td>
                   <td><span class="badge" class:alert={level === 'vm'}>{OOM_LEVEL_LABEL[level]}</span></td>
