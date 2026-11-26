@@ -1,7 +1,7 @@
 //! The guest side of a VM's metrics: `probe.sh` streamed over Lima's own ssh, parsed into blocks,
 //! and turned into the VM's metric row (rates from consecutive blocks).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::process::Stdio;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
@@ -32,6 +32,9 @@ pub struct Block {
     pub disks: Vec<(u64, u64)>,
     /// container id → its cgroup's readings, where cgroup v2 has them.
     pub cgroups: HashMap<String, Cgroup>,
+    /// Ids on more than one `G` line of this block. Which line is the container's own can't be
+    /// told, so none of them is in `cgroups`.
+    pub contested: HashSet<String>,
     /// The guest's own memory (anon + shmem, bytes) by who holds it, from `S` lines: `runtime`
     /// (the user's systemd instance less its containers: rootless podman), `system` (system.slice
     /// and init.scope), `ssh` (the login sessions); and `sessions`, how many of those there are.
@@ -49,6 +52,11 @@ pub struct Cgroup {
     /// `anon` + `shmem` from `memory.stat`, in bytes: what its processes hold themselves, which only
     /// swap could take away. podman's figure also counts active file cache and reclaimable slab.
     pub own: Option<u64>,
+}
+
+/// Whether `id` is a podman container's full id: 64 lowercase hex digits, as podman writes them.
+pub fn is_container_id(id: &str) -> bool {
+    id.len() == 64 && id.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
 }
 
 fn num(s: Option<&str>) -> Option<u64> {
@@ -90,9 +98,18 @@ pub fn parse_line(block: &mut Block, line: &str) -> bool {
             }
         }
         Some("G") => {
-            if let Some(id) = f.next() {
+            // The probe finds containers by their cgroups' names, and a container running systemd
+            // can name cgroups inside its own as it likes. The probe looks at none of those, but
+            // the id is checked here as well, and an id that comes twice is believed on neither
+            // line: the last one winning would let one cgroup's readings stand for another's.
+            if let Some(id) = f.next().filter(|id| is_container_id(id))
+                && !block.contested.contains(id)
+            {
                 let cgroup = Cgroup { peak: num(f.next()), oom_kills: num(f.next()), own: num(f.next()) };
-                block.cgroups.insert(id.to_string(), cgroup);
+                if block.cgroups.insert(id.to_string(), cgroup).is_some() {
+                    block.cgroups.remove(id);
+                    block.contested.insert(id.to_string());
+                }
             }
         }
         _ => {}
@@ -238,12 +255,13 @@ O 0
 D 100000000 20000000
 D 100000000 20000000
 G 0123456789012345678901234567890123456789012345678901234567890123 52428800 0 31457280
-G abcdef 1 1 -
+G abcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcd 1 1 -
 S runtime 524288000
 S system 144703488
 S ssh 4194304
 S sessions 2
 .";
+    const OTHER: &str = "abcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcd";
 
     fn parse(text: &str) -> Block {
         let mut b = Block::default();
@@ -271,13 +289,100 @@ S sessions 2
         let b = parse(BLOCK_A);
         let id = "0123456789012345678901234567890123456789012345678901234567890123";
         assert_eq!(b.cgroups[id], Cgroup { peak: Some(52_428_800), oom_kills: Some(0), own: Some(31_457_280) });
-        assert_eq!(b.cgroups["abcdef"].own, None, "unreadable: -");
+        assert_eq!(b.cgroups[OTHER].own, None, "unreadable: -");
     }
 
     #[test]
     fn a_container_line_from_an_older_probe_has_no_own_memory() {
-        let b = parse("G abcdef 4096 2\n.");
-        assert_eq!(b.cgroups["abcdef"], Cgroup { peak: Some(4096), oom_kills: Some(2), own: None });
+        let b = parse(&format!("G {OTHER} 4096 2\n."));
+        assert_eq!(b.cgroups[OTHER], Cgroup { peak: Some(4096), oom_kills: Some(2), own: None });
+    }
+
+    #[test]
+    fn a_container_line_needs_a_whole_container_id() {
+        let upper = OTHER.to_uppercase();
+        let short = &OTHER[1..];
+        let long = format!("{OTHER}0");
+        let b =
+            parse(&format!("G abcdef 1 1 1\nG {upper} 1 1 1\nG {short} 1 1 1\nG {long} 1 1 1\nG ../{short} 1 1 1\n."));
+        assert!(b.cgroups.is_empty(), "{:?}", b.cgroups.keys());
+    }
+
+    #[test]
+    fn an_id_on_two_lines_of_a_block_is_believed_on_neither() {
+        // Which is the container's own can't be told, so neither stands for it: its readings are
+        // missing for the block, rather than perhaps another cgroup's.
+        let b = parse(&format!("G {OTHER} 1 0 1\nG {OTHER} 2 5 2\nG {OTHER} 3 9 3\n."));
+        assert!(!b.cgroups.contains_key(OTHER), "{:?}", b.cgroups);
+        let next = parse(&format!("G {OTHER} 1 0 1\n."));
+        assert_eq!(next.cgroups[OTHER].peak, Some(1), "the next block starts afresh");
+    }
+
+    /// The script up to its loop: its settings and functions, for a test to call.
+    fn script_functions() -> &'static str {
+        &SCRIPT[..SCRIPT.find("\nwhile :; do").expect("the probe's loop")]
+    }
+
+    /// `find_scopes` run under this machine's `sh` against a made-up cgroup tree: `(id, path
+    /// under the tree)` for each scope it keeps.
+    fn find_scopes_in(dirs: &[&str]) -> Vec<(String, String)> {
+        let root = tempfile::tempdir().unwrap();
+        for d in dirs {
+            std::fs::create_dir_all(root.path().join(d)).unwrap();
+        }
+        let out = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(format!("{}\nfind_scopes \"$1\"\nprintf %s \"$scopes\"", script_functions()))
+            .arg("sh")
+            .arg(root.path())
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        let prefix = format!("{}/", root.path().display());
+        let mut found: Vec<(String, String)> = String::from_utf8(out.stdout)
+            .unwrap()
+            .lines()
+            .map(|l| {
+                let (id, path) = l.split_once(' ').unwrap();
+                (id.to_string(), path.strip_prefix(&prefix).unwrap_or(path).to_string())
+            })
+            .collect();
+        found.sort();
+        found
+    }
+
+    #[test]
+    fn the_probe_finds_containers_scopes_but_not_one_made_inside_another() {
+        let id = |c: char| c.to_string().repeat(64);
+        let (a, b, c, d, e, f) = (id('a'), id('b'), id('c'), id('d'), id('e'), id('f'));
+        let pod = id('9');
+        let rootless = "user.slice/user-501.slice/user@501.service/user.slice";
+        let found = find_scopes_in(&[
+            &format!("machine.slice/libpod-{a}.scope/container"),
+            // A container running systemd names a cgroup of its own for another container.
+            &format!("machine.slice/libpod-{a}.scope/container/libpod-{b}.scope"),
+            &format!("machine.slice/libpod-{a}.scope/libpod-{b}.scope"),
+            &format!("machine.slice/libpod-conmon-{a}.scope"),
+            &format!("machine.slice/libpod-pod-{pod}.slice/libpod-{c}.scope"),
+            &format!("{rootless}/libpod-{d}.scope"),
+            &format!("machine.slice/libpod-{}.scope", d.to_uppercase()),
+            &format!("machine.slice/libpod-{}.scope", &d[1..]),
+            &format!("machine.slice/libpod-{d}x.scope"),
+            // Spaces, newlines and glob characters in a path are taken as they are.
+            &format!("machine.slice/a b/libpod-{e}.scope"),
+            &format!("machine.slice/*/libpod-{f}.scope"),
+            &format!("machine.slice/libpod-x\nlibpod-{b}.scope"),
+        ]);
+        assert_eq!(
+            found,
+            [
+                (a.clone(), format!("machine.slice/libpod-{a}.scope")),
+                (c.clone(), format!("machine.slice/libpod-pod-{pod}.slice/libpod-{c}.scope")),
+                (d.clone(), format!("{rootless}/libpod-{d}.scope")),
+                (e.clone(), format!("machine.slice/a b/libpod-{e}.scope")),
+                (f.clone(), format!("machine.slice/*/libpod-{f}.scope")),
+            ]
+        );
     }
 
     #[test]

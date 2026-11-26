@@ -10,7 +10,7 @@
 use serde::Serialize;
 
 use crate::journal::Entry;
-use crate::probe::Block;
+use crate::probe::{Block, is_container_id};
 
 pub const CONSTRAINT_MEMCG: &str = "CONSTRAINT_MEMCG";
 pub const CONSTRAINT_NONE: &str = "CONSTRAINT_NONE";
@@ -211,11 +211,6 @@ pub fn libpod_id(path: &str) -> Option<String> {
         let id = id.strip_suffix(".scope").unwrap_or(id);
         is_container_id(id).then(|| id.to_string())
     })
-}
-
-/// Whether `id` is a podman container's full id: 64 lowercase hex digits, as podman writes them.
-pub fn is_container_id(id: &str) -> bool {
-    id.len() == 64 && id.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
 }
 
 fn from_oom_kill(vm: &str, entry: &Entry, f: &OomKill) -> OomEvent {

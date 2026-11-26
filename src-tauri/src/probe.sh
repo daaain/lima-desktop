@@ -26,6 +26,45 @@ rescan=$((5 / interval))
 [ "$rescan" -ge 1 ] || rescan=1
 i=0
 scopes=
+nl='
+'
+# The container id in a podman scope's path, into `id`, or empty if it isn't one: exactly one part
+# of the path is `libpod-<id>[.scope]` (conmon's and a pod's slice aside), it's the last, and the
+# id is 64 lowercase hex digits. Call it with globbing off (set -f).
+scope_id() {
+  id=
+  sc_n=0
+  IFS=/
+  for sc_part in $1; do
+    case $sc_part in libpod-conmon-*|libpod-pod-*) ;; libpod-*) sc_n=$((sc_n + 1)) ;; esac
+  done
+  unset IFS
+  [ "$sc_n" -eq 1 ] || return 0
+  sc_id=${1##*/libpod-}
+  sc_id=${sc_id%.scope}
+  [ ${#sc_id} -eq 64 ] || return 0
+  case $sc_id in *[!0123456789abcdef]*) return 0 ;; esac
+  id=$sc_id
+}
+# The podman containers' cgroups under $1, into `scopes`: one `<id> <path>` per line. A container
+# running systemd can make cgroups inside its own and name them as it likes, one named for another
+# container's id included, whose readings would then be taken for that container's. Podman never
+# puts one container's scope inside another's, so find doesn't look inside one (-prune), and a
+# path naming two isn't taken either. Paths are split on newlines only, with globbing off, so a
+# space or `*` in one is taken as it is.
+find_scopes() {
+  scopes=
+  set -f
+  IFS=$nl
+  for fs_path in $(find "$1" -maxdepth 9 -type d -name 'libpod-*' ! -name 'libpod-conmon-*' ! -name 'libpod-pod-*' -prune -print 2>/dev/null); do
+    unset IFS
+    case $fs_path in "$1"/*) ;; *) continue ;; esac
+    scope_id "$fs_path"
+    [ -z "$id" ] || scopes="$scopes$id $fs_path$nl"
+  done
+  unset IFS
+  set +f
+}
 # A cgroup's anon + shmem in bytes, into `own` (- if unreadable): builtins only, no subshell.
 own_of() {
   own=-
@@ -59,14 +98,16 @@ while :; do
   done < /proc/vmstat
   df -kP / "$store" 2>/dev/null | { read -r _; while read -r _ size used _; do echo "D $size $used"; done; }
   if [ $((i % rescan)) -eq 0 ] && [ -f /sys/fs/cgroup/cgroup.controllers ]; then
-    scopes=$(find /sys/fs/cgroup -maxdepth 9 -type d -name 'libpod-*' ! -name 'libpod-conmon-*' 2>/dev/null)
+    find_scopes /sys/fs/cgroup
   fi
   incontainers=0
   insystem=0
-  for s in $scopes; do
-    id=${s##*/libpod-}
-    id=${id%.scope}
-    [ ${#id} -eq 64 ] || continue
+  set -f
+  IFS=$nl
+  for line in $scopes; do
+    unset IFS
+    id=${line%% *}
+    s=${line#* }
     pk=-
     ok=-
     if [ -r "$s/memory.peak" ]; then read -r pk < "$s/memory.peak"; fi
@@ -86,6 +127,8 @@ while :; do
       */system.slice/*) [ "$own" = - ] || insystem=$((insystem + own)) ;;
     esac
   done
+  unset IFS
+  set +f
   if [ -f /sys/fs/cgroup/cgroup.controllers ]; then
     runtime=0
     for u in /sys/fs/cgroup/user.slice/user-*.slice/user@*.service; do
