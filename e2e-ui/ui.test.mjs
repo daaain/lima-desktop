@@ -9,7 +9,8 @@ import { mkdir } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { after, before, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { chromium } from 'playwright';
+import { chromium, webkit } from 'playwright';
+import { configuredPolicy, serveAsTauri } from './tauri-csp.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const shots = resolve(root, process.env.LD_SCREENSHOT_DIR ?? '.snapshots/ui');
@@ -2121,3 +2122,87 @@ test("A range whose charts fail to load shows none, not the previous range's", a
   assert.deepEqual(errors, []);
   await close();
 });
+
+// The app as Tauri serves a built one, under the policy in tauri.conf.json (tauri-csp.mjs): every
+// page draws, moves and opens what it should without the policy refusing anything, while what an
+// injected script would do (run inline code, reach a server) is refused. In Chromium, and in WebKit,
+// Tauri's engine on macOS and Linux, where it's installed (CI installs Chromium only).
+for (const engine of ['chromium', 'webkit']) {
+  test(`Every page runs under the app's Content Security Policy, which refuses an injected script (${engine})`, async (t) => {
+    const policy = await configuredPolicy(join(root, 'src-tauri/tauri.conf.json'));
+    assert.ok(policy, 'tauri.conf.json sets no Content Security Policy');
+    const launched = engine === 'chromium' ? browser : await webkit.launch().catch(() => null);
+    if (!launched) return t.skip("Playwright's WebKit isn't installed");
+    const served = await serveAsTauri(join(root, 'build'), policy);
+    const context = await launched.newContext({ viewport: { width: 1320, height: 900 }, locale: 'en-GB', timezoneId: 'UTC' });
+    try {
+      // The clock first, as open() has it: the fake backend reads the time as it loads.
+      await context.clock.setFixedTime(NOW);
+      await context.addInitScript({ path: join(root, 'e2e-ui/fake-backend.js') });
+      await context.addInitScript(() => {
+        window.__refused = [];
+        window.addEventListener('securitypolicyviolation', (e) => window.__refused.push(`${e.effectiveDirective} refused ${e.blockedURI || 'inline'}: ${e.sample}`), true);
+      });
+      const visit = async (path, use) => {
+        const page = await context.newPage();
+        const errors = [];
+        page.on('pageerror', (e) => errors.push(String(e)));
+        page.on('console', (m) => m.type() === 'error' && errors.push(m.text()));
+        const response = await page.goto(served.base + path);
+        assert.match(response.headers()['content-security-policy'], /script-src 'self' 'sha256-/, 'the inline scripts are hashed into the policy');
+        await use(page, errors);
+        await page.waitForTimeout(300);
+        assert.deepEqual(await page.evaluate(() => window.__refused), [], `${path}: what the policy refused`);
+        assert.deepEqual(errors, [], path);
+        await page.close();
+      };
+      await visit('/', async (page, errors) => {
+        // The page's own inline scripts ran (the theme's, and SvelteKit's start), its fonts and styles are in.
+        await page.locator('article .sketch:not(.empty)').first().waitFor();
+        await page.evaluate(() => document.fonts.ready);
+        assert.equal(await page.evaluate(() => getComputedStyle(document.querySelector('a.name')).fontFamily.includes('Newsreader')), true);
+        // A bar's card, placed by an inline style.
+        await page.locator('article .meter').first().locator('.bar').hover();
+        await page.locator('[role=tooltip]').first().waitFor();
+        // What an injected script would do is refused, and said (the refusals are reported a moment later).
+        const tried = await page.evaluate(async () => {
+          const s = document.createElement('script');
+          s.textContent = 'window.__ran = true';
+          document.head.append(s);
+          const fetched = await fetch('https://example.com/').then(() => 'fetched', () => 'refused');
+          return { ran: window.__ran ?? false, fetched };
+        });
+        assert.deepEqual(tried, { ran: false, fetched: 'refused' });
+        await page.waitForFunction(() => window.__refused.length >= 2);
+        const refused = await page.evaluate(() => window.__refused.splice(0).map((r) => r.split(' ')[0]));
+        assert.deepEqual(refused.map((d) => d.replace(/-elem$/, '')).sort(), ['connect-src', 'script-src']);
+        assert.deepEqual(errors.splice(0).filter((e) => !/Content Security Policy|ERR_BLOCKED_BY_CSP/.test(e)), []);
+      });
+      await visit('/vm/harbor', async (page) => {
+        // uPlot's charts, a container's detail unfolding, its charts and log.
+        await page.locator('.uplot').first().waitFor();
+        await page.locator('.line').first().click();
+        await page.locator('.detail .uplot').first().waitFor();
+        await page.locator('.detail').getByRole('button', { name: 'logs', exact: true }).click();
+        await page.locator('.ln').first().waitFor();
+      });
+      await visit('/containers', async (page) => {
+        await page.locator('.line').first().waitFor();
+        await page.locator('section .head button, section [aria-expanded]').first().click();
+      });
+      await visit('/volumes', async (page) => {
+        await page.locator('.line', { has: page.locator('.name', { hasText: /^atlas_pgdata$/ }) }).first().click();
+        await page.locator('section.detail').getByRole('button', { name: 'postgresql.conf' }).click();
+        await page.locator('section.detail pre').waitFor();
+      });
+      await visit('/images', (page) => page.locator('.line').first().waitFor());
+      await visit('/settings', (page) => page.getByRole('heading', { level: 1 }).waitFor());
+      // The popover's hatched patterns.
+      await visit('/menubar?tab=mem', (page) => page.locator('svg path.band.vm').first().waitFor());
+    } finally {
+      await context.close();
+      if (launched !== browser) await launched.close();
+      await served.close();
+    }
+  });
+}
