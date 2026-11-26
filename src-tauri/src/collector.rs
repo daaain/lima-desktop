@@ -11,10 +11,10 @@ use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use tokio::io::AsyncReadExt;
 use tokio::sync::{Notify, watch};
 use tokio::task::JoinHandle;
 
+use crate::guest_files;
 use crate::journal::{self, JournalError};
 use crate::lima::{self, Instance};
 use crate::oom::{self, OomEvent};
@@ -29,6 +29,8 @@ const CONTAINERS_EVERY: Duration = Duration::from_secs(3);
 const FLUSH_EVERY: Duration = Duration::from_secs(10);
 const RETAIN_EVERY: Duration = Duration::from_secs(3600);
 const PROBE_RETRY: Duration = Duration::from_secs(5);
+/// Once the probe's output ends, how long its stderr is read for the reason: ssh exits at once.
+const PROBE_STDERR_WAIT: Duration = Duration::from_secs(2);
 /// After the probe sees a kill, give journald a moment to have the kernel's lines.
 const OOM_SETTLE: Duration = Duration::from_secs(3);
 /// Each journal read starts this far before the previous one did; the store drops repeats.
@@ -514,8 +516,12 @@ impl Collector {
                 carried = prev;
                 continue;
             }
-            let mut err = String::new();
-            let _ = stderr.read_to_string(&mut err).await;
+            // Why it ended is ssh's last line. Only the end of stderr is kept, and it's waited for
+            // only so long: the guest can write to it without end, or hold it open.
+            let mut err = Vec::new();
+            let tail = guest_files::read_tail(&mut stderr, guest_files::STDERR_KEEP, &mut err);
+            let _ = tokio::time::timeout(PROBE_STDERR_WAIT, tail).await;
+            let err = String::from_utf8_lossy(&err);
             let last = err.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("probe ended");
             let last = last.to_string();
             self.set_vm(&name, |v| v.live.probe_error = Some(last));
