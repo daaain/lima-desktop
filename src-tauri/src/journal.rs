@@ -10,7 +10,7 @@ use std::process::Output;
 use std::time::Duration;
 use tokio::io::AsyncWriteExt;
 
-use crate::{guest_files, probe};
+use crate::{bounded, probe};
 
 /// One kernel journal entry.
 #[derive(Debug, Clone, PartialEq)]
@@ -78,7 +78,7 @@ async fn run_capped(ssh_config: &str, instance: &str, since_ms: i64) -> std::io:
     let mut stdin = child.stdin.take().expect("piped stdin");
     stdin.write_all(script(since_ms).as_bytes()).await?;
     drop(stdin);
-    guest_files::capped_output(child, MAX_OUTPUT).await
+    bounded::capped_output(child, MAX_OUTPUT).await
 }
 
 /// Run the reader script over Lima's ssh: its raw output, as `read_oom_lines` interprets it (the

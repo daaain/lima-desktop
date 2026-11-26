@@ -1,3 +1,4 @@
+pub mod bounded;
 pub mod collector;
 pub mod commands;
 pub mod guest_files;

@@ -14,7 +14,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::{Notify, watch};
 use tokio::task::JoinHandle;
 
-use crate::guest_files;
+use crate::bounded;
 use crate::journal::{self, JournalError};
 use crate::lima::{self, Instance};
 use crate::oom::{self, OomEvent};
@@ -519,7 +519,7 @@ impl Collector {
             // Why it ended is ssh's last line. Only the end of stderr is kept, and it's waited for
             // only so long: the guest can write to it without end, or hold it open.
             let mut err = Vec::new();
-            let tail = guest_files::read_tail(&mut stderr, guest_files::STDERR_KEEP, &mut err);
+            let tail = bounded::read_tail(&mut stderr, bounded::STDERR_KEEP, &mut err);
             let _ = tokio::time::timeout(PROBE_STDERR_WAIT, tail).await;
             let err = String::from_utf8_lossy(&err);
             let last = err.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("probe ended");
