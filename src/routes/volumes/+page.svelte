@@ -181,7 +181,7 @@
       {@const listed = listsLines({ folded: vmFolds.volumes.has(g.vm), searching: query.trim() !== '' || vmFilter != null })}
       <section animate:glide>
         <Guarded said={`Something ${g.vm} reported couldn't be drawn.`} retry={g}>
-        {@const lineKeys = distinctKeys(g.lines, (row) => row.v.name)}
+          {@const lineKeys = distinctKeys(g.lines, (row) => row.v.name)}
           <GroupHead vm={g.vm} live={g.live} sentence={g.sentence} what="volumes" said={said[g.vm]}
             folded={vmFolds.volumes.has(g.vm)} listed={listed} ontoggle={() => vmFolds.volumes.toggle(g.vm)}>
             {#snippet actions()}

@@ -21,9 +21,14 @@
     reset?.();
   });
 
+  // Said once for each way it fails, not at every tick it's tried again: a VM that keeps sending
+  // the same bad answer would fill the console all day.
+  let lastSaid = '';
   function onfail(error: unknown, reset: () => void) {
     again = reset;
-    console.warn(said, error);
+    const now = String(error);
+    if (now !== lastSaid) console.warn(said, error);
+    lastSaid = now;
   }
 </script>
 

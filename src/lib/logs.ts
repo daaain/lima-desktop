@@ -3,6 +3,7 @@
 // searched by its words, and filtered by level, stream and time.
 
 import type { RawLogLine } from './api';
+import { bidiVisible } from './visible';
 
 /**
  * How serious a line says it is. Podman keeps no level: only the stream, which says little (many
@@ -33,9 +34,12 @@ const ESCAPES = /(?:\x1b[\]PX^_]|[\x90\x98\x9d\x9e\x9f])[^\x07\x1b\x9c]*(?:\x07|
 // so everything written is shown.
 const CONTROLS = /[\x00-\x08\x0b-\x0c\x0e-\x1f\x7f-\x9f]/g;
 
-/** A line of a log as text: what would drive a terminal taken out, the characters it wrote kept. */
+/**
+ * A line of a log as text: what would drive a terminal taken out, the characters it wrote kept, and
+ * its bidi controls spelt out (`bidiVisible`), so a line can't turn round to pass for another.
+ */
 export const plainText = (line: string) =>
-  line.replace(ESCAPES, '').replace(/[\r\n]+$/, '').replace(/[\r\n]+/g, ' ').replace(CONTROLS, '');
+  bidiVisible(line.replace(ESCAPES, '').replace(/[\r\n]+$/, '').replace(/[\r\n]+/g, ' ').replace(CONTROLS, ''));
 
 const dayOf = (at: number) => new Date(at).toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' });
 

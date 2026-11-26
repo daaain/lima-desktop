@@ -11,3 +11,11 @@ const codePoint = (ch: string) => `⟨U+${ch.codePointAt(0)!.toString(16).toUppe
 
 /** `text` with every character that would hide or reorder text shown as its code point. */
 export const visible = (text: string) => text.replace(HIDDEN, codePoint);
+
+// The bidi controls alone: embeddings, overrides, isolates and marks. Text that's the guest's own
+// writing (a log line) keeps its other format characters, such as the joiner within an emoji, but
+// not these, which can turn the rest of a line round so it passes for another.
+const BIDI = /[\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069]/g;
+
+/** `text` with its bidi controls shown as their code points. */
+export const bidiVisible = (text: string) => text.replace(BIDI, codePoint);

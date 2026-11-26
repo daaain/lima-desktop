@@ -61,6 +61,12 @@ describe('plainText', () => {
     ['progress redrawn with carriage returns', '10%\r50%\r\r100%', '10% 50% 100%'],
   ])('drops %s', (_, line, text) => expect(plainText(line)).toBe(text));
   it('keeps tabs, and text in any script', () => expect(plainText('a\tb\tcafé 日本 😀')).toBe('a\tb\tcafé 日本 😀'));
+  it('spells out what would turn the rest of a line round, and keeps what joins an emoji', () => {
+    // Text is the log's own, in any script, but an override or isolate can make a line pass for
+    // another ("evil" RLO "gnp.exe" reads "evilexe.png"). A zero-width joiner makes 👩‍💻 one emoji.
+    expect(plainText('ok evil\u202Egnp.exe \u2066x\u2069')).toBe('ok evil⟨U+202E⟩gnp.exe ⟨U+2066⟩x⟨U+2069⟩');
+    expect(plainText('👩\u200D💻 שלום')).toBe('👩\u200D💻 שלום');
+  });
   it('is what logLines shows', () => {
     expect(logLines([out('2026-11-10T10:00:00Z \x1b]0;x\x07ERROR \x1b]8;;http://x\x07boom\x1b]8;;\x07\r')])[0]).toMatchObject({ text: 'ERROR boom', level: 'error' });
   });

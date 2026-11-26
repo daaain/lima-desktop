@@ -167,7 +167,7 @@
   {#if full}
     <div class="head">
       <h3 class="serif"><bdi>{name}</bdi></h3>
-      <span class="muted">{image}</span>
+      <span class="muted"><bdi>{image}</bdi></span>
     </div>
     {@render viewer()}
   {/if}
