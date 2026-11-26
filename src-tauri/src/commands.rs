@@ -151,11 +151,14 @@ pub async fn container_logs(
     id: String,
     tail: Option<u32>,
     since: Option<i64>,
+    until: Option<i64>,
 ) -> Result<Vec<LogLine>, String> {
-    // `since` is Unix ms, as every time the UI sends; podman takes seconds.
+    // `since` and `until` are Unix ms, as every time the UI sends. podman takes `since` in seconds
+    // (rounded down, the UI drops what's before it); `until` is said exactly (`podman::logs_path`),
+    // as the UI pages back with it from the oldest line it holds.
     libpod(&c, &vm)
         .await?
-        .logs(&id, tail.unwrap_or(500).min(MAX_LOG_LINES), since.map(|ms| ms.div_euclid(1000)))
+        .logs(&id, tail.unwrap_or(500).min(MAX_LOG_LINES), since.map(|ms| ms.div_euclid(1000)), until)
         .await
         .map_err(err)
 }

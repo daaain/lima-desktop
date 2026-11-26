@@ -36,7 +36,7 @@ async fn lists_stats_logs_and_df_from_a_real_engine() {
     assert!(s.mem_usage > 0, "memory usage reported: {s:?}");
     assert!(s.pids >= 1, "pids reported: {s:?}");
 
-    let logs = pod.logs(&web.id, 5, None).await.expect("logs");
+    let logs = pod.logs(&web.id, 5, None, None).await.expect("logs");
     assert!(logs.iter().any(|l| l.line.contains("tick")), "logs: {logs:?}");
     // Each line starts with when podman recorded it, and says its stream (the container has no TTY).
     assert!(
@@ -49,12 +49,22 @@ async fn lists_stats_logs_and_df_from_a_real_engine() {
         pod.logs(
             &web.id,
             5,
-            Some(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64 + 60)
+            Some(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64 + 60),
+            None
         )
         .await
         .expect("logs since")
         .is_empty()
     );
+    // Up to a moment, as the UI pages back: the oldest line held comes again (its whole
+    // millisecond does), and nothing after that millisecond.
+    let at = |l: &podman::LogLine| {
+        chrono::DateTime::parse_from_rfc3339(l.line.split(' ').next().unwrap()).unwrap().timestamp_millis()
+    };
+    let oldest = at(&logs[0]);
+    let earlier = pod.logs(&web.id, 5, None, Some(oldest)).await.expect("logs until");
+    assert!(earlier.iter().any(|l| l.line == logs[0].line), "the boundary line comes again: {earlier:?}");
+    assert!(earlier.iter().all(|l| at(l) <= oldest), "nothing after it: {earlier:?}");
 
     let inspect = pod.inspect(&web.id).await.expect("inspect");
     assert_eq!(inspect["Id"].as_str(), Some(web.id.as_str()));
