@@ -36,6 +36,8 @@ Markdown is written one line per paragraph and list item, never wrapped by hand,
 
 A debug build (`pnpm tauri dev`, `tauri build --debug`) is a different app to the system: `dev.limadesktop.app.dev` (`dev_apart` in `lib.rs`), so its history, settings and remembered window are its own, its title says "(dev)", and it can run beside the installed app without the two writing over each other's minutes of history.
 
+The Content Security Policy (`security.csp` in `tauri.conf.json`) applies only to a built app: on the desktop, `pnpm tauri dev` loads Vite's dev server without it. So a UI change that might fall foul of it (an inline script, a remote origin, a style attribute) is tried in `tauri build --debug`, or in the UI test that serves the build as Tauri does, policy and all (`e2e-ui/tauri-csp.mjs`). Its names come from guests, whose workloads may be hostile: the policy is what stands between a slip into HTML and every command the app has.
+
 The icon is drawn by `tools/app-icon.mjs` (the masthead's serif L on a white tile, in Playwright's Chromium); `just icon` draws it again and makes every size in `src-tauri/icons/`.
 
 The README's menu bar pictures (`docs/img/menubar*.webp`) are the one set of screenshots committed, as only macOS can draw the items (CoreText sets their text) and CI draws the rest on Linux. `just readme-menubar` redraws them on a Mac when the items or the popover change: the items from `cargo test menubar_readme -- --ignored` (Settings' default items, on a light and a dark menu bar), set by `tools/menubar-readme.mjs` with the popover as the browser tests draw it (under memory on the light one, CPU on the dark, so they show both tabs), as lossless WebP (cwebp).
