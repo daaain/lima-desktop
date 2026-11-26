@@ -5,6 +5,7 @@
 
 use bytes::Bytes;
 use http_body_util::{BodyExt, Empty};
+use hyper::body::{Body, Incoming};
 use hyper::{Method, Request, StatusCode};
 use hyper_util::rt::TokioIo;
 use serde::{Deserialize, Serialize};
@@ -17,6 +18,21 @@ use tokio::net::UnixStream;
 /// its own, so name the oldest one we speak.
 const API: &str = "/v5.0.0/libpod";
 const TIMEOUT: Duration = Duration::from_secs(10);
+
+/// The most of an answer read, in bytes. Whoever holds the guest's podman socket decides what it
+/// sends, and without a limit it could grow the app's memory until the timeout. The largest
+/// answers an honest engine gives are its lists: a container's row with its labels and ports, or an
+/// image's with its tags, is a few kB, and `system/df` lists them all again. A big host with
+/// 10,000 containers and as many images (build steps included, as `images?all=true` lists them)
+/// comes to some 30 MB, so twice that still fits.
+const MAX_BODY: usize = 64 << 20;
+/// A container's inspect: its config, mounts, network and state. Tens of kB, a few hundred with a
+/// long environment or many labels.
+const MAX_INSPECT: usize = 4 << 20;
+/// An error's answer is read only for its message.
+const MAX_ERROR_BODY: usize = 64 << 10;
+/// An error's message, in characters, as it's shown: past this it's cut with an ellipsis.
+const MAX_MESSAGE: usize = 1000;
 
 /// The read-only GETs the collector and the podman views make (a snapshot records each of them).
 pub const CONTAINERS: &str = "/containers/json?all=true";
@@ -46,6 +62,16 @@ pub enum PodmanError {
     UnknownVersion(String),
     #[error("{0}")]
     Unsupported(String),
+    #[error("podman's answer was over {} MiB, more than Lima Desktop reads at once", .0 >> 20)]
+    TooLarge(usize),
+}
+
+// A test body can't fail.
+#[cfg(test)]
+impl From<std::convert::Infallible> for PodmanError {
+    fn from(never: std::convert::Infallible) -> Self {
+        match never {}
+    }
 }
 
 /// Lima Desktop speaks podman 5's libpod API only: older engines are refused, by name, rather
@@ -598,12 +624,71 @@ fn connectable(socket: &Path) -> std::io::Result<PathBuf> {
     Ok(link)
 }
 
+/// A body's first `limit` bytes, and whether there was more. Reading stops at the limit, so what
+/// comes after it is never held.
+async fn read_body<B>(mut body: B, limit: usize) -> Result<(Bytes, bool), PodmanError>
+where
+    B: Body<Data = Bytes> + Unpin,
+    PodmanError: From<B::Error>,
+{
+    let mut buf = Vec::new();
+    while let Some(frame) = body.frame().await {
+        let Ok(data) = frame?.into_data() else { continue };
+        if buf.len() + data.len() > limit {
+            buf.extend_from_slice(&data[..limit - buf.len()]);
+            return Ok((buf.into(), true));
+        }
+        buf.extend_from_slice(&data);
+    }
+    Ok((buf.into(), false))
+}
+
+/// A whole body, refused once it passes `limit` bytes.
+async fn collect_capped<B>(body: B, limit: usize) -> Result<Bytes, PodmanError>
+where
+    B: Body<Data = Bytes> + Unpin,
+    PodmanError: From<B::Error>,
+{
+    match read_body(body, limit).await? {
+        (_, true) => Err(PodmanError::TooLarge(limit)),
+        (bytes, false) => Ok(bytes),
+    }
+}
+
+/// What an error's answer says: libpod's JSON `message`, else the text itself, at most
+/// `MAX_MESSAGE` characters of it.
+fn error_message(body: &[u8]) -> String {
+    let msg = serde_json::from_slice::<serde_json::Value>(body)
+        .ok()
+        .and_then(|v| v.get("message").and_then(|m| m.as_str()).map(String::from))
+        .unwrap_or_else(|| String::from_utf8_lossy(body).into_owned());
+    match msg.char_indices().nth(MAX_MESSAGE) {
+        Some((cut, _)) => format!("{}…", &msg[..cut]),
+        None => msg,
+    }
+}
+
 impl Libpod {
     pub fn new(socket: impl AsRef<Path>) -> Self {
         Libpod { socket: socket.as_ref().to_path_buf() }
     }
 
+    /// A request whose answer is read whole, up to `MAX_BODY`.
     async fn request(&self, method: Method, path: &str) -> Result<Bytes, PodmanError> {
+        self.request_capped(method, path, MAX_BODY).await
+    }
+
+    async fn request_capped(&self, method: Method, path: &str, limit: usize) -> Result<Bytes, PodmanError> {
+        self.exchange(method, path, |body| collect_capped(body, limit)).await
+    }
+
+    /// One request, within `TIMEOUT` from connecting to the answer's last byte. A successful
+    /// answer's body is `read`'s to read; an error's is read for its message.
+    async fn exchange<T, F, Fut>(&self, method: Method, path: &str, read: F) -> Result<T, PodmanError>
+    where
+        F: FnOnce(Incoming) -> Fut,
+        Fut: Future<Output = Result<T, PodmanError>>,
+    {
         let fut = async {
             let connect_err = |e| PodmanError::Connect(self.socket.display().to_string(), e);
             let sock = connectable(&self.socket).map_err(connect_err)?;
@@ -620,15 +705,11 @@ impl Libpod {
                 .expect("a well-formed request");
             let resp = sender.send_request(req).await?;
             let status = resp.status();
-            let body = resp.into_body().collect().await?.to_bytes();
             if !status.is_success() {
-                let msg = serde_json::from_slice::<serde_json::Value>(&body)
-                    .ok()
-                    .and_then(|v| v.get("message").and_then(|m| m.as_str()).map(String::from))
-                    .unwrap_or_else(|| String::from_utf8_lossy(&body).into_owned());
-                return Err(PodmanError::Status(status, msg));
+                let (body, _) = read_body(resp.into_body(), MAX_ERROR_BODY).await?;
+                return Err(PodmanError::Status(status, error_message(&body)));
             }
-            Ok(body)
+            read(resp.into_body()).await
         };
         tokio::time::timeout(TIMEOUT, fut).await.map_err(|_| PodmanError::Timeout)?
     }
@@ -681,7 +762,8 @@ impl Libpod {
     }
 
     pub async fn inspect(&self, id: &str) -> Result<serde_json::Value, PodmanError> {
-        self.get_json(&format!("/containers/{}/json", encode_component(id))).await
+        let path = format!("/containers/{}/json", encode_component(id));
+        Ok(serde_json::from_slice(&self.request_capped(Method::GET, &path, MAX_INSPECT).await?)?)
     }
 
     /// The last `tail` lines, each starting with the RFC 3339 time podman recorded it at and a
@@ -1099,6 +1181,30 @@ mod tests {
         let link = connectable(&sock).unwrap();
         assert!(link.as_os_str().len() <= MAX_SOCKET_PATH);
         assert_eq!(connectable(&link).unwrap(), link, "short paths are used as they are");
+    }
+
+    fn body(bytes: &[u8]) -> http_body_util::Full<Bytes> {
+        http_body_util::Full::new(Bytes::copy_from_slice(bytes))
+    }
+
+    #[tokio::test]
+    async fn an_answer_is_read_up_to_its_limit_and_no_further() {
+        assert_eq!(collect_capped(body(b"0123456789"), 10).await.unwrap(), Bytes::from_static(b"0123456789"));
+        let e = collect_capped(body(&[b'x'; 11]), 10).await.unwrap_err();
+        assert!(matches!(e, PodmanError::TooLarge(10)), "{e:?}");
+        assert_eq!(
+            PodmanError::TooLarge(MAX_BODY).to_string(),
+            "podman's answer was over 64 MiB, more than Lima Desktop reads at once"
+        );
+    }
+
+    #[test]
+    fn an_errors_message_is_kept_short() {
+        assert_eq!(error_message(br#"{"cause":"x","message":"no such container"}"#), "no such container");
+        assert_eq!(error_message(b"plain text"), "plain text");
+        let long = error_message("é".repeat(5000).as_bytes());
+        assert_eq!(long.chars().count(), MAX_MESSAGE + 1);
+        assert!(long.ends_with("é…"));
     }
 
     #[test]
