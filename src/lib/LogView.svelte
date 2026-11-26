@@ -6,7 +6,7 @@
   import { api } from './api';
   import { inOrder } from './inOrder';
   import {
-    fetchedSentence, filterLog, LEVELS, logCounts, logLines, logTime, pieces, shownSentence, tokenize,
+    CUT_SAID, CUT_TIP, fetchedSentence, filterLog, LEVELS, logCounts, logLines, logTime, pieces, shownSentence, tokenize,
     type Level, type LogLine, type Stream, type Token,
   } from './logs';
   import { RANGES, rangeMs, theLast, type RangeKey } from './ranges';
@@ -22,7 +22,8 @@
   // Each line's words, split when a query first needs them.
   let tokens: Token[][] = [];
   const tokensOf = (n: number) => (tokens[n] ??= tokenize(lines![n].text));
-  let fetched = $state<{ tail: number; since: number | null; over: RangeKey | null } | null>(null);
+  // `tooMuch`: the backend left older lines out to keep its answer within its size.
+  let fetched = $state<{ tail: number; since: number | null; over: RangeKey | null; tooMuch: boolean } | null>(null);
   let error = $state<string | null>(null);
 
   let query = $state('');
@@ -46,7 +47,7 @@
       (raw) => {
         tokens = [];
         lines = logLines(raw);
-        fetched = want;
+        fetched = { ...want, tooMuch: !!raw[0]?.earlierDropped && raw.length < want.tail };
       },
       (e) => (error = String(e)),
     );
@@ -59,7 +60,9 @@
   // Level chips only when some line says one; stream chips only when both streams wrote some.
   const levelChips = $derived(counts && counts.levels.none < lines!.length ? LEVELS.filter((l) => counts.levels[l.key] > 0) : []);
   const streamChips = $derived(counts && counts.streams.stdout && counts.streams.stderr ? (['stdout', 'stderr'] as const) : []);
-  const more = $derived(lines && fetched && lines.length >= fetched.tail ? TAILS.find((t) => t > fetched!.tail) : undefined);
+  // A longer tail only where this one was full: past the backend's size, asking for more lines
+  // brings no more of them.
+  const more = $derived(lines && fetched && !fetched.tooMuch && lines.length >= fetched.tail ? TAILS.find((t) => t > fetched!.tail) : undefined);
 
   // The newest lines are what's wanted: start at the end, and go back to it as the filter changes.
   $effect(() => {
@@ -143,7 +146,7 @@
   {#if error}<p class="error">{error}</p>{/if}
   {#if lines && fetched}
     <p class="note num">
-      {fetchedSentence(lines.length, fetched.tail, fetched.over && theLast(fetched.over))}
+      {fetchedSentence({ n: lines.length, tail: fetched.tail, over: fetched.over && theLast(fetched.over), tooMuch: fetched.tooMuch })}
       {#if more}<button class="more" onclick={() => (tail = more!)}>Fetch up to {more.toLocaleString('en-GB')}</button>{/if}
       {#if filtering}<span class="shown">{shownSentence(shown.length, lines.length, drawn.length)}</span>{/if}
     </p>
@@ -152,7 +155,7 @@
     {#if lines == null}…{/if}
     {#each drawn as s (s.n)}
       {#if s.day}<div class="day">{s.day}</div>{/if}
-      <div class="ln" data-n={s.n} data-level={s.line.level}><span class="t" title={stamp(s.line)}>{s.line.at != null ? logTime(s.line.at) : ''}</span><span class="x">{#each pieces(s.line.text, s.marks) as p}{#if p.mark}<mark>{p.text}</mark>{:else}{p.text}{/if}{/each}</span></div>
+      <div class="ln" data-n={s.n} data-level={s.line.level}><span class="t" title={stamp(s.line)}>{s.line.at != null ? logTime(s.line.at) : ''}</span><span class="x">{#each pieces(s.line.text, s.marks) as p}{#if p.mark}<mark>{p.text}</mark>{:else}{p.text}{/if}{/each}{#if s.line.cut}<span class="cut" title={CUT_TIP}>{CUT_SAID}</span>{/if}</span></div>
     {/each}
   </div>
 {/snippet}
@@ -206,6 +209,11 @@
   .ln[data-level='debug'] .x { color: var(--muted); }
   .x { white-space: pre-wrap; overflow-wrap: anywhere; }
   .t { color: var(--muted); font-variant-numeric: tabular-nums; }
+  /* The backend's word, not the container's: in the UI's face, apart from the text, and left out of a copy. */
+  .cut {
+    font-family: var(--sans); font-size: 0.72rem; color: var(--muted); margin-left: 0.5rem; white-space: nowrap;
+    user-select: none; -webkit-user-select: none;
+  }
   mark { background: color-mix(in srgb, var(--accent) 22%, transparent); color: inherit; border-radius: 2px; }
   .day { font-family: var(--sans); font-size: 0.78rem; color: var(--muted); padding: 0.5rem 0 0.2rem 0.35rem; }
   .day:first-child { padding-top: 0; }

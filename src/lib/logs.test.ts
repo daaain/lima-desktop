@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { RawLogLine } from './api';
 import {
   fetchedSentence, filterLog, levelOf, logCounts, logLines, logTime, matchTerms, parseQuery, pieces, plainText, shownSentence, tokenize,
-  type LogFilter, type LogLine,
+  type Held, type LogFilter, type LogLine,
 } from './logs';
 
 const out = (line: string): RawLogLine => ({ stream: 'stdout', line });
@@ -23,6 +23,11 @@ describe('logLines', () => {
   it('keeps a line without a time whole, and drops terminal colours', () => {
     expect(logLines([{ stream: null, line: '\x1b[32mready\x1b[0m on :8080' }])).toEqual([{ at: null, text: 'ready on :8080', stream: null, level: null }]);
     expect(logLines([])).toEqual([]);
+  });
+  it('keeps that the backend cut a line, so it can be told from the text', () => {
+    const [cut, whole] = logLines([{ stream: 'stdout', line: '2026-11-10T10:00:00Z {"html":"<p>…', cut: true }, out('2026-11-10T10:00:01Z ends with …')]);
+    expect([cut.text, cut.cut]).toEqual(['{"html":"<p>…', true]);
+    expect([whole.text, 'cut' in whole]).toEqual(['ends with …', false]);
   });
   it('keeps the text after the time as it is, spaces and all, and the stream', () => {
     const [l] = logLines([{ stream: 'stderr', line: '2026-11-10T10:00:00Z   indented: x' }]);
@@ -186,12 +191,17 @@ describe('filterLog', () => {
 });
 
 describe('sentences', () => {
+  const said = (n: number, tail: number, over: string | null = null, o: Partial<Held> = {}) => fetchedSentence({ n, tail, over, ...o });
   it('say what was fetched, and whether there may be more', () => {
-    expect(fetchedSentence(500, 500, null)).toBe('The newest 500 lines; there may be more.');
-    expect(fetchedSentence(5000, 5000, 'the last hour')).toBe('The newest 5,000 lines of the last hour; there may be more.');
-    expect(fetchedSentence(340, 5000, 'the last hour')).toBe('All 340 lines of the last hour.');
-    expect(fetchedSentence(1, 500, null)).toBe('The one line.');
-    expect(fetchedSentence(0, 500, 'the last 15 min')).toBe('Nothing logged in the last 15 min.');
+    expect(said(500, 500)).toBe('The newest 500 lines; there may be more.');
+    expect(said(5000, 5000, 'the last hour')).toBe('The newest 5,000 lines of the last hour; there may be more.');
+    expect(said(340, 5000, 'the last hour')).toBe('All 340 lines of the last hour.');
+    expect(said(1, 500)).toBe('The one line.');
+    expect(said(0, 500, 'the last 15 min')).toBe('Nothing logged in the last 15 min.');
+  });
+  it("say so when older lines were left out to keep a fetch's size down, never that it's all", () => {
+    expect(said(3410, 20000, null, { tooMuch: true })).toBe('The newest 3,410 lines; earlier ones were too much to fetch at once.');
+    expect(said(1, 500, 'the last hour', { tooMuch: true })).toBe('The newest line of the last hour; earlier ones were too much to fetch at once.');
   });
   it('say what the filter left', () => {
     expect(shownSentence(12, 500, 12)).toBe('12 of 500 lines match.');

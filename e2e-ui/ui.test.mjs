@@ -1584,6 +1584,39 @@ test("A container's log is searched by its words, filtered by level, stream and 
   await close();
 });
 
+/** A container's log tab opened, on Containers. */
+async function openLog(page, name) {
+  await page.locator('.line', { has: page.locator('.name', { hasText: name }) }).first().click();
+  const detail = page.locator('section.detail');
+  await detail.getByRole('button', { name: 'logs' }).click();
+  const log = detail.locator('.log');
+  await log.locator('.ln').first().waitFor();
+  return { detail, log, note: detail.locator('.logs p.note') };
+}
+const noteSays = (page, re) => page.waitForFunction((src) => new RegExp(src).test(document.querySelector('.logs p.note')?.textContent ?? ''), re.source);
+
+test("A long log says what the backend left out, and marks a line it cut", async () => {
+  const { page, errors, close } = await open('/containers');
+  const { detail, log, note } = await openLog(page, /^scraper/);
+  assert.match(await note.innerText(), /^The newest 500 lines; there may be more\./);
+  // The one line in these the backend cut says so beside its text, in the UI's words, not the log's.
+  const cut = log.locator('.ln', { has: page.locator('.cut') });
+  assert.equal(await cut.count(), 1);
+  assert.match(await cut.locator('.x').innerText(), /page=9970 200 \{"html":.*…/s);
+  assert.equal(await cut.locator('.cut').innerText(), 'cut at 16 KiB');
+  assert.equal(await log.locator('.cut').count(), 1);
+  // Asking for more than the backend sends at once: fewer come back, the note says why and never
+  // "All", and a still longer tail isn't offered, as it would bring no more.
+  await detail.getByRole('button', { name: 'Fetch up to 5,000' }).click();
+  await noteSays(page, /^The newest 5,000 lines; there may be more\./);
+  await detail.getByRole('button', { name: 'Fetch up to 20,000' }).click();
+  await noteSays(page, /earlier ones/);
+  assert.match(await note.innerText(), /^The newest 9,080 lines; earlier ones were too much to fetch at once\.$/);
+  assert.equal(await detail.getByRole('button', { name: /^Fetch up to/ }).count(), 0);
+  assert.deepEqual(errors, []);
+  await close();
+});
+
 test("An image's layers open under its line, config steps folded away, each layer's files under it", async () => {
   const { page, errors, close } = await open('/images');
   const line = page.locator('.line', { has: page.locator('.name', { hasText: 'atlas_frontend' }) }).first();

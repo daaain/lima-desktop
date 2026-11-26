@@ -22,7 +22,13 @@ export interface LogLine {
   level: Level | null;
   /** Set on the first line of each day: "Tuesday 10 November". */
   day?: string;
+  /** The backend cut it at 16 KiB (`podman::MAX_LOG_LINE`): its "…" is the backend's, not the container's. */
+  cut?: true;
 }
+
+/** The longest line the backend keeps (`podman::MAX_LOG_LINE`), as the cut marker says it. */
+export const CUT_SAID = 'cut at 16 KiB';
+export const CUT_TIP = 'The line went on past 16 KiB, so only its start was kept; the … is where it was cut.';
 
 const STAMP = /^(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?(?:Z|[+-]\d\d:\d\d)) (.*)$/s;
 // What a terminal acts on rather than shows (ECMA-48), with ESC or its one-character C1 form: a
@@ -46,7 +52,7 @@ const dayOf = (at: number) => new Date(at).toLocaleDateString('en-GB', { weekday
 export function logLines(raw: RawLogLine[]): LogLine[] {
   let lastDay = '';
   let lastLevel: Level | null = null;
-  return raw.map(({ line, stream }) => {
+  return raw.map(({ line, stream, cut }) => {
     const clean = plainText(line);
     const m = STAMP.exec(clean);
     const at = m ? Date.parse(m[1]) : NaN;
@@ -54,11 +60,12 @@ export function logLines(raw: RawLogLine[]): LogLine[] {
     // A stack trace's lines say no level of their own: they're the line above's.
     const level = levelOf(text) ?? (CONTINUES.test(text) ? lastLevel : null);
     lastLevel = level;
-    if (!m || Number.isNaN(at)) return { at: null, text, stream, level };
+    const flags = cut ? { cut: true as const } : {};
+    if (!m || Number.isNaN(at)) return { at: null, text, stream, level, ...flags };
     const day = dayOf(at);
     const first = day !== lastDay;
     lastDay = day;
-    return { at, text, stream, level, ...(first ? { day } : {}) };
+    return { at, text, stream, level, ...(first ? { day } : {}), ...flags };
   });
 }
 
@@ -275,14 +282,29 @@ export const LEVELS: { key: Level | 'none'; label: string }[] = [
 const count = (n: number) => n.toLocaleString('en-GB');
 const lines_ = (n: number) => `${count(n)} ${n === 1 ? 'line' : 'lines'}`;
 
+/** What the log view holds, for its note. */
+export interface Held {
+  /** How many lines. */
+  n: number;
+  /** How many a fetch asked for. */
+  tail: number;
+  /** The window as a sentence says it ("the last hour"), if any. */
+  over: string | null;
+  /** The backend left older lines out to keep its answer within its size (`earlierDropped` on
+   * fewer lines than were asked for). */
+  tooMuch?: boolean;
+}
+
 /**
- * What was fetched: "The last 500 lines." when podman may have more, "All 340 lines of the last
- * hour." when it hasn't. `over` is the window as a sentence says it ("the last hour"), if any.
+ * What was fetched: "The newest 500 lines; there may be more." when podman may have more, "All
+ * 340 lines of the last hour." when it hasn't, and never "All" when the backend left some out.
  */
-export function fetchedSentence(n: number, tail: number, over: string | null): string {
+export function fetchedSentence({ n, tail, over, tooMuch = false }: Held): string {
   if (n === 0) return over ? `Nothing logged in ${over}.` : 'Nothing logged.';
   const of = over ? ` of ${over}` : '';
-  if (n >= tail) return `The newest ${lines_(n)}${of}; there may be more.`;
+  const newest = n === 1 ? `The newest line${of}` : `The newest ${lines_(n)}${of}`;
+  if (tooMuch) return `${newest}; earlier ones were too much to fetch at once.`;
+  if (n >= tail) return `${newest}; there may be more.`;
   return n === 1 ? `The one line${of}.` : `All ${lines_(n)}${of}.`;
 }
 

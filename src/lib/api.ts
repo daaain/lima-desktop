@@ -379,6 +379,11 @@ export type VmAction = 'start' | 'stop' | 'restart' | 'delete';
 export interface RawLogLine {
   stream: 'stdout' | 'stderr' | null;
   line: string;
+  /** It was longer than the backend keeps a line (16 KiB): its start, ending with "…". */
+  cut?: boolean;
+  /** On the first line only: older lines were left out, to keep the answer within its size (8 MiB)
+   * or the count asked for, so this isn't where the log (or the time asked from) begins. */
+  earlierDropped?: boolean;
 }
 
 export type ContainerAction = 'start' | 'stop' | 'restart' | 'remove';

@@ -602,11 +602,51 @@
     return { path, size, text: text ?? null, truncated: false };
   };
 
+  // The scraper's log is long and chatty: 10,000 pages fetched, one every 3 s up to now (8.3 h), each
+  // logged as three lines at one time, the last two alike ("skipped a link already seen"), as the
+  // log view's paging back has to tell a line it holds from an equal one before it. Every 997th
+  // page's line carries the page's HTML, which the backend cut at 16 KiB; page 9,600 was disallowed
+  // (a warning, to stderr, the one line that says "robots").
+  const SCRAPER_PAGES = 10_000;
+  let scraperLog;
+  const scraperLines = () =>
+    (scraperLog ??= Array.from({ length: SCRAPER_PAGES }, (_, k) => {
+      const at = NOW - 2000 - (SCRAPER_PAGES - 1 - k) * 3000;
+      const t = new Date(at).toISOString().replace('Z', '250000Z');
+      const url = `https://shop.example/catalogue?page=${k}`;
+      const first =
+        k === 9600 ? { stream: 'stderr', line: `${t} WARN ${url} disallowed by robots.txt, skipping` }
+        : k % 997 === 0 ? { stream: 'stdout', line: `${t} GET ${url} 200 {"html":"<!doctype html><html lang=\\"en\\"><head><title>Catalogue</title>${'<li class=\\"item\\">…</li>'.repeat(12)}…`, cut: true }
+        : { stream: 'stdout', line: `${t} GET ${url} 200 ${Math.round(80 + noise(k, 7) * 400)} ms` };
+      return [first, { stream: 'stdout', line: `${t} skipped a link already seen` }, { stream: 'stdout', line: `${t} skipped a link already seen` }].map((l) => ({ ...l, at }));
+    }).flat());
+  // The backend keeps the newest 8 MiB of an answer; here 1 MiB of the scraper's lines (a line costs
+  // its text and 48), so asking for 20,000 of them comes back as fewer, the first saying so.
+  const FAKE_LOG_BYTES = 1 << 20;
+
   // A container's log: 120 lines, every ten minutes back across midnight, as podman sends them with
   // timestamps on (an RFC 3339 time and a space before each line), each with its stream. Mostly
   // requests; some slow-query warnings and failed requests, to stderr, one with a stack trace under
-  // it. The newest `tail` of those since `since` (Unix ms), as podman would.
+  // it. The newest `tail` of those since `since` (Unix ms), as podman would, and as the backend
+  // passes them on: within its size, the first saying when older ones were left out.
   const containerLogs = (id, tail = 500, since = null) => {
+    const lines = isScraper(id) ? scraperLines() : frontendLines(id);
+    const asked = lines.filter((l) => since == null || l.at >= since);
+    const kept = [];
+    let bytes = 0;
+    for (let i = asked.length - 1; i >= 0 && kept.length < tail; i--) {
+      bytes += asked[i].line.length + 48;
+      if (bytes > FAKE_LOG_BYTES) break;
+      kept.push(asked[i]);
+    }
+    kept.reverse();
+    // podman sends only the tail asked for, so only the size leaves lines out.
+    const dropped = kept.length < Math.min(tail, asked.length);
+    return kept.map(({ stream, line, cut }, i) => ({ stream, line, ...(cut ? { cut } : {}), ...(i === 0 && dropped ? { earlierDropped: true } : {}) }));
+  };
+  const isScraper = (id) => fleet.some((v) => v.containers?.some((c) => c.id === id && c.name === 'atlas-scraper-1'));
+
+  const frontendLines = (id) => {
     const seed = parseInt(id.slice(0, 4), 16);
     const routes = ['/api/health', '/api/items', '/api/items/42', '/login', '/static/app.js'];
     const lines = Array.from({ length: 120 }, (_, i) => {
@@ -621,7 +661,7 @@
       ];
       return [{ at, stream: 'stdout', line: `${t} GET ${routes[Math.floor(n * routes.length)]} ${n < 0.1 ? 404 : 200} ${Math.round(2 + n * 40)} ms` }];
     }).flat().slice(-120);
-    return lines.filter((l) => since == null || l.at >= since).slice(-tail).map(({ stream, line }) => ({ stream, line }));
+    return lines;
   };
 
   const later = (value) => new Promise((resolve) => setTimeout(() => resolve(value), 150));
