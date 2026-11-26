@@ -4,6 +4,8 @@ Tauri 2 (Rust backend in `src-tauri/`) + SvelteKit in SPA mode + Svelte 5 (`src/
 
 It started from a survey of Podman Desktop ([docs/research/podman-desktop/](./docs/research/podman-desktop/)), and how it looks and speaks is [docs/design/ui.md](./docs/design/ui.md).
 
+The VMs and containers it watches may run untrusted workloads: [docs/security.md](./docs/security.md) is what the app trusts, and the rules for code that reads, parses, shows or acts on what a guest says.
+
 ## Build it
 
 To build the app yourself rather than download it, on macOS you need Xcode's command-line tools (`xcode-select --install`), a current stable [Rust](https://rustup.rs), and Node 24 with pnpm 10 (`corepack enable pnpm`). Then:
