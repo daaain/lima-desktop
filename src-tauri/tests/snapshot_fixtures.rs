@@ -161,6 +161,26 @@ fn libpods_lists_deserialise() {
     assert!(images > 0 && volumes > 0, "{images} images, {volumes} volumes");
 }
 
+/// The fixtures' compose projects were made by podman-compose: checked against their images, as
+/// the collector checks them, every container labelled with a project is believed in it.
+#[test]
+fn recorded_compose_containers_stay_in_their_projects() {
+    let mut grouped = 0;
+    for f in fixtures() {
+        for (inst, dir) in recorded(&f) {
+            let mut list = containers(&dir);
+            let images = podman::parse_image_hashes(read(&dir.join("libpod/images.json")).as_bytes()).unwrap();
+            podman::trust_compose(&mut list, &images);
+            for c in &list {
+                let labelled = c.labels.get("io.podman.compose.project");
+                assert_eq!(c.compose_project.as_ref(), labelled, "{}: {}", inst.name, c.name);
+                grouped += usize::from(labelled.is_some());
+            }
+        }
+    }
+    assert!(grouped > 0, "no compose containers in the fixtures");
+}
+
 #[test]
 fn stats_samples_make_container_rows() {
     let (mut rates, mut traffic) = (0, 0);

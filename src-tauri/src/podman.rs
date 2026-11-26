@@ -157,6 +157,10 @@ struct RawContainer {
     ports: Option<Vec<Port>>,
 }
 
+/// The labels Docker Compose and podman-compose put their config hash in, as [`ImageHashes`]
+/// decodes them: the only labels of an image the app reads.
+pub const CONFIG_HASH_LABELS: [&str; 2] = ["com.docker.compose.config-hash", "io.podman.compose.config-hash"];
+
 /// An image's own compose config-hash labels, as `images/json` lists them: all the app keeps of an
 /// image's labels ([`trust_compose`]). Decoded straight into these two, so an image's other labels
 /// are skipped over, never held.
@@ -1273,6 +1277,11 @@ mod tests {
         assert_eq!(got["c3"], ImageHashes::default());
         assert_eq!(got["d4"], ImageHashes::default());
         assert!(parse_image_hashes(b"null").unwrap().is_empty());
+        // The labels named for others to keep (the snapshot recorder) are the ones decoded.
+        for key in CONFIG_HASH_LABELS {
+            let body = serde_json::json!([{"Id": "i", "Labels": {key: "h"}}]).to_string();
+            assert_ne!(parse_image_hashes(body.as_bytes()).unwrap()["i"], ImageHashes::default(), "{key}");
+        }
     }
 
     #[test]
