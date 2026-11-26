@@ -111,15 +111,31 @@ rel={rel}
 inner=$(cat <<'LD_EOF'
 r=$(realpath -e -- "$1" 2>/dev/null) || {{ echo "LD-E the volume's directory isn't there"; exit 0; }}
 p=$(realpath -e -- "$1/$2" 2>/dev/null) || {{ echo "LD-E it isn't there any more"; exit 0; }}
-case "$p/" in "$r"/*) ;; *) echo "LD-E it leads outside the volume"; exit 0 ;; esac
+inside() {{ case "$1/" in "$r"/*) ;; *) echo "LD-E it leads outside the volume"; exit 0 ;; esac; }}
+inside "$p"
+# A container that can write to the volume can swap any part of "$p" for a link between that check
+# and the read, so what's read is checked again once it's open, where swapping no longer matters.
 if [ "$3" = list ]; then
-  [ -d "$p" ] || {{ echo "LD-E it isn't a directory"; exit 0; }}
+  # The directory we're in stays itself, whatever is swapped above it, and pwd -P says where it is.
+  cd -P -- "$p" 2>/dev/null || {{ echo "LD-E it isn't a directory"; exit 0; }}
+  inside "$(pwd -P)"
   echo LD-OK
-  find "$p" -mindepth 1 -maxdepth 1 -printf '%y\t%s\t%T@\t%f\0' 2>/dev/null | head -z -n {limit}
+  find . -mindepth 1 -maxdepth 1 -printf '%y\t%s\t%T@\t%f\0' 2>/dev/null | head -z -n {limit}
 else
   [ -f "$p" ] || {{ echo "LD-E it isn't a file"; exit 0; }}
-  echo "LD-OK $(stat -c %s -- "$p")"
-  head -c {limit} -- "$p"
+  # Opened as fd 3, then judged by what was opened: /proc/self/fd/3 is the file itself to test and
+  # stat, and readlink says where it really is. Opening still follows a link swapped in after the
+  # test above, so a FIFO or device the container put there in that moment gets opened (sh can't
+  # open without following links), but what's shown is only ever a regular file inside the volume.
+  f=/proc/self/fd/3
+  {{
+    opened=1
+    [ -f "$f" ] || {{ echo "LD-E it isn't a file"; exit 0; }}
+    inside "$(readlink -- "$f")"
+    echo "LD-OK $(stat -L -c %s -- "$f")"
+    head -c {limit} <&3
+  }} 2>/dev/null 3<"$p"
+  [ -n "${{opened:-}}" ] || echo "LD-E it can't be read"
 fi
 LD_EOF
 )
@@ -462,42 +478,60 @@ mod tests {
         assert!(s.contains("sh \"$root\" \"$rel\" list"));
     }
 
+    /// Where this machine keeps `tool`.
+    #[cfg(target_os = "linux")]
+    fn which(tool: &str) -> std::path::PathBuf {
+        ["/usr/bin", "/bin"]
+            .iter()
+            .map(|d| std::path::Path::new(d).join(tool))
+            .find(|p| p.exists())
+            .unwrap_or_else(|| panic!("no {tool}"))
+    }
+
+    /// A PATH in `dir` holding only the tools the script uses, so without `podman` it reads
+    /// directly.
+    #[cfg(target_os = "linux")]
+    fn guest_bin(dir: &std::path::Path) -> std::path::PathBuf {
+        let bin = dir.join("bin");
+        std::fs::create_dir(&bin).unwrap();
+        for tool in ["sh", "cat", "realpath", "readlink", "find", "head", "stat"] {
+            std::os::unix::fs::symlink(which(tool), bin.join(tool)).unwrap();
+        }
+        bin
+    }
+
+    /// The script, its PATH `bin`, with `env` set: its stdout.
+    #[cfg(target_os = "linux")]
+    fn run_in(bin: &std::path::Path, vol: &std::path::Path, rel: &str, op: Op, env: &[(&str, &str)]) -> Vec<u8> {
+        let out = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(script(vol.to_str().unwrap(), rel, op))
+            .env("PATH", bin)
+            .envs(env.iter().copied())
+            .output()
+            .unwrap();
+        out.stdout
+    }
+
     /// The script under this machine's sh, against a directory standing in for a volume (Linux:
-    /// it needs GNU find and head). Its PATH holds only the tools it uses, so without `podman` it
-    /// reads directly.
+    /// it needs GNU find and head).
     #[cfg(target_os = "linux")]
     #[test]
     fn the_script_runs_against_a_real_directory() {
         let dir = tempfile::tempdir().unwrap();
-        let bin = dir.path().join("bin");
-        std::fs::create_dir(&bin).unwrap();
-        for tool in ["sh", "cat", "realpath", "find", "head", "stat"] {
-            let found = ["/usr/bin", "/bin"]
-                .iter()
-                .map(|d| std::path::Path::new(d).join(tool))
-                .find(|p| p.exists())
-                .unwrap_or_else(|| panic!("no {tool}"));
-            std::os::unix::fs::symlink(found, bin.join(tool)).unwrap();
-        }
+        let bin = guest_bin(dir.path());
         let vol = dir.path().join("vol");
         std::fs::create_dir_all(vol.join("sub")).unwrap();
         std::fs::write(vol.join("note.txt"), "hi there").unwrap();
         std::fs::write(dir.path().join("secret"), "no").unwrap();
         std::os::unix::fs::symlink(dir.path().join("secret"), vol.join("escape")).unwrap();
-        let run = |rel: &str, op| {
-            let out = std::process::Command::new("sh")
-                .arg("-c")
-                .arg(script(vol.to_str().unwrap(), rel, op))
-                .env("PATH", &bin)
-                .output()
-                .unwrap();
-            out.stdout
-        };
+        let run = |rel: &str, op| run_in(&bin, &vol, rel, op, &[]);
         let l = parse_listing("", &run("", Op::List), Folder::Volume).unwrap();
         let names: Vec<_> = l.entries.iter().map(|e| e.name.as_str()).collect();
         assert_eq!(names, ["sub", "escape", "note.txt"]);
+        assert!(parse_listing("sub", &run("sub", Op::List), Folder::Volume).unwrap().entries.is_empty());
         let p = parse_peek("note.txt", &run("note.txt", Op::Peek)).unwrap();
-        assert_eq!(p.text.as_deref(), Some("hi there"));
+        assert_eq!((p.text.as_deref(), p.size), (Some("hi there"), 8));
         assert_eq!(
             parse_peek("escape", &run("escape", Op::Peek)),
             Err(FilesError::Guest("it leads outside the volume".into()))
@@ -505,6 +539,50 @@ mod tests {
         assert_eq!(
             parse_listing("note.txt", &run("note.txt", Op::List), Folder::Volume),
             Err(FilesError::Guest("it isn't a directory".into()))
+        );
+        assert_eq!(parse_peek("sub", &run("sub", Op::Peek)), Err(FilesError::Guest("it isn't a file".into())));
+    }
+
+    /// A container that can write to the volume swaps what the script checked for a link to
+    /// outside it, between the check and the read. A `realpath` that makes the swap as soon as it
+    /// has answered for the path asked about stands in for the container winning that race.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_link_swapped_in_after_the_check_leads_nowhere() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let bin = guest_bin(dir.path());
+        let racer = format!(
+            "#!/bin/sh\nout=$({} \"$@\") || exit $?\neval last=\\${{$#}}\n\
+             case \"$last\" in */\"$WHEN\") {} -rf \"$SWAP\"; {} -s \"$TO\" \"$SWAP\" ;; esac\n\
+             printf '%s\\n' \"$out\"\n",
+            which("realpath").display(),
+            which("rm").display(),
+            which("ln").display(),
+        );
+        std::fs::remove_file(bin.join("realpath")).unwrap();
+        std::fs::write(bin.join("realpath"), racer).unwrap();
+        std::fs::set_permissions(bin.join("realpath"), std::fs::Permissions::from_mode(0o755)).unwrap();
+        let (vol, outside) = (dir.path().join("vol"), dir.path().join("outside"));
+        std::fs::create_dir_all(vol.join("sub/inner")).unwrap();
+        std::fs::create_dir_all(outside.join("inner")).unwrap();
+        std::fs::write(vol.join("note.txt"), "hi there").unwrap();
+        std::fs::write(outside.join("secret"), "no").unwrap();
+        std::fs::write(outside.join("inner/secret-name"), "").unwrap();
+        let race = |rel: &str, op, swap: &str, to: &str| {
+            let (swap, to) = (vol.join(swap), outside.join(to));
+            let env = [("WHEN", rel), ("SWAP", swap.to_str().unwrap()), ("TO", to.to_str().unwrap())];
+            run_in(&bin, &vol, rel, op, &env)
+        };
+        // The file itself, for a link to a file outside.
+        assert_eq!(
+            parse_peek("note.txt", &race("note.txt", Op::Peek, "note.txt", "secret")),
+            Err(FilesError::Guest("it leads outside the volume".into()))
+        );
+        // A directory on the way, for a link to a directory outside.
+        assert_eq!(
+            parse_listing("sub/inner", &race("sub/inner", Op::List, "sub", ""), Folder::Volume),
+            Err(FilesError::Guest("it leads outside the volume".into()))
         );
     }
 }
