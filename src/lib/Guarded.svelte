@@ -14,16 +14,18 @@
   } = $props();
 
   let again: (() => void) | null = null;
+  // Said once for each way it fails, not at every tick it's tried again: a VM that keeps sending
+  // the same bad answer would fill the console all day.
+  let lastSaid = '';
   $effect(() => {
     void retry;
+    // Not failed when tried again: it drew, so the next failure is said even if it's the last one.
+    if (!again) lastSaid = '';
     const reset = again;
     again = null;
     reset?.();
   });
 
-  // Said once for each way it fails, not at every tick it's tried again: a VM that keeps sending
-  // the same bad answer would fill the console all day.
-  let lastSaid = '';
   function onfail(error: unknown, reset: () => void) {
     again = reset;
     const now = String(error);

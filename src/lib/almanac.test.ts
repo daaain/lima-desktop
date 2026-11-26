@@ -243,7 +243,8 @@ describe('containersSentence', () => {
     expect(containersSentence([c('shop'), c('shop')])).toBe('Two containers, all in shop.');
     expect(containersSentence([c('shop'), c('shop'), c()])).toBe('Three containers, 2 of them in shop.');
     expect(containersSentence([c('shop'), c('blog')])).toBe('Two containers, in 2 compose projects.');
-  });  it("spells out what in a project's name would hide or turn round the sentence", () => {
+  });
+  it("spells out what in a project's name would hide or turn round the sentence", () => {
     // A guest names its compose project: an override in it would reverse the rest of the headline.
     expect(containersSentence([c('web\u202Eexe.gpj'), c('web\u202Eexe.gpj')])).toBe('Two containers, all in web⟨U+202E⟩exe.gpj.');
     expect(containersSentence([c('web\u202E'), c()])).toBe('Two containers, 1 of them in web⟨U+202E⟩.');
