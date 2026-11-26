@@ -195,7 +195,10 @@ impl ImageHashes {
 /// stamps those into the images it builds.
 ///
 /// A hash vouches only for its own tool's labels: a container podman-compose made is read in its
-/// namespace, so an image's `com.docker.compose.project` can't slip in beside it. `image` is the
+/// namespace, so an image's `com.docker.compose.project` can't slip in beside it. Its service is the
+/// one exception: podman-compose wrote no `io.podman.compose.service` before 1.5.0, but has always
+/// set `com.docker.compose.service` as it made the container, which outranks an image's label of
+/// the same key, so that one is its own. `image` is the
 /// container's image's hashes, None when that isn't listed: then nothing can be told, so it's in
 /// no project. Expected in none too: Docker Compose's lifecycle-hook containers (no hash) and
 /// `podman run` of a compose-built image.
@@ -206,7 +209,9 @@ fn trusted_compose(labels: &BTreeMap<String, String>, image: Option<&ImageHashes
         if image_hash == Some(hash.as_str()) {
             return None;
         }
-        Some((label(ns, "project")?.clone(), label(ns, "service").cloned()))
+        let service = label(ns, "service")
+            .or_else(|| (ns == "io.podman.compose").then(|| label("com.docker.compose", "service")).flatten());
+        Some((label(ns, "project")?.clone(), service.cloned()))
     })
 }
 
@@ -1243,6 +1248,17 @@ mod tests {
     fn podman_compose_s_hash_vouches_for_its_containers_too() {
         assert_eq!(group(&checked(podman_compose(), &images(serde_json::json!(null)))), (Some("shop"), Some("web")));
         assert_eq!(group(&checked(podman_compose(), &images(podman_compose()))), (None, None));
+    }
+
+    #[test]
+    fn podman_compose_before_1_5_names_its_service_in_docker_compose_s_label() {
+        // podman-compose wrote no `io.podman.compose.service` until 1.5.0 (Ubuntu 24.04 has 1.0.6,
+        // Debian 13 1.3.0), but has always set `com.docker.compose.service` as it made a container:
+        // a label set then outranks an image's of the same key, so it's podman-compose's own.
+        let labels = serde_json::json!({"io.podman.compose.project": "shop", "com.docker.compose.project": "shop",
+            "com.docker.compose.service": "web", "io.podman.compose.config-hash": "4f1c",
+            "io.podman.compose.version": "1.0.6"});
+        assert_eq!(group(&checked(labels, &images(serde_json::json!(null)))), (Some("shop"), Some("web")));
     }
 
     #[test]
