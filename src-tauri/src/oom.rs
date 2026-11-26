@@ -218,24 +218,41 @@ pub fn kernel_events(vm: &str, entries: &[Entry]) -> Vec<OomEvent> {
 /// Kills seen between two probe blocks, by counter: one entry per kill, the container id where a
 /// container's own `oom_kill` rose, `None` for the rest of the VM's rise. A scope new since the
 /// last block counts from zero (it started within the probe's rescan interval). A counter that went
-/// down (a reboot) is a new baseline, not a kill.
+/// down (a reboot) is a new baseline, not a kill. At most `MAX_COUNTER_KILLS` in all.
 pub fn counter_kills(prev: &Block, cur: &Block) -> Vec<Option<String>> {
     let mut kills: Vec<Option<String>> = Vec::new();
+    let mut attributed: u64 = 0;
     let mut ids: Vec<&String> = cur.cgroups.keys().collect();
     ids.sort();
     for id in ids {
         let now = cur.cgroups[id].oom_kills.unwrap_or(0);
         let before = prev.cgroups.get(id).map_or(Some(0), |c| c.oom_kills).unwrap_or(0);
         let rise = now.saturating_sub(before);
-        kills.extend((0..rise).map(|_| Some(id.clone())));
+        attributed = attributed.saturating_add(rise);
+        kills.extend(std::iter::repeat_n(Some(id.clone()), room(&kills, rise)));
     }
     let vm_rise = match (prev.oom_kills, cur.oom_kills) {
         (Some(p), Some(c)) => c.saturating_sub(p),
         _ => 0,
     };
-    let unattributed = vm_rise.saturating_sub(kills.len() as u64);
-    kills.extend((0..unattributed).map(|_| None));
+    let unattributed = vm_rise.saturating_sub(attributed);
+    kills.extend(std::iter::repeat_n(None, room(&kills, unattributed)));
     kills
+}
+
+/// The most kills one pair of blocks can yield. The counters come from the guest, whose root can
+/// print any number (`u64::MAX` would be a vector the size of the address space, and the release
+/// build aborts on a panic), so a rise is clamped before anything is made of it. The kernel kills
+/// one task per OOM, and even a container crash-looping under its limit is killed a few times a
+/// second at most; blocks are at most a minute apart. A hundred is past anything real, and the
+/// log, which shows these with no detail, says "a great many" as well with a hundred rows as with
+/// a million.
+pub const MAX_COUNTER_KILLS: usize = 100;
+
+/// How many of `rise` kills still fit under `MAX_COUNTER_KILLS`.
+fn room(kills: &[Option<String>], rise: u64) -> usize {
+    let left = MAX_COUNTER_KILLS.saturating_sub(kills.len());
+    usize::try_from(rise).map_or(left, |r| r.min(left))
 }
 
 /// A counter-derived kill as an event: when, which container (if a container's counter rose),
@@ -447,6 +464,19 @@ mod tests {
         assert!(counter_kills(&block(Some(3), &[(CT, 1)]), &block(Some(3), &[(CT, 1)])).is_empty());
         assert!(counter_kills(&block(Some(9), &[]), &block(Some(0), &[])).is_empty(), "a reboot");
         assert!(counter_kills(&block(None, &[]), &block(Some(4), &[])).is_empty());
+    }
+
+    #[test]
+    fn an_absurd_rise_is_clamped_not_allocated() {
+        // A VM's root writes the probe's output, so its counters can say anything: the largest u64
+        // must neither abort the app nor put a row per "kill" in the store.
+        let kills = counter_kills(&block(Some(0), &[]), &block(Some(u64::MAX), &[]));
+        assert_eq!(kills.len(), MAX_COUNTER_KILLS);
+        let kills = counter_kills(&block(Some(0), &[(CT, 0)]), &block(Some(5), &[(CT, u64::MAX)]));
+        assert_eq!(kills.len(), MAX_COUNTER_KILLS, "a container's rise is clamped too");
+        assert!(kills.iter().all(|k| k.as_deref() == Some(CT)));
+        let kills = counter_kills(&block(Some(0), &[(CT, 0), (CT2, 0)]), &block(Some(0), &[(CT, 90), (CT2, 90)]));
+        assert_eq!(kills.len(), MAX_COUNTER_KILLS, "and so is their sum");
     }
 
     #[test]
