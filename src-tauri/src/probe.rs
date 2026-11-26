@@ -3,7 +3,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::process::Stdio;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
 
 use crate::store::ABSENT;
@@ -123,31 +123,46 @@ fn or_absent(v: Option<i64>) -> i64 {
     v.unwrap_or(ABSENT)
 }
 
+// Every number below is the guest's, and its root can print any u64. One that a column can't hold
+// is absent, as one not printed is: a plain cast would wrap it negative, and arithmetic on it
+// would overflow (a panic in a debug build, a wrong figure in a release one).
+
+/// A count as a column's i64.
+fn count(v: u64) -> Option<i64> {
+    i64::try_from(v).ok()
+}
+
+/// kB as bytes.
+fn kb(v: u64) -> Option<i64> {
+    count(v)?.checked_mul(KB)
+}
+
 /// The guest half of a VM's metric row (`store::VM_METRICS` order; the `host_` columns are left
 /// ABSENT for the collector to fill). Rates need the previous block; the first block yields
 /// ABSENT for them.
 pub fn vm_row(prev: Option<&Block>, cur: &Block, ncpus: u32) -> Vec<i64> {
-    let mem = |k: &str| cur.mem.get(k).map(|&v| v as i64 * KB);
-    let group = |k: &str| cur.groups.get(k).map(|&v| v as i64);
+    let mem = |k: &str| cur.mem.get(k).and_then(|&v| kb(v));
+    let group = |k: &str| cur.groups.get(k).and_then(|&v| count(v));
     let dt_us = prev.map(|p| ((cur.uptime - p.uptime) * 1e6) as i64).filter(|&d| d > 0);
 
     let cpu_mc = prev.and_then(|p| {
         if p.cpu.len() < 4 || cur.cpu.len() < 4 {
             return None;
         }
-        let total = |c: &[u64]| c.iter().take(8).sum::<u64>();
-        let idle = |c: &[u64]| c[3] + c.get(4).copied().unwrap_or(0);
-        let dt = total(&cur.cpu).checked_sub(total(&p.cpu))? as f64;
-        let di = idle(&cur.cpu).checked_sub(idle(&p.cpu))? as f64;
-        (dt > 0.0).then(|| (((dt - di) / dt) * ncpus.max(1) as f64 * 1000.0).round() as i64)
+        let total = |c: &[u64]| c.iter().take(8).try_fold(0u64, |sum, &v| sum.checked_add(v));
+        let idle = |c: &[u64]| c[3].checked_add(c.get(4).copied().unwrap_or(0));
+        let dt = total(&cur.cpu)?.checked_sub(total(&p.cpu)?)? as f64;
+        let di = idle(&cur.cpu)?.checked_sub(idle(&p.cpu)?)? as f64;
+        let busy = ((dt - di) / dt).clamp(0.0, 1.0);
+        (dt > 0.0).then(|| (busy * ncpus.max(1) as f64 * 1000.0).round() as i64)
     });
     let psi = |r: &str, k: &str| -> Option<i64> {
         let key = (r.to_string(), k.to_string());
         let (p, c) = (prev?.psi.get(&key)?, cur.psi.get(&key)?);
-        let d = c.checked_sub(*p)? as i64;
-        Some(d * 1000 / dt_us?)
+        let d = count(c.checked_sub(*p)?)?;
+        Some(d.checked_mul(1000)? / dt_us?)
     };
-    let disk = |i: usize| cur.disks.get(i).map(|&(size, used)| (size as i64 * KB, used as i64 * KB));
+    let disk = |i: usize| cur.disks.get(i).and_then(|&(size, used)| Some((kb(size)?, kb(used)?)));
     let (root, store) = (disk(0), disk(1).or(disk(0)));
 
     vec![
@@ -159,7 +174,7 @@ pub fn vm_row(prev: Option<&Block>, cur: &Block, ncpus: u32) -> Vec<i64> {
         or_absent(psi("memory", "some")),
         or_absent(psi("memory", "full")),
         or_absent(psi("cpu", "some")),
-        or_absent(cur.oom_kills.map(|v| v as i64)),
+        or_absent(cur.oom_kills.and_then(count)),
         or_absent(root.map(|r| r.1)),
         or_absent(root.map(|r| r.0)),
         or_absent(store.map(|s| s.1)),
@@ -168,7 +183,7 @@ pub fn vm_row(prev: Option<&Block>, cur: &Block, ncpus: u32) -> Vec<i64> {
         ABSENT, // host_cpu_mc
         ABSENT, // host_disk_alloc
         ABSENT, // host_mem
-        or_absent(mem("AnonPages").zip(mem("Shmem")).map(|(a, s)| a + s)),
+        or_absent(mem("AnonPages").zip(mem("Shmem")).and_then(|(a, s)| a.checked_add(s))),
         or_absent(group("runtime")),
         or_absent(group("system")),
         or_absent(group("ssh")),
@@ -235,6 +250,14 @@ pub async fn spawn_every(ssh_config: &str, instance: &str, interval_secs: u64) -
     Ok(child)
 }
 
+/// The longest line read, in bytes. The probe's longest are `C` (ten counters, about 200 bytes at
+/// most) and `G` (a 64-digit id and three numbers, about 130): a kilobyte is room to spare.
+pub const MAX_LINE: usize = 1024;
+
+/// The most lines of one block read. A block is about 25 lines and one per container, so this is
+/// some four thousand containers in one VM; with `MAX_LINE`, no block holds more than 4 MiB.
+pub const MAX_BLOCK_LINES: usize = 4096;
+
 /// Read blocks off a running probe, calling `on_block` for each complete one. Returns when the
 /// stream ends (the VM stopped, ssh died); the caller decides whether to respawn.
 pub async fn read_blocks<R, F>(out: R, mut on_block: F) -> std::io::Result<()>
@@ -242,14 +265,57 @@ where
     R: tokio::io::AsyncRead + Unpin,
     F: FnMut(Block),
 {
-    let mut lines = BufReader::new(out).lines();
+    // The guest writes this stream, and its root can write anything: a line with no end, a block
+    // with no `.`. So a line is read only up to MAX_LINE (a longer one is skipped whole, as what's
+    // left of it could say anything) and a block only up to MAX_BLOCK_LINES (past that, a line is
+    // looked at only for the `.` that ends it). Bytes that aren't UTF-8 are replaced, not an error
+    // that ends the probe.
+    let mut reader = BufReader::new(out);
+    let mut buf = Vec::with_capacity(MAX_LINE + 1);
     let mut block = Block::default();
-    while let Some(line) = lines.next_line().await? {
-        if parse_line(&mut block, &line) {
+    let mut lines = 0;
+    loop {
+        buf.clear();
+        if (&mut reader).take(MAX_LINE as u64 + 1).read_until(b'\n', &mut buf).await? == 0 {
+            return Ok(());
+        }
+        if buf.last() == Some(&b'\n') {
+            buf.pop();
+        } else if buf.len() > MAX_LINE {
+            skip_line(&mut reader).await?;
+            continue;
+        }
+        if buf.last() == Some(&b'\r') {
+            buf.pop();
+        }
+        let line = String::from_utf8_lossy(&buf);
+        let ends = if lines < MAX_BLOCK_LINES {
+            lines += 1;
+            parse_line(&mut block, &line)
+        } else {
+            line.split_whitespace().next() == Some(".")
+        };
+        if ends {
             on_block(std::mem::take(&mut block));
+            lines = 0;
         }
     }
-    Ok(())
+}
+
+/// Read past the rest of a line without keeping it.
+async fn skip_line<R: tokio::io::AsyncBufRead + Unpin>(reader: &mut R) -> std::io::Result<()> {
+    loop {
+        let buf = reader.fill_buf().await?;
+        if buf.is_empty() {
+            return Ok(());
+        }
+        if let Some(i) = buf.iter().position(|&b| b == b'\n') {
+            reader.consume(i + 1);
+            return Ok(());
+        }
+        let n = buf.len();
+        reader.consume(n);
+    }
 }
 
 #[cfg(test)]
@@ -459,6 +525,71 @@ S sessions 2
         for m in ["mem_runtime", "mem_system", "mem_ssh", "ssh_sessions"] {
             assert_eq!(row[VM_METRICS.iter().position(|c| *c == m).unwrap()], ABSENT, "{m}");
         }
+    }
+
+    #[test]
+    fn numbers_too_large_to_hold_read_absent() {
+        // The guest prints these, and its root can print anything: the largest u64 is neither a
+        // negative reading nor an overflow (a panic, which aborts the release build).
+        let max = u64::MAX;
+        let a = parse(&format!(
+            "U 1\nC cpu {max} {max} 0 {max} {max}\nM MemTotal: {max}\nM MemAvailable: 1\nM AnonPages: {big}\nM Shmem: {big}\nP memory some total=0\nO {max}\nD {max} {max}\nS runtime {max}\n.",
+            big = i64::MAX as u64 / 1024
+        ));
+        // A stall an i64 holds in µs, but not a thousand times over (per mille of the interval).
+        let b = parse(&format!("U 2\nC cpu 0 0 0 1 0\nP memory some total={}\n.", i64::MAX));
+        let c = parse(&format!("U 3\nC cpu {max} {max} {max} {max} {max}\nP memory some total={max}\n."));
+        for (prev, cur) in [(None, &a), (Some(&a), &b), (Some(&b), &c), (Some(&a), &c)] {
+            let row = vm_row(prev, cur, 4);
+            let col = |name: &str| row[VM_METRICS.iter().position(|m| *m == name).unwrap()];
+            for m in ["cpu_mc", "mem_used", "mem_total", "psi_mem_some", "oom_kills", "disk_used", "disk_size"] {
+                assert!(col(m) == ABSENT || col(m) >= 0, "{m}: {}", col(m));
+            }
+            assert_eq!(row.iter().filter(|&&v| v < 0 && v != ABSENT).count(), 0, "{row:?}");
+        }
+        let row = vm_row(None, &a, 4);
+        let col = |name: &str| row[VM_METRICS.iter().position(|m| *m == name).unwrap()];
+        for m in ["mem_used", "mem_total", "mem_own", "oom_kills", "disk_used", "disk_size", "mem_runtime"] {
+            assert_eq!(col(m), ABSENT, "{m}");
+        }
+    }
+
+    async fn blocks_of(bytes: &[u8]) -> Vec<Block> {
+        let mut out = Vec::new();
+        read_blocks(bytes, |b| out.push(b)).await.unwrap();
+        out
+    }
+
+    #[tokio::test]
+    async fn a_line_too_long_is_skipped_whole() {
+        // Not cut short and read: what's left of it could say anything.
+        let long = format!("U 42 {}\nM MemTotal: 5\n.\nU 7\n.\n", "x".repeat(MAX_LINE * 64));
+        let blocks = blocks_of(long.as_bytes()).await;
+        assert_eq!(blocks.len(), 2);
+        assert_eq!(blocks[0].uptime, 0.0, "the long line isn't read");
+        assert_eq!(blocks[0].mem["MemTotal"], 5, "the next one is");
+        assert_eq!(blocks[1].uptime, 7.0);
+        let exactly = format!("U 9{}\n.\n", " ".repeat(MAX_LINE - 3));
+        assert_eq!(blocks_of(exactly.as_bytes()).await[0].uptime, 9.0, "a line of MAX_LINE bytes is read");
+    }
+
+    #[tokio::test]
+    async fn a_block_that_never_ends_grows_no_further() {
+        let mut text = String::new();
+        for i in 0..MAX_BLOCK_LINES * 3 {
+            text.push_str(&format!("D 1 1\nG {i:064x} 1 1 1\n"));
+        }
+        text.push_str(".\nU 7\n.\n");
+        let blocks = blocks_of(text.as_bytes()).await;
+        assert_eq!(blocks.len(), 2, "its end still ends it");
+        assert!(blocks[0].disks.len() + blocks[0].cgroups.len() <= MAX_BLOCK_LINES);
+        assert_eq!(blocks[1].uptime, 7.0, "and the next starts afresh");
+    }
+
+    #[tokio::test]
+    async fn lines_that_are_not_utf8_do_not_end_the_stream() {
+        let blocks = blocks_of(b"U 1\nM \xff\xfe 3\n.\nU 2\n.\n").await;
+        assert_eq!(blocks.len(), 2);
     }
 
     #[test]
