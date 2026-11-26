@@ -178,11 +178,28 @@ pub fn vm_row(prev: Option<&Block>, cur: &Block, ncpus: u32) -> Vec<i64> {
 
 /// `ssh` into the instance with Lima's own config, running `/bin/sh -s`: the script to run goes on
 /// stdin, so nothing is installed in the guest.
+///
+/// The guest is not to be trusted, and these sessions last as long as the VM runs, so they forward
+/// nothing to it, whatever Lima's config says (`ssh.forwardAgent: true` makes it `ForwardAgent
+/// yes`, which would let the guest's root sign with the host's keys): ssh takes the first value it
+/// finds for each setting, and the command line's come before any file's. Nor does one of them
+/// become the connection Lima's config shares between its sessions (`ControlMaster auto`): a
+/// shared connection keeps the options of the session that opened it, and only forwards an agent
+/// to a later session when both allow it, so ours would take agent forwarding away from the
+/// user's own `limactl shell`. One already open is used as it is.
 pub fn ssh(ssh_config: &str, instance: &str) -> Command {
     let mut cmd = Command::new("ssh");
     cmd.args([
         "-F",
         ssh_config,
+        "-o",
+        "ForwardAgent=no",
+        "-o",
+        "ForwardX11=no",
+        "-o",
+        "ClearAllForwardings=yes",
+        "-o",
+        "ControlMaster=no",
         "-o",
         "BatchMode=yes",
         "-o",
@@ -450,6 +467,47 @@ S sessions 2
         let a = parse(&no_psi);
         let row = vm_row(Some(&a), &a, 2);
         assert_eq!(row[5], ABSENT);
+    }
+
+    fn ssh_args(cmd: &Command) -> Vec<String> {
+        cmd.as_std().get_args().map(|a| a.to_string_lossy().into_owned()).collect()
+    }
+
+    #[test]
+    fn ssh_forwards_nothing_to_the_guest() {
+        let args = ssh_args(&ssh("/x/ssh.config", "vm"));
+        let host = args.iter().position(|a| a == "lima-vm").unwrap();
+        for opt in ["ForwardAgent=no", "ForwardX11=no", "ClearAllForwardings=yes", "ControlMaster=no"] {
+            let at = args.iter().position(|a| a == opt).unwrap_or_else(|| panic!("{opt} in {args:?}"));
+            assert!(at < host && args[at - 1] == "-o", "{opt} as an option: {args:?}");
+        }
+    }
+
+    /// What this machine's ssh makes of the probe's arguments against a Lima config that forwards
+    /// everything it can (`ssh -G` prints the settings and connects to nothing).
+    #[test]
+    fn ssh_on_the_command_line_wins_over_limas_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join("ssh.config");
+        std::fs::write(
+            &config,
+            "Host lima-vm\n  ForwardAgent yes\n  ForwardX11 yes\n  ForwardX11Trusted yes\n  LocalForward 9999 127.0.0.1:22\n  RemoteForward 9998 127.0.0.1:22\n  DynamicForward 9997\n  ControlMaster auto\n  ControlPersist yes\n  Hostname 127.0.0.1\n",
+        )
+        .unwrap();
+        let mut args = ssh_args(&ssh(config.to_str().unwrap(), "vm"));
+        args.insert(0, "-G".into());
+        let Ok(out) = std::process::Command::new("ssh").args(&args).output() else {
+            eprintln!("no ssh here: skipped");
+            return;
+        };
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        let settings = String::from_utf8(out.stdout).unwrap();
+        for want in ["forwardagent no", "forwardx11 no", "clearallforwardings yes", "controlmaster false"] {
+            assert!(settings.lines().any(|l| l == want), "{want} in:\n{settings}");
+        }
+        for forward in ["localforward", "remoteforward", "dynamicforward"] {
+            assert!(!settings.lines().any(|l| l.starts_with(forward)), "no {forward} in:\n{settings}");
+        }
     }
 
     #[test]
