@@ -30,7 +30,9 @@ const CONTAINERS_EVERY: Duration = Duration::from_secs(3);
 /// containers are in no project meanwhile.
 const IMAGES_RECHECK: Duration = Duration::from_secs(60);
 /// How soon images are asked for again after libpod couldn't answer: mostly a socket not quite up,
-/// and until it answers the VM's compose containers are out of their projects.
+/// and until it answers the VM's compose containers are out of their projects. Twice as long after
+/// each failure in a row, up to `IMAGES_RECHECK`: whoever runs the engine decides what it answers,
+/// so one that never answers well isn't asked (up to 64 MiB) every list.
 const IMAGES_RETRY: Duration = Duration::from_secs(5);
 const FLUSH_EVERY: Duration = Duration::from_secs(10);
 const RETAIN_EVERY: Duration = Duration::from_secs(3600);
@@ -791,11 +793,12 @@ impl Collector {
 struct ImageCache {
     hashes: HashMap<String, ImageHashes>,
     /// Images containers run that libpod didn't list, or couldn't be asked about: their containers
-    /// are in no project until they're asked about again, after `IMAGES_RECHECK`.
+    /// are in no project until they're asked about again, after `IMAGES_RECHECK`, or sooner when
+    /// the asking failed (`failures`).
     missing: HashSet<String>,
     asked: Option<Instant>,
-    /// Whether that ask failed, so it's tried again after `IMAGES_RETRY` rather than `IMAGES_RECHECK`.
-    failed: bool,
+    /// How many asks in a row have failed, for how soon to try again (`IMAGES_RETRY`).
+    failures: u32,
 }
 
 /// The images a list's containers run, by id (a container without one has none to look up).
@@ -807,7 +810,10 @@ impl ImageCache {
     /// Whether libpod's images are to be asked for before `list` is checked: an image not seen yet,
     /// or a missing one asked about long enough ago (soon, when the asking failed).
     fn due(&self, list: &[Container], now: Instant) -> bool {
-        let wait = if self.failed { IMAGES_RETRY } else { IMAGES_RECHECK };
+        let wait = match self.failures {
+            0 => IMAGES_RECHECK,
+            n => IMAGES_RETRY.saturating_mul(1 << (n - 1).min(16)).min(IMAGES_RECHECK),
+        };
         let recheck = self.asked.is_none_or(|t| now.duration_since(t) >= wait);
         images_run(list).into_iter().any(|id| !self.hashes.contains_key(id) && (recheck || !self.missing.contains(id)))
     }
@@ -816,7 +822,7 @@ impl ImageCache {
     /// was known stands, and the rest is missing.
     fn learn(&mut self, answer: Result<HashMap<String, ImageHashes>, PodmanError>, list: &[Container], now: Instant) {
         self.asked = Some(now);
-        self.failed = answer.is_err();
+        self.failures = if answer.is_err() { self.failures.saturating_add(1) } else { 0 };
         let run = images_run(list);
         match answer {
             Ok(mut all) => self.hashes = run.iter().filter_map(|id| all.remove_entry(*id)).collect(),
@@ -1457,6 +1463,16 @@ mod tests {
         // But soon: a failure is mostly a socket not quite up, and until it answers, the VM's
         // compose containers are out of their projects.
         assert!(cache.due(&list, t1 + IMAGES_RETRY));
+        // Failing again, it waits twice as long each time, up to the whole while: whoever runs the
+        // engine decides what it answers, so a failure that never clears isn't fetched every list.
+        cache.learn(Err(PodmanError::Timeout), &list, t1 + IMAGES_RETRY);
+        assert!(!cache.due(&list, t1 + IMAGES_RETRY + IMAGES_RETRY));
+        assert!(cache.due(&list, t1 + IMAGES_RETRY + IMAGES_RETRY * 2));
+        for _ in 0..8 {
+            cache.learn(Err(PodmanError::Timeout), &list, t1);
+        }
+        assert!(!cache.due(&list, t1 + IMAGES_RECHECK - Duration::from_secs(1)));
+        assert!(cache.due(&list, t1 + IMAGES_RECHECK));
         // An answer that doesn't list an image is an answer: that one waits the whole while.
         cache.learn(answer(&[("i1", serde_json::json!(null))]), &list, t1 + IMAGES_RETRY);
         assert!(!cache.due(&list, t1 + IMAGES_RETRY * 2));
