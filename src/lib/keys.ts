@@ -9,10 +9,15 @@
  */
 export function distinctKeys<T>(items: readonly T[], keyOf: (item: T) => string): string[] {
   const seen = new Set<string>();
+  // The number to try next for each key met: a name listed any number of times is still one step
+  // an item, not a count up from 2 each time.
+  const next = new Map<string, number>();
   return items.map((item) => {
     const own = keyOf(item);
     let key = own;
-    for (let n = 2; seen.has(key); n++) key = `${own}\u0000${n}`;
+    let n = next.get(own) ?? 2;
+    while (seen.has(key)) key = `${own}\u0000${n++}`;
+    next.set(own, n);
     seen.add(key);
     return key;
   });
