@@ -8,7 +8,6 @@
 //! `CONSTRAINT_MEMCG` means a cgroup hit its own limit; `CONSTRAINT_NONE` means the whole VM ran out.
 
 use serde::Serialize;
-use std::collections::HashMap;
 
 use crate::journal::Entry;
 use crate::probe::Block;
@@ -84,47 +83,116 @@ impl OomEvent {
 }
 
 // ---- kernel lines ---------------------------------------------------------------------------
+//
+// Parts of these lines are not the kernel's to choose. Any process can name itself (`comm`, 15
+// bytes, `prctl(PR_SET_NAME)`), and a container running systemd can make cgroups inside its own
+// scope and name them as it likes: the task's cgroup path, the limited cgroup's and the cpuset's
+// name can all hold `,`, `=` and the names of other fields. So no line is split on `,` into keys:
+// each field is found where the kernel put it, from the end the hostile text can't reach.
 
 /// What one fetched kernel line says.
 #[derive(Debug, PartialEq)]
 enum Line {
     /// `memory: usage …kB, limit …kB` — the limit, in bytes.
     Usage { limit: i64 },
-    /// `oom-kill:k=v,k=v,…` (bare words like `global_oom` map to "").
-    OomKill(HashMap<String, String>),
+    /// `oom-kill:constraint=…,…,task=…,pid=…,uid=…`.
+    OomKill(OomKill),
     /// `… Killed process <pid> (<name>) … anon-rss:<n>kB …`.
     Killed { pid: i64, process: String, anon_rss: Option<i64>, memcg: bool },
 }
 
+/// The fields of an `oom-kill:` line the app reads.
+#[derive(Debug, Default, PartialEq)]
+struct OomKill {
+    constraint: Option<String>,
+    oom_memcg: Option<String>,
+    task_memcg: Option<String>,
+    task: Option<String>,
+    pid: Option<i64>,
+}
+
+/// The kB right after `label`'s first appearance in `text`, in bytes; none past what i64 holds.
 fn kb_after(text: &str, label: &str) -> Option<i64> {
     let rest = &text[text.find(label)? + label.len()..];
     let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
-    rest[digits.len()..].starts_with("kB").then(|| digits.parse::<i64>().ok()).flatten().map(|kb| kb * 1024)
+    rest[digits.len()..].starts_with("kB").then(|| digits.parse::<i64>().ok()?.checked_mul(1024)).flatten()
 }
 
+/// `s`, if it's a decimal number and nothing else.
+fn whole_number(s: &str) -> Option<i64> {
+    s.bytes().all(|b| b.is_ascii_digit()).then(|| s.parse().ok()).flatten()
+}
+
+/// `"%s: Killed process %d (%s) total-vm:%lukB, anon-rss:%lukB, …"`. The prefix and the pid come
+/// before the name, so the first ` (` ends the pid. The name could hold `) total-vm:` or
+/// `anon-rss:`, but the kernel's own come after it: the name runs to the last `) total-vm:`, and
+/// anon-rss is read only from there on.
 fn parse_killed(message: &str) -> Option<Line> {
     let (prefix, rest) = message.split_once("Killed process ")?;
     let (pid, rest) = rest.split_once(" (")?;
-    let end = rest.find(") total-vm:").or_else(|| rest.rfind(')'))?;
+    let (name, tail) = match rest.rfind(") total-vm:") {
+        Some(end) => (&rest[..end], Some(&rest[end..])),
+        None => (&rest[..rest.rfind(')')?], None),
+    };
     Some(Line::Killed {
         pid: pid.trim().parse().ok()?,
-        process: rest[..end].to_string(),
-        anon_rss: kb_after(rest, "anon-rss:"),
+        process: name.to_string(),
+        anon_rss: tail.and_then(|t| kb_after(t, "anon-rss:")),
         memcg: prefix.starts_with("Memory cgroup"),
     })
+}
+
+/// What follows `oom-kill:`, in the kernel's order (`dump_oom_summary`, 4.19 on):
+/// `constraint=%s,nodemask=%*pbl,cpuset=<name>,mems_allowed=%*pbl`, then `,global_oom` or
+/// `,oom_memcg=<path>`, then `,task_memcg=<path>,task=%s,pid=%d,uid=%d`.
+///
+/// - `constraint` is first and one of the kernel's own words, so it runs to the first `,`.
+/// - `pid` and `uid` are last and numbers, so they're found from the right, past any name.
+/// - A cgroup's path begins with `/`, which no cgroup's name can hold, so the cpuset's name can't
+///   fake `,oom_memcg=/` or `,task_memcg=/`, and the first of each is the kernel's. A path could
+///   hold `,task_memcg=/` further in (a cgroup named `x,task_memcg=` with another inside it),
+///   which cuts the limited cgroup's path short there; its start, and the container's scope near
+///   the top of it, are still its own.
+/// - The task's name follows the first `,task=` after its cgroup's path begins, so a name holding
+///   `,task=` can't move it. A path holding it puts the rest of the path in the name: garbled, but
+///   only for a kill in that container, and only to what it chose to call its own cgroups.
+fn parse_oom_kill(fields: &str) -> OomKill {
+    let mut f = OomKill {
+        constraint: fields.strip_prefix("constraint=").and_then(|r| r.split(',').next()).map(str::to_string),
+        ..OomKill::default()
+    };
+    let rest = match fields.rsplit_once(",uid=") {
+        Some((rest, uid)) if whole_number(uid).is_some() => rest,
+        _ => fields,
+    };
+    let rest = match rest.rsplit_once(",pid=") {
+        Some((rest, pid)) if whole_number(pid).is_some() => {
+            f.pid = whole_number(pid);
+            rest
+        }
+        _ => rest,
+    };
+    const TASK_MEMCG: &str = ",task_memcg=";
+    const OOM_MEMCG: &str = ",oom_memcg=";
+    let Some(at) = rest.find(",task_memcg=/") else {
+        return f;
+    };
+    let (before, after) = (&rest[..at], &rest[at + TASK_MEMCG.len()..]);
+    match after.split_once(",task=") {
+        Some((path, task)) => {
+            f.task_memcg = Some(path.to_string());
+            f.task = Some(task.to_string());
+        }
+        None => f.task_memcg = Some(after.to_string()),
+    }
+    f.oom_memcg = before.find(",oom_memcg=/").map(|i| before[i + OOM_MEMCG.len()..].to_string());
+    f
 }
 
 fn parse_line(message: &str) -> Option<Line> {
     let message = message.trim();
     if let Some(fields) = message.strip_prefix("oom-kill:") {
-        let map = fields
-            .split(',')
-            .map(|f| match f.split_once('=') {
-                Some((k, v)) => (k.to_string(), v.to_string()),
-                None => (f.to_string(), String::new()),
-            })
-            .collect();
-        return Some(Line::OomKill(map));
+        return Some(Line::OomKill(parse_oom_kill(fields)));
     }
     if message.starts_with("memory: usage ") {
         return kb_after(message, "limit ").map(|limit| Line::Usage { limit });
@@ -132,26 +200,34 @@ fn parse_line(message: &str) -> Option<Line> {
     parse_killed(message)
 }
 
-/// The podman container id in a cgroup path (`…/libpod-<64 hex>.scope[/container]`), if any.
+/// The podman container id in a cgroup path (`…/libpod-<64 hex>.scope[/container]`), if any: the
+/// first whole `libpod-<id>.scope` (`libpod-<id>` under the cgroupfs manager) in it. Podman never
+/// puts one container's scope inside another's, but a container running systemd can make a cgroup
+/// inside its own and name it for another container, so a later one is never the container's.
 /// Conmon's `libpod-conmon-…` and a pod's `libpod-pod-…` slice don't count.
 pub fn libpod_id(path: &str) -> Option<String> {
-    path.match_indices("libpod-")
-        .filter_map(|(i, m)| {
-            let id = path.get(i + m.len()..i + m.len() + 64)?;
-            id.bytes().all(|b| b.is_ascii_hexdigit()).then(|| id.to_string())
-        })
-        .last()
+    path.split('/').find_map(|part| {
+        let id = part.strip_prefix("libpod-")?;
+        let id = id.strip_suffix(".scope").unwrap_or(id);
+        is_container_id(id).then(|| id.to_string())
+    })
 }
 
-fn from_oom_kill(vm: &str, entry: &Entry, f: &HashMap<String, String>) -> OomEvent {
-    let get = |k: &str| f.get(k).filter(|v| !v.is_empty()).cloned();
-    let cgroup = get("oom_memcg").or_else(|| get("task_memcg"));
+/// Whether `id` is a podman container's full id: 64 lowercase hex digits, as podman writes them.
+pub fn is_container_id(id: &str) -> bool {
+    id.len() == 64 && id.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+}
+
+fn from_oom_kill(vm: &str, entry: &Entry, f: &OomKill) -> OomEvent {
+    let get = |v: &Option<String>| v.clone().filter(|v| !v.is_empty());
+    let cgroup = get(&f.oom_memcg).or_else(|| get(&f.task_memcg));
     let mut e = OomEvent::new(vm, entry.ts_ms, Source::Kernel);
-    e.constraint = get("constraint");
-    e.container_id = cgroup.as_deref().and_then(libpod_id).or_else(|| get("task_memcg").as_deref().and_then(libpod_id));
+    e.constraint = get(&f.constraint);
+    e.container_id =
+        cgroup.as_deref().and_then(libpod_id).or_else(|| get(&f.task_memcg).as_deref().and_then(libpod_id));
     e.cgroup = cgroup;
-    e.process = get("task");
-    e.pid = get("pid").and_then(|p| p.parse().ok());
+    e.process = get(&f.task);
+    e.pid = f.pid;
     e
 }
 
@@ -432,6 +508,90 @@ mod tests {
         assert_eq!(libpod_id(&scope).as_deref(), Some(CT));
         assert_eq!(libpod_id(&format!("/x/libpod-conmon-{CT}.scope")), None);
         assert_eq!(libpod_id("/system.slice/sshd.service"), None);
+    }
+
+    /// `memcg_kill()` with the killed task named `comm` (at most 15 bytes, as the kernel keeps it)
+    /// in both lines, which any process can do to itself (`prctl(PR_SET_NAME)`).
+    fn memcg_kill_named(comm: &str) -> Vec<Entry> {
+        assert!(comm.len() <= 15, "the kernel's TASK_COMM_LEN");
+        memcg_kill()
+            .into_iter()
+            .map(|mut e| {
+                e.message = e
+                    .message
+                    .replace("task=python3,", &format!("task={comm},"))
+                    .replace("(python3)", &format!("({comm})"));
+                e
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_process_name_cannot_rewrite_the_kernels_fields() {
+        for comm in
+            [",constraint=X", ",oom_memcg=/x", ",task_memcg=/x", "a,pid=1,uid=0", ",task=x,pid=9", "a,global_oom"]
+        {
+            let events = kernel_events("cabash", &memcg_kill_named(comm));
+            assert_eq!(events.len(), 1, "{comm}");
+            let e = &events[0];
+            assert_eq!(e.constraint.as_deref(), Some(CONSTRAINT_MEMCG), "{comm}");
+            assert_eq!(e.container_id.as_deref(), Some(CT), "{comm}");
+            assert!(e.cgroup.as_deref().unwrap().ends_with(&format!("libpod-{CT}.scope")), "{comm}: {:?}", e.cgroup);
+            assert_eq!(e.process.as_deref(), Some(comm));
+            assert_eq!(e.pid, Some(1234), "{comm}");
+            assert_eq!(e.mem_limit, Some(1_073_741_824), "{comm}");
+            assert_eq!(e.anon_rss, Some(1_039_872 * 1024), "{comm}");
+        }
+    }
+
+    #[test]
+    fn a_process_name_cannot_rewrite_its_killed_line() {
+        for comm in ["x) total-vm:1kB", "anon-rss:9kB", "1 (x", ") anon-rss:9kB"] {
+            // Alone, so its name and anon-rss come from this line, not the oom-kill line.
+            let events = kernel_events("cabash", &memcg_kill_named(comm)[2..]);
+            assert_eq!(events.len(), 1, "{comm}");
+            assert_eq!(events[0].process.as_deref(), Some(comm));
+            assert_eq!(events[0].pid, Some(1234), "{comm}");
+            assert_eq!(events[0].anon_rss, Some(1_039_872 * 1024), "{comm}");
+        }
+    }
+
+    #[test]
+    fn a_containers_own_cgroups_cannot_name_another_container() {
+        // A container running systemd can make cgroups inside its own scope and name them as it
+        // likes, a scope named for another container's id included, and its cpuset too. The real
+        // scope is the first one in the path: podman's cgroups are never nested in another's.
+        let own = format!("/machine.slice/libpod-{CT}.scope");
+        let line = format!(
+            "oom-kill:constraint=CONSTRAINT_MEMCG,nodemask=(null),cpuset=libpod-{CT2}.scope,mems_allowed=0,oom_memcg={own}/c/libpod-{CT2}.scope,task_memcg={own}/c/libpod-{CT2}.scope,task=sh,pid=5,uid=0"
+        );
+        let events = kernel_events("cabash", &[entry(1, &line)]);
+        assert_eq!(events[0].container_id.as_deref(), Some(CT));
+        // A cgroup named to look like the next field doesn't move where it starts.
+        let line = format!(
+            "oom-kill:constraint=CONSTRAINT_MEMCG,nodemask=(null),cpuset=a,task_memcg=,mems_allowed=0,oom_memcg={own}/a,task_memcg=/libpod-{CT2}.scope,task_memcg={own}/a,task_memcg=/libpod-{CT2}.scope,task=sh,pid=5,uid=0"
+        );
+        let events = kernel_events("cabash", &[entry(1, &line)]);
+        assert_eq!(events[0].container_id.as_deref(), Some(CT));
+        assert_eq!(events[0].pid, Some(5));
+        assert!(events[0].cgroup.as_deref().unwrap().starts_with(&own), "{:?}", events[0].cgroup);
+    }
+
+    #[test]
+    fn numbers_too_large_for_bytes_are_no_numbers() {
+        let huge = "Out of memory: Killed process 7 (x) total-vm:1kB, anon-rss:9223372036854775807kB, file-rss:0kB";
+        let events = kernel_events("cabash", &[entry(1, huge)]);
+        assert_eq!(events[0].anon_rss, None);
+        assert_eq!(parse_line("memory: usage 1kB, limit 99999999999999999999kB, failcnt 1"), None);
+    }
+
+    #[test]
+    fn container_ids_come_only_from_whole_scope_names() {
+        assert_eq!(libpod_id(&format!("/machine.slice/libpod-{CT}.scope")).as_deref(), Some(CT));
+        assert_eq!(libpod_id(&format!("/machine.slice/libpod-{CT}.scope/container")).as_deref(), Some(CT));
+        assert_eq!(libpod_id(&format!("/machine.slice/libpod-{CT}x.scope")), None);
+        assert_eq!(libpod_id(&format!("/machine.slice/xlibpod-{CT}.scope")), None);
+        assert_eq!(libpod_id(&format!("/machine.slice/libpod-{}.scope", CT.to_uppercase())), None);
     }
 
     fn block(vm: Option<u64>, cgroups: &[(&str, u64)]) -> Block {
