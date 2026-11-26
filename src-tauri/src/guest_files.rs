@@ -91,23 +91,89 @@ pub fn normalise(rel: &str) -> Result<String, FilesError> {
     Ok(parts.join("/"))
 }
 
+/// A file name as the UI shows it and sends back in a path. A Linux name is bytes, not always
+/// UTF-8: where it is, the name is as it is; a byte where it isn't is written `\xNN`, and a
+/// backslash of the name's own is doubled. So two names never read alike (U+FFFD in place of any
+/// such byte made them), and [`unescape`] gives back the bytes to open.
+pub fn escape_name(raw: &[u8]) -> String {
+    let mut s = String::with_capacity(raw.len());
+    for chunk in raw.utf8_chunks() {
+        s.push_str(&chunk.valid().replace('\\', r"\\"));
+        for b in chunk.invalid() {
+            s.push_str(&format!(r"\x{b:02x}"));
+        }
+    }
+    s
+}
+
+/// A path as the UI sends it, as the guest's bytes: [`escape_name`] undone. Only what that writes
+/// is taken, `\\` and `\xNN` for a byte of 0x80 or more (one that isn't UTF-8 on its own), so an
+/// escape can't slip a '/', a '.' or a NUL past [`normalise`].
+pub fn unescape(path: &str) -> Result<Vec<u8>, FilesError> {
+    let refused = || FilesError::Refused(format!(r"a backslash in a path is \\ or \xNN for a byte over 7f: {path}"));
+    let mut out = Vec::with_capacity(path.len());
+    let mut rest = path.as_bytes();
+    while let Some((&b, tail)) = rest.split_first() {
+        rest = match (b, tail) {
+            (b'\\', [b'\\', tail @ ..]) => {
+                out.push(b'\\');
+                tail
+            }
+            (b'\\', [b'x', hi, lo, tail @ ..]) => {
+                let hex = std::str::from_utf8(&[*hi, *lo]).ok().and_then(|h| u8::from_str_radix(h, 16).ok());
+                out.push(hex.filter(|&b| b >= 0x80).ok_or_else(refused)?);
+                tail
+            }
+            (b'\\', _) => return Err(refused()),
+            (b, tail) => {
+                out.push(b);
+                tail
+            }
+        };
+    }
+    Ok(out)
+}
+
+/// A path from the UI: normalised as it's shown, and as the bytes to ask the guest for.
+pub fn guest_path(rel: &str) -> Result<(String, Vec<u8>), FilesError> {
+    let shown = normalise(rel)?;
+    let raw = unescape(&shown)?;
+    Ok((shown, raw))
+}
+
 /// `s` as one word for sh.
 pub fn sh_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', r"'\''"))
 }
 
+/// `b` as one word for sh, its bytes as they are: in single quotes, any but a quote is itself.
+fn sh_quote_bytes(b: &[u8]) -> Vec<u8> {
+    let mut q = vec![b'\''];
+    for &c in b {
+        if c == b'\'' { q.extend_from_slice(br"'\''") } else { q.push(c) }
+    }
+    q.push(b'\'');
+    q
+}
+
 /// Sent on stdin to `sh -s`. Its first line of output is `LD-OK` (a listing: NUL-ended
 /// `type\tsize\tmtime\tname` records follow) or `LD-OK <size>` (a peek: the file's start follows), or
-/// `LD-E <why>`.
-pub fn script(mountpoint: &str, rel: &str, op: Op) -> String {
+/// `LD-E <why>`. Bytes, not a string: `rel` is the guest's bytes, which needn't be UTF-8.
+pub fn script(mountpoint: &str, rel: &[u8], op: Op) -> Vec<u8> {
     let (op, limit) = match op {
         Op::List => ("list", MAX_ENTRIES + 1),
         Op::Peek => ("peek", MAX_PEEK),
     };
-    format!(
-        r#"# lima-desktop volume browser. READ-ONLY: lists a directory in a volume, or reads the start of a file.
-root={root}
-rel={rel}
+    let mut s = format!(
+        "# lima-desktop volume browser. READ-ONLY: lists a directory in a volume, or reads the start of a file.\n\
+         root={}\nrel=",
+        sh_quote(mountpoint)
+    )
+    .into_bytes();
+    s.extend(sh_quote_bytes(rel));
+    s.extend(
+        format!(
+            r#"
 inner=$(cat <<'LD_EOF'
 r=$(realpath -e -- "$1" 2>/dev/null) || {{ echo "LD-E the volume's directory isn't there"; exit 0; }}
 p=$(realpath -e -- "$1/$2" 2>/dev/null) || {{ echo "LD-E it isn't there any more"; exit 0; }}
@@ -147,10 +213,11 @@ case "$root" in
        sh -c "$inner" sh "$root" "$rel" {op} </dev/null
      fi ;;
 esac
-"#,
-        root = sh_quote(mountpoint),
-        rel = sh_quote(rel),
-    )
+"#
+        )
+        .as_bytes(),
+    );
+    s
 }
 
 /// The script's output: the status line, then what follows it.
@@ -197,10 +264,10 @@ pub fn parse_listing(path: &str, stdout: &[u8], folder: Folder) -> Result<Listin
         .split(|&b| b == 0)
         .filter(|r| !r.is_empty())
         .filter_map(|r| {
-            let r = String::from_utf8_lossy(r);
-            let mut f = r.splitn(4, '\t');
+            let mut f = r.splitn(4, |&b| b == b'\t');
             let (t, size, mtime, name) = (f.next()?, f.next()?, f.next()?, f.next()?);
-            entry(t, size, mtime, name, folder)
+            let ascii = |b| std::str::from_utf8(b).unwrap_or_default();
+            entry(ascii(t), ascii(size), ascii(mtime), &escape_name(name), folder)
         })
         .collect();
     let truncated = entries.len() > MAX_ENTRIES;
@@ -300,11 +367,11 @@ pub async fn capped_output(mut child: Child, limit: usize) -> std::io::Result<(O
     Ok((Output { status, stdout, stderr: err }, cut))
 }
 
-async fn run(ssh_config: &str, instance: &str, script: String, limit: usize) -> Result<Vec<u8>, FilesError> {
+async fn run(ssh_config: &str, instance: &str, script: Vec<u8>, limit: usize) -> Result<Vec<u8>, FilesError> {
     let go = async {
         let mut child = probe::ssh(ssh_config, instance).spawn()?;
         let mut stdin = child.stdin.take().expect("piped stdin");
-        stdin.write_all(script.as_bytes()).await?;
+        stdin.write_all(&script).await?;
         drop(stdin);
         capped_output(child, limit).await
     };
@@ -336,17 +403,17 @@ pub async fn list(
     folder: Folder,
     rel: &str,
 ) -> Result<Listing, FilesError> {
-    let rel = normalise(rel)?;
-    let out = run(ssh_config, instance, script(root, &rel, Op::List), answer_limit(Op::List)).await?;
+    let (rel, raw) = guest_path(rel)?;
+    let out = run(ssh_config, instance, script(root, &raw, Op::List), answer_limit(Op::List)).await?;
     parse_listing(&rel, &out, folder)
 }
 
 pub async fn peek(ssh_config: &str, instance: &str, mountpoint: &str, rel: &str) -> Result<Peek, FilesError> {
-    let rel = normalise(rel)?;
+    let (rel, raw) = guest_path(rel)?;
     if rel.is_empty() {
         return Err(FilesError::Refused("that's the folder itself, not a file".into()));
     }
-    let out = run(ssh_config, instance, script(mountpoint, &rel, Op::Peek), answer_limit(Op::Peek)).await?;
+    let out = run(ssh_config, instance, script(mountpoint, &raw, Op::Peek), answer_limit(Op::Peek)).await?;
     parse_peek(&rel, &out)
 }
 
@@ -382,6 +449,39 @@ mod tests {
         assert_eq!(l.entries[3].size, 12);
         assert_eq!(l.entries[3].modified, 1_700_000_000);
         assert!(!l.truncated);
+    }
+
+    #[test]
+    fn names_that_arent_utf8_stay_apart_and_say_their_bytes() {
+        let out = b"LD-OK\nf\t1\t1\tcaf\xe9\0f\t1\t1\tcaf\xef\0f\t1\t1\tcaf\\xe9\0f\t1\t1\tcaf\xc3\xa9\0";
+        let l = parse_listing("", out, Folder::Volume).unwrap();
+        let mut names: Vec<_> = l.entries.iter().map(|e| e.name.as_str()).collect();
+        names.sort();
+        // A backslash of the name's own is doubled, so it can't be mistaken for an escape.
+        assert_eq!(names, [r"caf\\xe9", r"caf\xe9", r"caf\xef", "café"]);
+        // A whiteout's name is what it removes, escaped the same.
+        let l = parse_listing("", b"LD-OK\nf\t0\t1\t.wh.\xff\0", Folder::Layer).unwrap();
+        assert_eq!((l.entries[0].name.as_str(), l.entries[0].kind), (r"\xff", "removed"));
+    }
+
+    #[test]
+    fn an_escaped_name_leads_back_to_its_bytes() {
+        for raw in [&b"caf\xe9"[..], b"back\\slash", b"caf\\xe9", "café".as_bytes(), b"\xff\xfe/\x80", b""] {
+            assert_eq!(unescape(&escape_name(raw)).unwrap(), raw, "{}", escape_name(raw));
+        }
+        // Only a byte that isn't UTF-8 is escaped, so `\x2f` can't sneak in a '/' (nor `\x00` a NUL)
+        // past `normalise`, and anything else after a backslash isn't one of ours.
+        for bad in [r"a\x2f..", r"\x00", r"\x7f", r"a\", r"\q", r"\x4", r"\xzz"] {
+            assert!(unescape(bad).is_err(), "{bad}");
+        }
+        assert_eq!(guest_path(r"./d\xff//f\\g/").unwrap(), (r"d\xff/f\\g".to_string(), b"d\xff/f\\g".to_vec()));
+        assert!(guest_path(r"a/\x2e\x2e").is_err());
+    }
+
+    #[test]
+    fn the_script_carries_a_paths_bytes_as_they_are() {
+        let s = script("/v", b"a\xff'b", Op::Peek);
+        assert!(s.windows(13).any(|w| w == b"rel='a\xff'\\''b'"));
     }
 
     #[test]
@@ -471,7 +571,7 @@ mod tests {
 
     #[test]
     fn the_script_quotes_what_it_is_given() {
-        let s = script("/home/me/vol's/_data", "a b/c", Op::List);
+        let s = String::from_utf8(script("/home/me/vol's/_data", b"a b/c", Op::List)).unwrap();
         assert!(s.contains(r"root='/home/me/vol'\''s/_data'"));
         assert!(s.contains("rel='a b/c'"));
         assert!(s.contains(&format!("head -z -n {}", MAX_ENTRIES + 1)));
@@ -479,6 +579,9 @@ mod tests {
     }
 
     /// Where this machine keeps `tool`.
+    #[cfg(target_os = "linux")]
+    use std::os::unix::ffi::OsStrExt;
+
     #[cfg(target_os = "linux")]
     fn which(tool: &str) -> std::path::PathBuf {
         ["/usr/bin", "/bin"]
@@ -505,7 +608,7 @@ mod tests {
     fn run_in(bin: &std::path::Path, vol: &std::path::Path, rel: &str, op: Op, env: &[(&str, &str)]) -> Vec<u8> {
         let out = std::process::Command::new("sh")
             .arg("-c")
-            .arg(script(vol.to_str().unwrap(), rel, op))
+            .arg(std::ffi::OsStr::from_bytes(&script(vol.to_str().unwrap(), &guest_path(rel).unwrap().1, op)))
             .env("PATH", bin)
             .envs(env.iter().copied())
             .output()
@@ -529,7 +632,12 @@ mod tests {
         let l = parse_listing("", &run("", Op::List), Folder::Volume).unwrap();
         let names: Vec<_> = l.entries.iter().map(|e| e.name.as_str()).collect();
         assert_eq!(names, ["sub", "escape", "note.txt"]);
-        assert!(parse_listing("sub", &run("sub", Op::List), Folder::Volume).unwrap().entries.is_empty());
+        // A name that isn't UTF-8 is listed escaped, and opened by that.
+        std::fs::write(vol.join("sub").join(std::ffi::OsStr::from_bytes(b"caf\xe9")), "latin-1").unwrap();
+        let l = parse_listing("sub", &run("sub", Op::List), Folder::Volume).unwrap();
+        assert_eq!(l.entries.iter().map(|e| e.name.as_str()).collect::<Vec<_>>(), [r"caf\xe9"]);
+        let p = parse_peek(r"sub/caf\xe9", &run(r"sub/caf\xe9", Op::Peek)).unwrap();
+        assert_eq!(p.text.as_deref(), Some("latin-1"));
         let p = parse_peek("note.txt", &run("note.txt", Op::Peek)).unwrap();
         assert_eq!((p.text.as_deref(), p.size), (Some("hi there"), 8));
         assert_eq!(
