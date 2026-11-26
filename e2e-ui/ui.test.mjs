@@ -1876,6 +1876,26 @@ test("A guest's names are shown as they are: what would hide or turn text round 
   }
 });
 
+// All of atlas's containers in one project, so the headlines name it: a guest's name in a sentence.
+function oneCraftedProject() {
+  const RLO = String.fromCodePoint(0x202e);
+  window.__fakeAnswer = (cmd, args, answer) => cmd !== 'snapshot' ? answer : {
+    ...answer,
+    vms: answer.vms.map((v) => v.instance.name !== 'atlas' ? v : { ...v, containers: v.containers.map((c) => ({ ...c, composeProject: `web${RLO}exe.gpj` })) }),
+  };
+}
+
+test("A headline that names a guest's compose project spells out what would turn the sentence round", async () => {
+  for (const [path, ready] of [['/containers', '.line'], ['/vm/atlas', '.line']]) {
+    const { page, errors, close } = await open(path, { init: oneCraftedProject });
+    await page.locator(ready).first().waitFor();
+    await page.waitForFunction(() => document.querySelector('main').innerText.includes('all in web⟨U+202E⟩exe.gpj'));
+    assert.deepEqual(await hidden(page), [], `${path}: text that would hide or reorder`);
+    assert.deepEqual(errors, [], path);
+    await close();
+  }
+});
+
 test('Images and Volumes open on what was already fetched', async () => {
   const { page, errors, close } = await open('/');
   await page.locator('article').first().waitFor();
