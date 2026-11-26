@@ -1497,6 +1497,22 @@ test("A container's log opens at its newest line, each with podman's time", asyn
   await close();
 });
 
+test("A container's detail keeps its tabs beside its name when the name and image don't fit, the image wrapping under", async () => {
+  const { page, errors, close } = await open('/containers', { width: 640 });
+  await page.locator('.line', { has: page.locator('.name', { hasText: /^frontend/ }) }).first().click();
+  const head = page.locator('section.detail .head');
+  const name = await head.locator('h3').boundingBox();
+  const image = await head.locator('.image').boundingBox();
+  assert.ok(image.y >= name.y + name.height - 1, 'the image is under the name');
+  for (const label of ['metrics', 'logs', 'inspect', 'Close']) {
+    const b = await head.getByRole('button', { name: label, exact: true }).boundingBox();
+    const middle = b.y + b.height / 2;
+    assert.ok(middle > name.y && middle < name.y + name.height, `${label} is level with the name`);
+  }
+  assert.deepEqual(errors, []);
+  await close();
+});
+
 test("A container's log is searched by its words, filtered by level, stream and time, and opens in a full window", async () => {
   const { page, errors, close } = await open('/containers');
   await page.locator('.line', { has: page.locator('.name', { hasText: /^frontend/ }) }).first().click();

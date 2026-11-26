@@ -57,9 +57,10 @@
 
 <section class="wash detail">
   <div class="head">
-    <h3 class="serif"><bdi>{name}</bdi></h3>
-    <span class="muted"><bdi>{image}</bdi></span>
-    <span class="spacer"></span>
+    <div class="title">
+      <h3 class="serif"><bdi>{name}</bdi></h3>
+      <span class="muted image"><bdi>{image}</bdi></span>
+    </div>
     {#each ['metrics', 'logs', 'inspect'] as const as t}
       <button class:active={tab === t} onclick={() => (tab = t)}>{t}</button>
     {/each}
@@ -124,9 +125,12 @@
 
 <style>
   .detail { display: grid; gap: 0.75rem; }
-  .head { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+  /* The tabs stay on the name's line: a long name or image wraps within the title instead. */
+  .head { display: flex; align-items: baseline; gap: 0.5rem; }
+  .title { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; align-items: baseline; column-gap: 0.5rem; }
+  .title > * { overflow-wrap: anywhere; }
+  .head > button { flex: none; }
   h3 { margin: 0; font-size: 1.5rem; font-weight: 600; }
-  .spacer { flex: 1; }
   .ports .link { height: auto; padding: 0; border: none; border-radius: 0; background: none; font: inherit; color: var(--accent); }
   .ports .link:hover { text-decoration: underline; }
   .ports { display: flex; align-items: baseline; gap: 0.75rem; font-size: 0.85rem; }
