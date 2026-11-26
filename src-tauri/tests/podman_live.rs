@@ -1,12 +1,20 @@
 //! Against a REAL podman API, opt-in: `LD_PODMAN_SOCKET=/path/to/podman.sock cargo test --test podman_live`.
-//! Expects a running container labelled `com.docker.compose.project=shop`, and for the removal
-//! test the tag `localhost/ld-test:gone` and the volume `ld-test-gone` (see DEVELOPMENT.md).
+//! Expects a running container labelled as compose labels one in project `shop` (with a
+//! `com.docker.compose.config-hash` its image doesn't carry), and for the removal test the tag
+//! `localhost/ld-test:gone` and the volume `ld-test-gone` (see DEVELOPMENT.md).
 //! Skips silently when the variable is unset.
 
-use lima_desktop_lib::podman::{ContainerAction, Libpod, PodmanError};
+use lima_desktop_lib::podman::{self, Container, ContainerAction, Libpod, PodmanError};
 
 fn socket() -> Option<String> {
     std::env::var("LD_PODMAN_SOCKET").ok().filter(|s| !s.is_empty())
+}
+
+/// The containers, their compose projects checked against their images as the collector does.
+async fn containers(pod: &Libpod) -> Vec<Container> {
+    let mut list = pod.containers().await.expect("list");
+    podman::trust_compose(&mut list, &pod.image_hashes().await.expect("image hashes"));
+    list
 }
 
 #[tokio::test]
@@ -15,7 +23,7 @@ async fn lists_stats_logs_and_df_from_a_real_engine() {
     let pod = Libpod::new(&sock);
     assert!(pod.ping().await, "ping");
 
-    let containers = pod.containers().await.expect("list");
+    let containers = containers(&pod).await;
     let web = containers
         .iter()
         .find(|c| c.compose_project.as_deref() == Some("shop"))
@@ -69,6 +77,8 @@ async fn lists_images_and_volumes_from_a_real_engine() {
     // Distroless images are built reproducibly: `Created` is the epoch, 0.
     assert!(images.iter().all(|i| !i.id.is_empty() && i.size > 0 && i.created >= 0));
     let containers = pod.containers().await.expect("list");
+    // What a compose project is believed by: the container's image, found by its id.
+    let hashes = pod.image_hashes().await.expect("image hashes");
     for c in containers.iter().filter(|c| c.state == "running") {
         assert!(
             images.iter().any(|i| i.id == c.image_id && i.containers > 0),
@@ -76,6 +86,7 @@ async fn lists_images_and_volumes_from_a_real_engine() {
             c.name,
             c.image_id
         );
+        assert!(hashes.contains_key(&c.image_id), "{}'s image {} is found by its id", c.name, c.image_id);
     }
 
     let volumes = pod.volumes().await.expect("volumes");
@@ -89,7 +100,7 @@ async fn removes_images_and_volumes_and_refuses_what_is_in_use() {
     let Some(sock) = socket() else { return };
     let pod = Libpod::new(&sock);
 
-    let containers = pod.containers().await.expect("list");
+    let containers = containers(&pod).await;
     let web = containers
         .iter()
         .find(|c| c.compose_project.as_deref() == Some("shop"))
