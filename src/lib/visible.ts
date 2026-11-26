@@ -5,7 +5,10 @@
 // line it's on; each is shown as its code point instead, "⟨U+202E⟩". Where it's drawn, a name is
 // also isolated (<bdi>), so letters of a right-to-left script can't reorder what's beside it.
 
-const HIDDEN = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\u115F\u1160\u3164\uFFA0]/gu;
+// Controls, format characters, line and paragraph separators, and everything Unicode says a
+// renderer may draw as nothing (Default_Ignorable_Code_Point): the Hangul fillers that pass for
+// letters, variation selectors, the combining grapheme joiner, which a mark-by-category test misses.
+const HIDDEN = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Default_Ignorable_Code_Point}]/gu;
 
 const codePoint = (ch: string) => `⟨U+${ch.codePointAt(0)!.toString(16).toUpperCase().padStart(4, '0')}⟩`;
 

@@ -18,6 +18,11 @@ describe('visible', () => {
     expect(visible('a\u3164b')).toBe('a⟨U+3164⟩b');
     // A tag character, beyond the BMP.
     expect(visible('x\u{E0041}')).toBe('x⟨U+E0041⟩');
+    // Marks that combine with nothing to draw: a grapheme joiner, and variation selectors.
+    expect(visible('admin\u034F')).toBe('admin⟨U+034F⟩');
+    expect(visible('a\uFE0Fb\u{E0100}')).toBe('a⟨U+FE0F⟩b⟨U+E0100⟩');
+    // A mark that draws stays: it's part of its letter.
+    expect(visible('cafe\u0301')).toBe('cafe\u0301');
   });
   it('shows controls and line breaks, which would break a line in two', () => {
     expect(visible('a\nb\tc\x1b[31m\u0085\u2028\u2029')).toBe('a⟨U+000A⟩b⟨U+0009⟩c⟨U+001B⟩[31m⟨U+0085⟩⟨U+2028⟩⟨U+2029⟩');
