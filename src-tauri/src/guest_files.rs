@@ -11,7 +11,7 @@ use serde::Serialize;
 use std::time::Duration;
 use tokio::io::AsyncWriteExt;
 
-use crate::probe;
+use crate::{bounded, probe};
 
 /// Entries listed from one directory, at most; a larger one says it was cut short.
 pub const MAX_ENTRIES: usize = 2000;
@@ -89,35 +89,117 @@ pub fn normalise(rel: &str) -> Result<String, FilesError> {
     Ok(parts.join("/"))
 }
 
+/// A file name as the UI shows it and sends back in a path. A Linux name is bytes, not always
+/// UTF-8: where it is, the name is as it is; a byte where it isn't is written `\xNN`, and a
+/// backslash of the name's own is doubled. So two names never read alike (U+FFFD in place of any
+/// such byte made them), and [`unescape`] gives back the bytes to open.
+pub fn escape_name(raw: &[u8]) -> String {
+    let mut s = String::with_capacity(raw.len());
+    for chunk in raw.utf8_chunks() {
+        s.push_str(&chunk.valid().replace('\\', r"\\"));
+        for b in chunk.invalid() {
+            s.push_str(&format!(r"\x{b:02x}"));
+        }
+    }
+    s
+}
+
+/// A path as the UI sends it, as the guest's bytes: [`escape_name`] undone. Only what that writes
+/// is taken, `\\` and `\xNN` for a byte of 0x80 or more (one that isn't UTF-8 on its own), so an
+/// escape can't slip a '/', a '.' or a NUL past [`normalise`].
+pub fn unescape(path: &str) -> Result<Vec<u8>, FilesError> {
+    let refused = || FilesError::Refused(format!(r"a backslash in a path is \\ or \xNN for a byte over 7f: {path}"));
+    let mut out = Vec::with_capacity(path.len());
+    let mut rest = path.as_bytes();
+    while let Some((&b, tail)) = rest.split_first() {
+        rest = match (b, tail) {
+            (b'\\', [b'\\', tail @ ..]) => {
+                out.push(b'\\');
+                tail
+            }
+            (b'\\', [b'x', hi, lo, tail @ ..]) => {
+                let hex = std::str::from_utf8(&[*hi, *lo]).ok().and_then(|h| u8::from_str_radix(h, 16).ok());
+                out.push(hex.filter(|&b| b >= 0x80).ok_or_else(refused)?);
+                tail
+            }
+            (b'\\', _) => return Err(refused()),
+            (b, tail) => {
+                out.push(b);
+                tail
+            }
+        };
+    }
+    Ok(out)
+}
+
+/// A path from the UI: normalised as it's shown, and as the bytes to ask the guest for.
+pub fn guest_path(rel: &str) -> Result<(String, Vec<u8>), FilesError> {
+    let shown = normalise(rel)?;
+    let raw = unescape(&shown)?;
+    Ok((shown, raw))
+}
+
 /// `s` as one word for sh.
 pub fn sh_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', r"'\''"))
 }
 
+/// `b` as one word for sh, its bytes as they are: in single quotes, any but a quote is itself.
+fn sh_quote_bytes(b: &[u8]) -> Vec<u8> {
+    let mut q = vec![b'\''];
+    for &c in b {
+        if c == b'\'' { q.extend_from_slice(br"'\''") } else { q.push(c) }
+    }
+    q.push(b'\'');
+    q
+}
+
 /// Sent on stdin to `sh -s`. Its first line of output is `LD-OK` (a listing: NUL-ended
 /// `type\tsize\tmtime\tname` records follow) or `LD-OK <size>` (a peek: the file's start follows), or
-/// `LD-E <why>`.
-pub fn script(mountpoint: &str, rel: &str, op: Op) -> String {
+/// `LD-E <why>`. Bytes, not a string: `rel` is the guest's bytes, which needn't be UTF-8.
+pub fn script(mountpoint: &str, rel: &[u8], op: Op) -> Vec<u8> {
     let (op, limit) = match op {
         Op::List => ("list", MAX_ENTRIES + 1),
         Op::Peek => ("peek", MAX_PEEK),
     };
-    format!(
-        r#"# lima-desktop volume browser. READ-ONLY: lists a directory in a volume, or reads the start of a file.
-root={root}
-rel={rel}
+    let mut s = format!(
+        "# lima-desktop volume browser. READ-ONLY: lists a directory in a volume, or reads the start of a file.\n\
+         root={}\nrel=",
+        sh_quote(mountpoint)
+    )
+    .into_bytes();
+    s.extend(sh_quote_bytes(rel));
+    s.extend(
+        format!(
+            r#"
 inner=$(cat <<'LD_EOF'
 r=$(realpath -e -- "$1" 2>/dev/null) || {{ echo "LD-E the volume's directory isn't there"; exit 0; }}
 p=$(realpath -e -- "$1/$2" 2>/dev/null) || {{ echo "LD-E it isn't there any more"; exit 0; }}
-case "$p/" in "$r"/*) ;; *) echo "LD-E it leads outside the volume"; exit 0 ;; esac
+inside() {{ case "$1/" in "$r"/*) ;; *) echo "LD-E it leads outside the volume"; exit 0 ;; esac; }}
+inside "$p"
+# A container that can write to the volume can swap any part of "$p" for a link between that check
+# and the read, so what's read is checked again once it's open, where swapping no longer matters.
 if [ "$3" = list ]; then
-  [ -d "$p" ] || {{ echo "LD-E it isn't a directory"; exit 0; }}
+  # The directory we're in stays itself, whatever is swapped above it, and pwd -P says where it is.
+  cd -P -- "$p" 2>/dev/null || {{ echo "LD-E it isn't a directory"; exit 0; }}
+  inside "$(pwd -P)"
   echo LD-OK
-  find "$p" -mindepth 1 -maxdepth 1 -printf '%y\t%s\t%T@\t%f\0' 2>/dev/null | head -z -n {limit}
+  find . -mindepth 1 -maxdepth 1 -printf '%y\t%s\t%T@\t%f\0' 2>/dev/null | head -z -n {limit}
 else
   [ -f "$p" ] || {{ echo "LD-E it isn't a file"; exit 0; }}
-  echo "LD-OK $(stat -c %s -- "$p")"
-  head -c {limit} -- "$p"
+  # Opened as fd 3, then judged by what was opened: /proc/self/fd/3 is the file itself to test and
+  # stat, and readlink says where it really is. Opening still follows a link swapped in after the
+  # test above, so a FIFO or device the container put there in that moment gets opened (sh can't
+  # open without following links), but what's shown is only ever a regular file inside the volume.
+  f=/proc/self/fd/3
+  {{
+    opened=1
+    [ -f "$f" ] || {{ echo "LD-E it isn't a file"; exit 0; }}
+    inside "$(readlink -- "$f")"
+    echo "LD-OK $(stat -L -c %s -- "$f")"
+    head -c {limit} <&3
+  }} 2>/dev/null 3<"$p"
+  [ -n "${{opened:-}}" ] || echo "LD-E it can't be read"
 fi
 LD_EOF
 )
@@ -129,10 +211,11 @@ case "$root" in
        sh -c "$inner" sh "$root" "$rel" {op} </dev/null
      fi ;;
 esac
-"#,
-        root = sh_quote(mountpoint),
-        rel = sh_quote(rel),
-    )
+"#
+        )
+        .as_bytes(),
+    );
+    s
 }
 
 /// The script's output: the status line, then what follows it.
@@ -179,10 +262,10 @@ pub fn parse_listing(path: &str, stdout: &[u8], folder: Folder) -> Result<Listin
         .split(|&b| b == 0)
         .filter(|r| !r.is_empty())
         .filter_map(|r| {
-            let r = String::from_utf8_lossy(r);
-            let mut f = r.splitn(4, '\t');
+            let mut f = r.splitn(4, |&b| b == b'\t');
             let (t, size, mtime, name) = (f.next()?, f.next()?, f.next()?, f.next()?);
-            entry(t, size, mtime, name, folder)
+            let ascii = |b| std::str::from_utf8(b).unwrap_or_default();
+            entry(ascii(t), ascii(size), ascii(mtime), &escape_name(name), folder)
         })
         .collect();
     let truncated = entries.len() > MAX_ENTRIES;
@@ -219,18 +302,31 @@ fn status(stdout: &[u8]) -> Result<(&str, &[u8]), FilesError> {
     }
 }
 
-async fn run(ssh_config: &str, instance: &str, script: String) -> Result<Vec<u8>, FilesError> {
+/// The most the script's answer can be, in bytes; past it the guest is sending what wasn't asked
+/// for. A listing's record is at most some 300 bytes (a name is at most 255), so the most entries
+/// listed come to some 600 kB; a peek is its status line and `MAX_PEEK`.
+fn answer_limit(op: Op) -> usize {
+    match op {
+        Op::List => 1 << 20,
+        Op::Peek => MAX_PEEK + 1024,
+    }
+}
+
+async fn run(ssh_config: &str, instance: &str, script: Vec<u8>, limit: usize) -> Result<Vec<u8>, FilesError> {
     let go = async {
         let mut child = probe::ssh(ssh_config, instance).spawn()?;
         let mut stdin = child.stdin.take().expect("piped stdin");
-        stdin.write_all(script.as_bytes()).await?;
+        stdin.write_all(&script).await?;
         drop(stdin);
-        child.wait_with_output().await
+        bounded::capped_output(child, limit).await
     };
-    let out = tokio::time::timeout(TIMEOUT, go)
+    let (out, cut) = tokio::time::timeout(TIMEOUT, go)
         .await
         .map_err(|_| FilesError::Timeout)?
         .map_err(|e| FilesError::Ssh(e.to_string()))?;
+    if cut {
+        return Err(FilesError::Guest("the guest sent more than was asked for".into()));
+    }
     // An answer from the script is the answer, whatever the exit status.
     if out.stdout.starts_with(b"LD-") {
         return Ok(out.stdout);
@@ -252,17 +348,17 @@ pub async fn list(
     folder: Folder,
     rel: &str,
 ) -> Result<Listing, FilesError> {
-    let rel = normalise(rel)?;
-    let out = run(ssh_config, instance, script(root, &rel, Op::List)).await?;
+    let (rel, raw) = guest_path(rel)?;
+    let out = run(ssh_config, instance, script(root, &raw, Op::List), answer_limit(Op::List)).await?;
     parse_listing(&rel, &out, folder)
 }
 
 pub async fn peek(ssh_config: &str, instance: &str, mountpoint: &str, rel: &str) -> Result<Peek, FilesError> {
-    let rel = normalise(rel)?;
+    let (rel, raw) = guest_path(rel)?;
     if rel.is_empty() {
         return Err(FilesError::Refused("that's the folder itself, not a file".into()));
     }
-    let out = run(ssh_config, instance, script(mountpoint, &rel, Op::Peek)).await?;
+    let out = run(ssh_config, instance, script(mountpoint, &raw, Op::Peek), answer_limit(Op::Peek)).await?;
     parse_peek(&rel, &out)
 }
 
@@ -298,6 +394,39 @@ mod tests {
         assert_eq!(l.entries[3].size, 12);
         assert_eq!(l.entries[3].modified, 1_700_000_000);
         assert!(!l.truncated);
+    }
+
+    #[test]
+    fn names_that_arent_utf8_stay_apart_and_say_their_bytes() {
+        let out = b"LD-OK\nf\t1\t1\tcaf\xe9\0f\t1\t1\tcaf\xef\0f\t1\t1\tcaf\\xe9\0f\t1\t1\tcaf\xc3\xa9\0";
+        let l = parse_listing("", out, Folder::Volume).unwrap();
+        let mut names: Vec<_> = l.entries.iter().map(|e| e.name.as_str()).collect();
+        names.sort();
+        // A backslash of the name's own is doubled, so it can't be mistaken for an escape.
+        assert_eq!(names, [r"caf\\xe9", r"caf\xe9", r"caf\xef", "café"]);
+        // A whiteout's name is what it removes, escaped the same.
+        let l = parse_listing("", b"LD-OK\nf\t0\t1\t.wh.\xff\0", Folder::Layer).unwrap();
+        assert_eq!((l.entries[0].name.as_str(), l.entries[0].kind), (r"\xff", "removed"));
+    }
+
+    #[test]
+    fn an_escaped_name_leads_back_to_its_bytes() {
+        for raw in [&b"caf\xe9"[..], b"back\\slash", b"caf\\xe9", "café".as_bytes(), b"\xff\xfe/\x80", b""] {
+            assert_eq!(unescape(&escape_name(raw)).unwrap(), raw, "{}", escape_name(raw));
+        }
+        // Only a byte that isn't UTF-8 is escaped, so `\x2f` can't sneak in a '/' (nor `\x00` a NUL)
+        // past `normalise`, and anything else after a backslash isn't one of ours.
+        for bad in [r"a\x2f..", r"\x00", r"\x7f", r"a\", r"\q", r"\x4", r"\xzz"] {
+            assert!(unescape(bad).is_err(), "{bad}");
+        }
+        assert_eq!(guest_path(r"./d\xff//f\\g/").unwrap(), (r"d\xff/f\\g".to_string(), b"d\xff/f\\g".to_vec()));
+        assert!(guest_path(r"a/\x2e\x2e").is_err());
+    }
+
+    #[test]
+    fn the_script_carries_a_paths_bytes_as_they_are() {
+        let s = script("/v", b"a\xff'b", Op::Peek);
+        assert!(s.windows(13).any(|w| w == b"rel='a\xff'\\''b'"));
     }
 
     #[test]
@@ -345,50 +474,84 @@ mod tests {
     }
 
     #[test]
+    fn the_longest_honest_listing_fits_the_limit() {
+        // A record at its longest: a 20-digit size, a time to the nanosecond, a 255-byte name.
+        let record = format!("f\t{}\t{}.0123456789\t{}\0", u64::MAX, i64::MAX, "n".repeat(255));
+        assert!(b"LD-OK\n".len() + (MAX_ENTRIES + 1) * record.len() < answer_limit(Op::List));
+        assert!(b"LD-OK 18446744073709551615\n".len() + MAX_PEEK < answer_limit(Op::Peek));
+    }
+
+    #[test]
     fn the_script_quotes_what_it_is_given() {
-        let s = script("/home/me/vol's/_data", "a b/c", Op::List);
+        let s = String::from_utf8(script("/home/me/vol's/_data", b"a b/c", Op::List)).unwrap();
         assert!(s.contains(r"root='/home/me/vol'\''s/_data'"));
         assert!(s.contains("rel='a b/c'"));
         assert!(s.contains(&format!("head -z -n {}", MAX_ENTRIES + 1)));
         assert!(s.contains("sh \"$root\" \"$rel\" list"));
     }
 
+    /// Where this machine keeps `tool`.
+    #[cfg(target_os = "linux")]
+    use std::os::unix::ffi::OsStrExt;
+
+    #[cfg(target_os = "linux")]
+    fn which(tool: &str) -> std::path::PathBuf {
+        ["/usr/bin", "/bin"]
+            .iter()
+            .map(|d| std::path::Path::new(d).join(tool))
+            .find(|p| p.exists())
+            .unwrap_or_else(|| panic!("no {tool}"))
+    }
+
+    /// A PATH in `dir` holding only the tools the script uses, so without `podman` it reads
+    /// directly.
+    #[cfg(target_os = "linux")]
+    fn guest_bin(dir: &std::path::Path) -> std::path::PathBuf {
+        let bin = dir.join("bin");
+        std::fs::create_dir(&bin).unwrap();
+        for tool in ["sh", "cat", "realpath", "readlink", "find", "head", "stat"] {
+            std::os::unix::fs::symlink(which(tool), bin.join(tool)).unwrap();
+        }
+        bin
+    }
+
+    /// The script, its PATH `bin`, with `env` set: its stdout.
+    #[cfg(target_os = "linux")]
+    fn run_in(bin: &std::path::Path, vol: &std::path::Path, rel: &str, op: Op, env: &[(&str, &str)]) -> Vec<u8> {
+        let out = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(std::ffi::OsStr::from_bytes(&script(vol.to_str().unwrap(), &guest_path(rel).unwrap().1, op)))
+            .env("PATH", bin)
+            .envs(env.iter().copied())
+            .output()
+            .unwrap();
+        out.stdout
+    }
+
     /// The script under this machine's sh, against a directory standing in for a volume (Linux:
-    /// it needs GNU find and head). Its PATH holds only the tools it uses, so without `podman` it
-    /// reads directly.
+    /// it needs GNU find and head).
     #[cfg(target_os = "linux")]
     #[test]
     fn the_script_runs_against_a_real_directory() {
         let dir = tempfile::tempdir().unwrap();
-        let bin = dir.path().join("bin");
-        std::fs::create_dir(&bin).unwrap();
-        for tool in ["sh", "cat", "realpath", "find", "head", "stat"] {
-            let found = ["/usr/bin", "/bin"]
-                .iter()
-                .map(|d| std::path::Path::new(d).join(tool))
-                .find(|p| p.exists())
-                .unwrap_or_else(|| panic!("no {tool}"));
-            std::os::unix::fs::symlink(found, bin.join(tool)).unwrap();
-        }
+        let bin = guest_bin(dir.path());
         let vol = dir.path().join("vol");
         std::fs::create_dir_all(vol.join("sub")).unwrap();
         std::fs::write(vol.join("note.txt"), "hi there").unwrap();
         std::fs::write(dir.path().join("secret"), "no").unwrap();
         std::os::unix::fs::symlink(dir.path().join("secret"), vol.join("escape")).unwrap();
-        let run = |rel: &str, op| {
-            let out = std::process::Command::new("sh")
-                .arg("-c")
-                .arg(script(vol.to_str().unwrap(), rel, op))
-                .env("PATH", &bin)
-                .output()
-                .unwrap();
-            out.stdout
-        };
+        let run = |rel: &str, op| run_in(&bin, &vol, rel, op, &[]);
         let l = parse_listing("", &run("", Op::List), Folder::Volume).unwrap();
         let names: Vec<_> = l.entries.iter().map(|e| e.name.as_str()).collect();
         assert_eq!(names, ["sub", "escape", "note.txt"]);
+        // A name that isn't UTF-8 is listed escaped, and opened by that.
+        std::fs::write(vol.join("sub").join(std::ffi::OsStr::from_bytes(b"caf\xe9")), "latin-1").unwrap();
+        let l = parse_listing("sub", &run("sub", Op::List), Folder::Volume).unwrap();
+        assert_eq!(l.entries.iter().map(|e| e.name.as_str()).collect::<Vec<_>>(), [r"caf\xe9"]);
+        let p = parse_peek(r"sub/caf\xe9", &run(r"sub/caf\xe9", Op::Peek)).unwrap();
+        assert_eq!(p.text.as_deref(), Some("latin-1"));
         let p = parse_peek("note.txt", &run("note.txt", Op::Peek)).unwrap();
-        assert_eq!(p.text.as_deref(), Some("hi there"));
+        assert_eq!((p.text.as_deref(), p.size), (Some("hi there"), 8));
         assert_eq!(
             parse_peek("escape", &run("escape", Op::Peek)),
             Err(FilesError::Guest("it leads outside the volume".into()))
@@ -396,6 +559,50 @@ mod tests {
         assert_eq!(
             parse_listing("note.txt", &run("note.txt", Op::List), Folder::Volume),
             Err(FilesError::Guest("it isn't a directory".into()))
+        );
+        assert_eq!(parse_peek("sub", &run("sub", Op::Peek)), Err(FilesError::Guest("it isn't a file".into())));
+    }
+
+    /// A container that can write to the volume swaps what the script checked for a link to
+    /// outside it, between the check and the read. A `realpath` that makes the swap as soon as it
+    /// has answered for the path asked about stands in for the container winning that race.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_link_swapped_in_after_the_check_leads_nowhere() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let bin = guest_bin(dir.path());
+        let racer = format!(
+            "#!/bin/sh\nout=$({} \"$@\") || exit $?\neval last=\\${{$#}}\n\
+             case \"$last\" in */\"$WHEN\") {} -rf \"$SWAP\"; {} -s \"$TO\" \"$SWAP\" ;; esac\n\
+             printf '%s\\n' \"$out\"\n",
+            which("realpath").display(),
+            which("rm").display(),
+            which("ln").display(),
+        );
+        std::fs::remove_file(bin.join("realpath")).unwrap();
+        std::fs::write(bin.join("realpath"), racer).unwrap();
+        std::fs::set_permissions(bin.join("realpath"), std::fs::Permissions::from_mode(0o755)).unwrap();
+        let (vol, outside) = (dir.path().join("vol"), dir.path().join("outside"));
+        std::fs::create_dir_all(vol.join("sub/inner")).unwrap();
+        std::fs::create_dir_all(outside.join("inner")).unwrap();
+        std::fs::write(vol.join("note.txt"), "hi there").unwrap();
+        std::fs::write(outside.join("secret"), "no").unwrap();
+        std::fs::write(outside.join("inner/secret-name"), "").unwrap();
+        let race = |rel: &str, op, swap: &str, to: &str| {
+            let (swap, to) = (vol.join(swap), outside.join(to));
+            let env = [("WHEN", rel), ("SWAP", swap.to_str().unwrap()), ("TO", to.to_str().unwrap())];
+            run_in(&bin, &vol, rel, op, &env)
+        };
+        // The file itself, for a link to a file outside.
+        assert_eq!(
+            parse_peek("note.txt", &race("note.txt", Op::Peek, "note.txt", "secret")),
+            Err(FilesError::Guest("it leads outside the volume".into()))
+        );
+        // A directory on the way, for a link to a directory outside.
+        assert_eq!(
+            parse_listing("sub/inner", &race("sub/inner", Op::List, "sub", ""), Folder::Volume),
+            Err(FilesError::Guest("it leads outside the volume".into()))
         );
     }
 }

@@ -5,6 +5,7 @@
 
 use bytes::Bytes;
 use http_body_util::{BodyExt, Empty};
+use hyper::body::{Body, Incoming};
 use hyper::{Method, Request, StatusCode};
 use hyper_util::rt::TokioIo;
 use serde::{Deserialize, Serialize};
@@ -17,6 +18,21 @@ use tokio::net::UnixStream;
 /// its own, so name the oldest one we speak.
 const API: &str = "/v5.0.0/libpod";
 const TIMEOUT: Duration = Duration::from_secs(10);
+
+/// The most of an answer read, in bytes. Whoever holds the guest's podman socket decides what it
+/// sends, and without a limit it could grow the app's memory until the timeout. The largest
+/// answers an honest engine gives are its lists: a container's row with its labels and ports, or an
+/// image's with its tags, is a few kB, and `system/df` lists them all again. A big host with
+/// 10,000 containers and as many images (build steps included, as `images?all=true` lists them)
+/// comes to some 30 MB, so twice that still fits.
+const MAX_BODY: usize = 64 << 20;
+/// A container's inspect: its config, mounts, network and state. Tens of kB, a few hundred with a
+/// long environment or many labels.
+const MAX_INSPECT: usize = 4 << 20;
+/// An error's answer is read only for its message.
+const MAX_ERROR_BODY: usize = 64 << 10;
+/// An error's message, in characters, as it's shown: past this it's cut with an ellipsis.
+const MAX_MESSAGE: usize = 1000;
 
 /// The read-only GETs the collector and the podman views make (a snapshot records each of them).
 pub const CONTAINERS: &str = "/containers/json?all=true";
@@ -46,6 +62,16 @@ pub enum PodmanError {
     UnknownVersion(String),
     #[error("{0}")]
     Unsupported(String),
+    #[error("podman's answer was over {} MiB, more than Lima Desktop reads at once", .0 >> 20)]
+    TooLarge(usize),
+}
+
+// A test body can't fail.
+#[cfg(test)]
+impl From<std::convert::Infallible> for PodmanError {
+    fn from(never: std::convert::Infallible) -> Self {
+        match never {}
+    }
 }
 
 /// Lima Desktop speaks podman 5's libpod API only: older engines are refused, by name, rather
@@ -507,11 +533,32 @@ pub enum LogStream {
 
 /// One line of a container's log as podman sent it (with the time it prefixes, when asked to),
 /// without its newline, and the stream it was written to (`None` for a TTY container's).
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub struct LogLine {
     pub stream: Option<LogStream>,
     pub line: String,
+    /// It was longer than `MAX_LOG_LINE`: what's shown is its start, ending with an ellipsis.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub cut: bool,
+    /// On the first line only: older lines were left out to stay within `MAX_LOG_BYTES` (or the
+    /// tail asked for), so this isn't where the log, or the time asked from, begins.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub earlier_dropped: bool,
 }
+
+/// The longest line of a log kept, in bytes: past it the line is cut and ends with an ellipsis.
+/// A container can write a line of any length (journald splits its own at 48 KiB), and the log
+/// view shows a line on one row, where even this much is more than anyone reads.
+pub const MAX_LOG_LINE: usize = 16 << 10;
+/// The most of a log kept, in bytes: its newest lines, which the log view searches and draws.
+/// Its longest fetch, 20,000 lines, at 400 bytes a line with its timestamp: a long line for a log.
+pub const MAX_LOG_BYTES: usize = 8 << 20;
+/// What a line costs beyond its text, counted towards `MAX_LOG_BYTES`: the struct, and its JSON on
+/// the way to the UI, so that a log of empty lines is bounded too.
+const LINE_COST: usize = 48;
+/// The most of a frame's start a timestamp can take up ([`stamp_len`]).
+const STAMP_MAX: usize = 48;
 
 /// Docker's multiplexed log stream: 8-byte frames `[stream, 0, 0, 0, len (u32 BE)]` + payload.
 /// A TTY container's logs come raw, without frames; detected by the first header's shape.
@@ -519,42 +566,181 @@ pub struct LogLine {
 /// text waits for its newline; a frame of the other stream between them doesn't break it. With
 /// timestamps on, podman stamps every frame, a line's later parts too: theirs are dropped.
 pub fn demux_logs(buf: &[u8]) -> Vec<LogLine> {
-    let framed = buf.len() >= 8 && matches!(buf[0], 0..=2) && buf[1..4] == [0, 0, 0];
-    let text = |b: &[u8]| String::from_utf8_lossy(b).into_owned();
-    if !framed {
-        let mut lines: Vec<&[u8]> = buf.split(|&b| b == b'\n').collect();
-        if lines.last().is_some_and(|l| l.is_empty()) {
-            lines.pop();
-        }
-        return lines.into_iter().map(|l| LogLine { stream: None, line: text(l) }).collect();
+    let mut tail = LogTail::new(usize::MAX, usize::MAX);
+    tail.feed(buf);
+    tail.finish()
+}
+
+/// A log read as it arrives ([`demux_logs`]' format), keeping only its newest lines: at most
+/// `tail` of them and `max_bytes` in all, each at most `MAX_LOG_LINE`. The container writes its
+/// log, so it decides what's shown, but not how much memory the app takes to show it: a frame is
+/// read as it comes, whatever length it claims.
+pub struct LogTail {
+    tail: usize,
+    max_bytes: usize,
+    /// Known once the first 8 bytes have come; they wait in `head` until then.
+    framed: Option<bool>,
+    /// The frame header coming in (or, before `framed` is known, the log's first bytes).
+    head: Vec<u8>,
+    /// The current frame's stream (0 stdout, 1 stderr) and how much of its payload is to come.
+    stream: usize,
+    left: usize,
+    /// The start of a frame that goes on with a line, held until its timestamp can be seen and
+    /// dropped: how many bytes to hold, and those that have come.
+    stamp: Option<(usize, Vec<u8>)>,
+    /// stdout's and stderr's unfinished lines (stdin, 0, which logs never carry, counts as
+    /// stdout; a TTY's go in the first), and whether each went past `MAX_LOG_LINE`.
+    pending: [Vec<u8>; 2],
+    cut: [bool; 2],
+    lines: std::collections::VecDeque<LogLine>,
+    /// What `lines` costs, as `cost` counts it.
+    bytes: usize,
+    dropped: bool,
+}
+
+fn cost(line: &LogLine) -> usize {
+    line.line.len() + LINE_COST
+}
+
+/// A line's text; a cut one ends where a character starts, then an ellipsis.
+fn line_text(bytes: &[u8], cut: bool) -> String {
+    if !cut {
+        return String::from_utf8_lossy(bytes).into_owned();
     }
-    let mut out = Vec::new();
-    // stdout's and stderr's unfinished lines; stdin (0), which logs never carry, counts as stdout.
-    let mut pending: [Vec<u8>; 2] = [Vec::new(), Vec::new()];
-    let streams = [LogStream::Stdout, LogStream::Stderr];
-    let mut rest = buf;
-    while rest.len() >= 8 {
-        let s = usize::from(rest[0] == 2);
-        let len = u32::from_be_bytes([rest[4], rest[5], rest[6], rest[7]]) as usize;
-        let end = (8 + len).min(rest.len());
-        let mut payload = &rest[8..end];
-        if !pending[s].is_empty() {
-            payload = &payload[stamp_len(payload)..];
-        }
-        while let Some(nl) = payload.iter().position(|&b| b == b'\n') {
-            pending[s].extend_from_slice(&payload[..nl]);
-            out.push(LogLine { stream: Some(streams[s]), line: text(&std::mem::take(&mut pending[s])) });
-            payload = &payload[nl + 1..];
-        }
-        pending[s].extend_from_slice(payload);
-        rest = &rest[end..];
-    }
-    for (s, p) in pending.iter().enumerate() {
-        if !p.is_empty() {
-            out.push(LogLine { stream: Some(streams[s]), line: text(p) });
+    let whole = match std::str::from_utf8(bytes) {
+        Err(e) if e.error_len().is_none() => &bytes[..e.valid_up_to()],
+        _ => bytes,
+    };
+    format!("{}…", String::from_utf8_lossy(whole))
+}
+
+impl LogTail {
+    pub fn new(tail: usize, max_bytes: usize) -> Self {
+        LogTail {
+            tail,
+            max_bytes,
+            framed: None,
+            head: Vec::with_capacity(8),
+            stream: 0,
+            left: 0,
+            stamp: None,
+            pending: [Vec::new(), Vec::new()],
+            cut: [false; 2],
+            lines: Default::default(),
+            bytes: 0,
+            dropped: false,
         }
     }
-    out
+
+    /// The log's next bytes, however they're split.
+    pub fn feed(&mut self, mut data: &[u8]) {
+        if self.framed.is_none() {
+            let n = (8 - self.head.len()).min(data.len());
+            self.head.extend_from_slice(&data[..n]);
+            data = &data[n..];
+            if self.head.len() < 8 {
+                return;
+            }
+            let start = std::mem::take(&mut self.head);
+            self.framed = Some(matches!(start[0], 0..=2) && start[1..4] == [0, 0, 0]);
+            self.consume(&start);
+        }
+        self.consume(data);
+    }
+
+    /// The lines kept, oldest first, each stream's unfinished one included.
+    pub fn finish(mut self) -> Vec<LogLine> {
+        if self.framed.is_none() {
+            // Under 8 bytes: too short to be a frame.
+            self.framed = Some(false);
+            let start = std::mem::take(&mut self.head);
+            self.text(0, &start);
+        }
+        for s in 0..2 {
+            if !self.pending[s].is_empty() {
+                self.end_line(s);
+            }
+        }
+        let mut lines = Vec::from(self.lines);
+        if let Some(first) = lines.first_mut() {
+            first.earlier_dropped = self.dropped;
+        }
+        lines
+    }
+
+    fn consume(&mut self, data: &[u8]) {
+        if self.framed == Some(true) { self.frames(data) } else { self.text(0, data) }
+    }
+
+    fn frames(&mut self, mut data: &[u8]) {
+        while !data.is_empty() {
+            if self.left == 0 {
+                let n = (8 - self.head.len()).min(data.len());
+                self.head.extend_from_slice(&data[..n]);
+                data = &data[n..];
+                if self.head.len() < 8 {
+                    return;
+                }
+                let h = std::mem::take(&mut self.head);
+                self.stream = usize::from(h[0] == 2);
+                self.left = u32::from_be_bytes([h[4], h[5], h[6], h[7]]) as usize;
+                if !self.pending[self.stream].is_empty() && self.left > 0 {
+                    self.stamp = Some((self.left.min(STAMP_MAX), Vec::new()));
+                }
+                continue;
+            }
+            let (payload, rest) = data.split_at(self.left.min(data.len()));
+            data = rest;
+            self.left -= payload.len();
+            self.payload(payload);
+        }
+    }
+
+    fn payload(&mut self, mut payload: &[u8]) {
+        if let Some((want, held)) = &mut self.stamp {
+            let n = (*want - held.len()).min(payload.len());
+            held.extend_from_slice(&payload[..n]);
+            payload = &payload[n..];
+            if held.len() < *want {
+                return;
+            }
+            let held = std::mem::take(held);
+            self.stamp = None;
+            self.text(self.stream, &held[stamp_len(&held)..]);
+        }
+        self.text(self.stream, payload);
+    }
+
+    fn text(&mut self, s: usize, mut bytes: &[u8]) {
+        while let Some(nl) = bytes.iter().position(|&b| b == b'\n') {
+            self.add(s, &bytes[..nl]);
+            self.end_line(s);
+            bytes = &bytes[nl + 1..];
+        }
+        self.add(s, bytes);
+    }
+
+    fn add(&mut self, s: usize, bytes: &[u8]) {
+        let room = MAX_LOG_LINE - self.pending[s].len();
+        if bytes.len() > room {
+            self.cut[s] = true;
+        }
+        self.pending[s].extend_from_slice(&bytes[..bytes.len().min(room)]);
+    }
+
+    fn end_line(&mut self, s: usize) {
+        let bytes = std::mem::take(&mut self.pending[s]);
+        let cut = std::mem::take(&mut self.cut[s]);
+        let stream = (self.framed == Some(true)).then_some([LogStream::Stdout, LogStream::Stderr][s]);
+        let line = LogLine { stream, line: line_text(&bytes, cut), cut, earlier_dropped: false };
+        self.bytes += cost(&line);
+        self.lines.push_back(line);
+        while self.lines.len() > self.tail || self.bytes > self.max_bytes {
+            let Some(old) = self.lines.pop_front() else { break };
+            self.bytes -= cost(&old);
+            self.dropped = true;
+        }
+    }
 }
 
 /// The length of an RFC 3339 time and the space after it at the start of `b` ("2026-11-16T10:00:00.123Z "), else 0.
@@ -598,12 +784,71 @@ fn connectable(socket: &Path) -> std::io::Result<PathBuf> {
     Ok(link)
 }
 
+/// A body's first `limit` bytes, and whether there was more. Reading stops at the limit, so what
+/// comes after it is never held.
+async fn read_body<B>(mut body: B, limit: usize) -> Result<(Bytes, bool), PodmanError>
+where
+    B: Body<Data = Bytes> + Unpin,
+    PodmanError: From<B::Error>,
+{
+    let mut buf = Vec::new();
+    while let Some(frame) = body.frame().await {
+        let Ok(data) = frame?.into_data() else { continue };
+        if buf.len() + data.len() > limit {
+            buf.extend_from_slice(&data[..limit - buf.len()]);
+            return Ok((buf.into(), true));
+        }
+        buf.extend_from_slice(&data);
+    }
+    Ok((buf.into(), false))
+}
+
+/// A whole body, refused once it passes `limit` bytes.
+async fn collect_capped<B>(body: B, limit: usize) -> Result<Bytes, PodmanError>
+where
+    B: Body<Data = Bytes> + Unpin,
+    PodmanError: From<B::Error>,
+{
+    match read_body(body, limit).await? {
+        (_, true) => Err(PodmanError::TooLarge(limit)),
+        (bytes, false) => Ok(bytes),
+    }
+}
+
+/// What an error's answer says: libpod's JSON `message`, else the text itself, at most
+/// `MAX_MESSAGE` characters of it.
+fn error_message(body: &[u8]) -> String {
+    let msg = serde_json::from_slice::<serde_json::Value>(body)
+        .ok()
+        .and_then(|v| v.get("message").and_then(|m| m.as_str()).map(String::from))
+        .unwrap_or_else(|| String::from_utf8_lossy(body).into_owned());
+    match msg.char_indices().nth(MAX_MESSAGE) {
+        Some((cut, _)) => format!("{}…", &msg[..cut]),
+        None => msg,
+    }
+}
+
 impl Libpod {
     pub fn new(socket: impl AsRef<Path>) -> Self {
         Libpod { socket: socket.as_ref().to_path_buf() }
     }
 
+    /// A request whose answer is read whole, up to `MAX_BODY`.
     async fn request(&self, method: Method, path: &str) -> Result<Bytes, PodmanError> {
+        self.request_capped(method, path, MAX_BODY).await
+    }
+
+    async fn request_capped(&self, method: Method, path: &str, limit: usize) -> Result<Bytes, PodmanError> {
+        self.exchange(method, path, |body| collect_capped(body, limit)).await
+    }
+
+    /// One request, within `TIMEOUT` from connecting to the answer's last byte. A successful
+    /// answer's body is `read`'s to read; an error's is read for its message.
+    async fn exchange<T, F, Fut>(&self, method: Method, path: &str, read: F) -> Result<T, PodmanError>
+    where
+        F: FnOnce(Incoming) -> Fut,
+        Fut: Future<Output = Result<T, PodmanError>>,
+    {
         let fut = async {
             let connect_err = |e| PodmanError::Connect(self.socket.display().to_string(), e);
             let sock = connectable(&self.socket).map_err(connect_err)?;
@@ -620,15 +865,11 @@ impl Libpod {
                 .expect("a well-formed request");
             let resp = sender.send_request(req).await?;
             let status = resp.status();
-            let body = resp.into_body().collect().await?.to_bytes();
             if !status.is_success() {
-                let msg = serde_json::from_slice::<serde_json::Value>(&body)
-                    .ok()
-                    .and_then(|v| v.get("message").and_then(|m| m.as_str()).map(String::from))
-                    .unwrap_or_else(|| String::from_utf8_lossy(&body).into_owned());
-                return Err(PodmanError::Status(status, msg));
+                let (body, _) = read_body(resp.into_body(), MAX_ERROR_BODY).await?;
+                return Err(PodmanError::Status(status, error_message(&body)));
             }
-            Ok(body)
+            read(resp.into_body()).await
         };
         tokio::time::timeout(TIMEOUT, fut).await.map_err(|_| PodmanError::Timeout)?
     }
@@ -681,18 +922,29 @@ impl Libpod {
     }
 
     pub async fn inspect(&self, id: &str) -> Result<serde_json::Value, PodmanError> {
-        self.get_json(&format!("/containers/{}/json", encode_component(id))).await
+        let path = format!("/containers/{}/json", encode_component(id));
+        Ok(serde_json::from_slice(&self.request_capped(Method::GET, &path, MAX_INSPECT).await?)?)
     }
 
     /// The last `tail` lines, each starting with the RFC 3339 time podman recorded it at and a
-    /// space; with `since` (Unix seconds), only those written since then.
+    /// space; with `since` (Unix seconds), only those written since then. Read as it comes, and
+    /// only the newest `MAX_LOG_BYTES` of it kept ([`LogTail`]).
     pub async fn logs(&self, id: &str, tail: u32, since: Option<i64>) -> Result<Vec<LogLine>, PodmanError> {
         let since = since.map(|s| format!("&since={s}")).unwrap_or_default();
         let path = format!(
             "/containers/{}/logs?stdout=true&stderr=true&timestamps=true&tail={tail}{since}",
             encode_component(id)
         );
-        Ok(demux_logs(&self.request(Method::GET, &path).await?))
+        self.exchange(Method::GET, &path, |mut body| async move {
+            let mut lines = LogTail::new(tail as usize, MAX_LOG_BYTES);
+            while let Some(frame) = body.frame().await {
+                if let Ok(data) = frame?.into_data() {
+                    lines.feed(&data);
+                }
+            }
+            Ok(lines.finish())
+        })
+        .await
     }
 
     pub async fn images(&self) -> Result<Vec<Image>, PodmanError> {
@@ -1067,8 +1319,8 @@ mod tests {
             f.extend_from_slice(payload);
             f
         };
-        let out = |line: &str| LogLine { stream: Some(LogStream::Stdout), line: line.into() };
-        let err = |line: &str| LogLine { stream: Some(LogStream::Stderr), line: line.into() };
+        let out = |line: &str| LogLine { stream: Some(LogStream::Stdout), line: line.into(), ..LogLine::default() };
+        let err = |line: &str| LogLine { stream: Some(LogStream::Stderr), line: line.into(), ..LogLine::default() };
         // A line split over frames, with the other stream's between them, is one line.
         let framed =
             [frame(1, b"hello\nhal"), frame(2, b"err\n"), frame(1, b"f a line\n"), frame(2, b"no newline")].concat();
@@ -1077,9 +1329,89 @@ mod tests {
         let stamped =
             [frame(1, b"2026-11-16T10:00:00.5Z a long"), frame(1, b"2026-11-16T10:00:00.6Z  line\n")].concat();
         assert_eq!(demux_logs(&stamped), vec![out("2026-11-16T10:00:00.5Z a long line")]);
-        let tty = |line: &str| LogLine { stream: None, line: line.into() };
+        let tty = |line: &str| LogLine { stream: None, line: line.into(), ..LogLine::default() };
         assert_eq!(demux_logs(b"plain tty\noutput\n"), vec![tty("plain tty"), tty("output")]);
         assert_eq!(demux_logs(b""), vec![]);
+    }
+
+    fn frame(stream: u8, payload: &[u8]) -> Vec<u8> {
+        let mut f = vec![stream, 0, 0, 0];
+        f.extend_from_slice(&(payload.len() as u32).to_be_bytes());
+        f.extend_from_slice(payload);
+        f
+    }
+
+    fn tail_of(log: &[u8], tail: usize, max_bytes: usize, chunk: usize) -> Vec<LogLine> {
+        let mut t = LogTail::new(tail, max_bytes);
+        log.chunks(chunk.max(1)).for_each(|c| t.feed(c));
+        t.finish()
+    }
+
+    #[test]
+    fn a_log_read_in_pieces_reads_as_it_does_whole() {
+        let framed = [
+            frame(1, b"2026-11-16T10:00:00.5Z hello\n2026-11-16T10:00:00.5Z a lo"),
+            frame(2, b"2026-11-16T10:00:00.6Z err\n"),
+            frame(1, b"2026-11-16T10:00:00.7Z ng line\n"),
+            frame(1, b""),
+            frame(2, b"no newline"),
+        ]
+        .concat();
+        let tty = b"plain tty\n\noutput".to_vec();
+        for log in [framed, tty, b"short".to_vec(), Vec::new()] {
+            let whole = demux_logs(&log);
+            for chunk in [1, 3, 7, 8, 9, 64] {
+                assert_eq!(tail_of(&log, usize::MAX, usize::MAX, chunk), whole, "in pieces of {chunk}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_long_line_is_cut_and_says_so() {
+        let long = "é".repeat(MAX_LOG_LINE); // twice the limit in bytes
+        for log in [format!("{long}\nnext\n").into_bytes(), [frame(1, long.as_bytes()), frame(1, b"\nnext\n")].concat()]
+        {
+            let lines = tail_of(&log, usize::MAX, usize::MAX, 4096);
+            assert_eq!(lines.len(), 2);
+            assert!(lines[0].cut);
+            // Cut where a character starts, then the ellipsis.
+            assert_eq!(lines[0].line, format!("{}…", "é".repeat(MAX_LOG_LINE / 2)));
+            assert_eq!((lines[1].line.as_str(), lines[1].cut), ("next", false));
+        }
+        // A frame that says it's 4 GiB long is read as it comes, not waited for whole.
+        let mut huge = vec![1, 0, 0, 0, 0xff, 0xff, 0xff, 0xff];
+        huge.extend(std::iter::repeat_n(b'x', 3 * MAX_LOG_LINE));
+        let lines = tail_of(&huge, usize::MAX, usize::MAX, 8192);
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].line.len(), MAX_LOG_LINE + '…'.len_utf8());
+    }
+
+    #[test]
+    fn past_its_limits_a_log_keeps_its_newest_lines_and_says_older_ones_went() {
+        let log: Vec<u8> = (0..1000).flat_map(|i| format!("line {i:04}\n").into_bytes()).collect();
+        // By bytes: each line costs its text and LINE_COST.
+        let lines = tail_of(&log, usize::MAX, 10 * (9 + LINE_COST), 100);
+        let texts: Vec<_> = lines.iter().map(|l| l.line.as_str()).collect();
+        assert_eq!(texts, (990..1000).map(|i| format!("line {i:04}")).collect::<Vec<_>>());
+        assert!(lines[0].earlier_dropped);
+        assert!(lines[1..].iter().all(|l| !l.earlier_dropped));
+        // By count, should podman send more than the tail it was asked for.
+        let lines = tail_of(&log, 3, usize::MAX, 100);
+        assert_eq!(lines.iter().map(|l| l.line.as_str()).collect::<Vec<_>>(), ["line 0997", "line 0998", "line 0999"]);
+        assert!(lines[0].earlier_dropped);
+        // Within both, nothing is said.
+        assert!(!tail_of(&log, 1000, usize::MAX, 100)[0].earlier_dropped);
+    }
+
+    #[test]
+    fn a_log_lines_flags_reach_the_ui_only_when_set() {
+        let plain = LogLine { stream: Some(LogStream::Stderr), line: "x".into(), ..LogLine::default() };
+        assert_eq!(serde_json::to_value(&plain).unwrap(), serde_json::json!({"stream": "stderr", "line": "x"}));
+        let flagged = LogLine { stream: None, line: "x…".into(), cut: true, earlier_dropped: true };
+        assert_eq!(
+            serde_json::to_value(&flagged).unwrap(),
+            serde_json::json!({"stream": null, "line": "x…", "cut": true, "earlierDropped": true})
+        );
     }
 
     #[test]
@@ -1099,6 +1431,30 @@ mod tests {
         let link = connectable(&sock).unwrap();
         assert!(link.as_os_str().len() <= MAX_SOCKET_PATH);
         assert_eq!(connectable(&link).unwrap(), link, "short paths are used as they are");
+    }
+
+    fn body(bytes: &[u8]) -> http_body_util::Full<Bytes> {
+        http_body_util::Full::new(Bytes::copy_from_slice(bytes))
+    }
+
+    #[tokio::test]
+    async fn an_answer_is_read_up_to_its_limit_and_no_further() {
+        assert_eq!(collect_capped(body(b"0123456789"), 10).await.unwrap(), Bytes::from_static(b"0123456789"));
+        let e = collect_capped(body(&[b'x'; 11]), 10).await.unwrap_err();
+        assert!(matches!(e, PodmanError::TooLarge(10)), "{e:?}");
+        assert_eq!(
+            PodmanError::TooLarge(MAX_BODY).to_string(),
+            "podman's answer was over 64 MiB, more than Lima Desktop reads at once"
+        );
+    }
+
+    #[test]
+    fn an_errors_message_is_kept_short() {
+        assert_eq!(error_message(br#"{"cause":"x","message":"no such container"}"#), "no such container");
+        assert_eq!(error_message(b"plain text"), "plain text");
+        let long = error_message("é".repeat(5000).as_bytes());
+        assert_eq!(long.chars().count(), MAX_MESSAGE + 1);
+        assert!(long.ends_with("é…"));
     }
 
     #[test]

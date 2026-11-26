@@ -139,7 +139,9 @@ pub async fn container_action(c: C<'_>, vm: String, id: String, action: Containe
     libpod(&c, &vm).await?.act(&id, action).await.map_err(err)
 }
 
-/// The most lines of a log the UI can ask for at once.
+/// The most lines of a log the UI can ask for at once: its longest fetch. What bounds the memory a
+/// log takes is `podman::MAX_LOG_BYTES` (and `MAX_LOG_LINE` for each line), whatever the count,
+/// so a log of long lines comes back as fewer than this, its newest, the first saying so.
 const MAX_LOG_LINES: u32 = 20_000;
 
 #[tauri::command]

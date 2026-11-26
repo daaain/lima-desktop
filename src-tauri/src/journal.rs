@@ -6,10 +6,11 @@
 //! so it fails at once rather than prompt). Where neither works (no systemd, a sudo that asks)
 //! it says why, and the fix.
 
+use std::process::Output;
 use std::time::Duration;
 use tokio::io::AsyncWriteExt;
 
-use crate::probe;
+use crate::{bounded, probe};
 
 /// One kernel journal entry.
 #[derive(Debug, Clone, PartialEq)]
@@ -33,6 +34,18 @@ pub enum JournalError {
 const TIMEOUT: Duration = Duration::from_secs(60);
 /// ssh's own exit status when it couldn't connect or lost the connection.
 const SSH_FAILED: i32 = 255;
+/// The most lines asked for, the newest: a kill is three or four (the memory use, `oom-kill:`, and
+/// `Killed process`), so this is some 5,000 kills, more than a crash loop leaves in the first
+/// read's retention. Past it the oldest are left out, rather than the ones still to come. They're
+/// asked for newest first (`-r`), as only then does `-n` count the lines `--grep` matches rather
+/// than the kernel's lines it looks through; and systemd 259 prints them newest first when `-n`
+/// and `--grep` meet anyway, `-r` or not.
+const MAX_LINES: usize = 20_000;
+/// The most of the answer read, in bytes: past it ssh is killed and what came is read. A line of
+/// JSON is at most some 800 bytes (journald's fields, and an `oom-kill:` line with two cgroup
+/// paths), so `MAX_LINES` honest lines fit with room to spare; a guest's root, who can put
+/// anything in the journal or in place of journalctl, can't make the app's memory grow past it.
+const MAX_OUTPUT: usize = 32 << 20;
 
 /// Sent on stdin to `sh -s`. Exits 0 with `E <reason>` when the journal can't be read: an empty
 /// answer from a user outside `systemd-journal` looks just like "no OOM kills", so readability is
@@ -53,7 +66,7 @@ else
   exit 0
 fi
 jc -q --no-pager _TRANSPORT=kernel -o json --output-fields=MESSAGE,_BOOT_ID \
-  --since "@{since}" --grep 'oom-kill:|Killed process|^memory: usage'
+  --since "@{since}" -r -n {MAX_LINES} --grep 'oom-kill:|Killed process|^memory: usage'
 rc=$?
 [ "$rc" -le 1 ] || echo "E journalctl failed (exit $rc)"
 "#,
@@ -61,27 +74,38 @@ rc=$?
     )
 }
 
-/// Run the reader script over Lima's ssh: its raw output, as `read_oom_lines` interprets it (the
-/// snapshot recorder keeps it).
-pub async fn run_script(ssh_config: &str, instance: &str, since_ms: i64) -> std::io::Result<std::process::Output> {
+/// Run the reader script over Lima's ssh: its output, at most `MAX_OUTPUT` of it, and whether it
+/// was cut there.
+async fn run_capped(ssh_config: &str, instance: &str, since_ms: i64) -> std::io::Result<(Output, bool)> {
     let mut child = probe::ssh(ssh_config, instance).spawn()?;
     let mut stdin = child.stdin.take().expect("piped stdin");
     stdin.write_all(script(since_ms).as_bytes()).await?;
     drop(stdin);
-    child.wait_with_output().await
+    bounded::capped_output(child, MAX_OUTPUT).await
+}
+
+/// Run the reader script over Lima's ssh: its raw output, as `read_oom_lines` interprets it (the
+/// snapshot recorder keeps it).
+pub async fn run_script(ssh_config: &str, instance: &str, since_ms: i64) -> std::io::Result<Output> {
+    Ok(run_capped(ssh_config, instance, since_ms).await?.0)
 }
 
 /// The OOM killer's kernel lines since `since_ms`, over Lima's ssh.
 pub async fn read_oom_lines(ssh_config: &str, instance: &str, since_ms: i64) -> Result<Vec<Entry>, JournalError> {
-    let run = run_script(ssh_config, instance, since_ms);
-    let out = match tokio::time::timeout(TIMEOUT, run).await {
-        Err(_) => {
-            return Err(JournalError::Unreachable("the journal read timed out".into()));
-        }
-        Ok(Err(e)) => return Err(JournalError::Unreachable(format!("can't run ssh: {e}"))),
-        Ok(Ok(out)) => out,
-    };
-    if !out.status.success() {
+    let run = run_capped(ssh_config, instance, since_ms);
+    match tokio::time::timeout(TIMEOUT, run).await {
+        Err(_) => Err(JournalError::Unreachable("the journal read timed out".into())),
+        Ok(Err(e)) => Err(JournalError::Unreachable(format!("can't run ssh: {e}"))),
+        Ok(Ok((out, cut))) => interpret(&out, cut),
+    }
+}
+
+/// The script's output as entries, or why there are none. One cut at `MAX_OUTPUT` ended with ssh
+/// killed: the lines that came whole are read, and the one it was cut in is skipped.
+fn interpret(out: &Output, cut: bool) -> Result<Vec<Entry>, JournalError> {
+    if cut {
+        log::warn!("the kernel journal's answer was over {} MiB: only its newest lines are read", MAX_OUTPUT >> 20);
+    } else if !out.status.success() {
         let stderr = String::from_utf8_lossy(&out.stderr);
         let why = stderr
             .lines()
@@ -112,7 +136,8 @@ fn decode(line: &str) -> Option<Entry> {
     Some(Entry { ts_ms: us / 1000, boot: v["_BOOT_ID"].as_str().unwrap_or_default().to_string(), message })
 }
 
-/// The journal's answer, a JSON object per line, or the script's `E <reason>`.
+/// The journal's answer, a JSON object per line and newest first (`-r`), or the script's
+/// `E <reason>`. The entries come back oldest first: a kill's lines are read in the kernel's order.
 pub fn parse_output(stdout: &str) -> Result<Vec<Entry>, JournalError> {
     let mut entries = Vec::new();
     for line in stdout.lines().map(str::trim) {
@@ -125,6 +150,7 @@ pub fn parse_output(stdout: &str) -> Result<Vec<Entry>, JournalError> {
             entries.push(entry);
         }
     }
+    entries.reverse();
     Ok(entries)
 }
 
@@ -132,13 +158,15 @@ pub fn parse_output(stdout: &str) -> Result<Vec<Entry>, JournalError> {
 mod tests {
     use super::*;
 
-    const OUT: &str = r#"{"__CURSOR":"s=032b;i=527a3;b=f0be;m=5bcd7ba51;t=65fd7af11cea8;x=5b3d","__REALTIME_TIMESTAMP":"1794229820051112","_BOOT_ID":"f0bed60b3e5a481d9888c6d3966582f0","__MONOTONIC_TIMESTAMP":"24643091025","MESSAGE":"memory: usage 1048576kB, limit 1048576kB, failcnt 3051"}
+    /// The journal's answer as the script asks for it (`-r`): newest first.
+    const OUT: &str = r#"{"_BOOT_ID":"f0bed60b3e5a481d9888c6d3966582f0","__REALTIME_TIMESTAMP":"1794229820051900","MESSAGE":[77,101,109,111,114,121,255]}
 {"_BOOT_ID":"f0bed60b3e5a481d9888c6d3966582f0","__REALTIME_TIMESTAMP":"1794229820051400","MESSAGE":"oom-kill:constraint=CONSTRAINT_MEMCG,nodemask=(null),cpuset=user.slice,mems_allowed=0,task=python3,pid=1234,uid=501"}
-{"_BOOT_ID":"f0bed60b3e5a481d9888c6d3966582f0","__REALTIME_TIMESTAMP":"1794229820051900","MESSAGE":[77,101,109,111,114,121,255]}
+{"__CURSOR":"s=032b;i=527a3;b=f0be;m=5bcd7ba51;t=65fd7af11cea8;x=5b3d","__REALTIME_TIMESTAMP":"1794229820051112","_BOOT_ID":"f0bed60b3e5a481d9888c6d3966582f0","__MONOTONIC_TIMESTAMP":"24643091025","MESSAGE":"memory: usage 1048576kB, limit 1048576kB, failcnt 3051"}
 "#;
 
     #[test]
-    fn decodes_entries_including_a_non_utf8_message() {
+    fn decodes_entries_oldest_first_including_a_non_utf8_message() {
+        // The kernel's order, as oom::kernel_events reads a kill: its memory use, then `oom-kill:`.
         let entries = parse_output(OUT).unwrap();
         assert_eq!(entries.len(), 3);
         assert_eq!(entries[0].ts_ms, 1_794_229_820_051);
@@ -234,6 +262,37 @@ mod tests {
     #[test]
     fn the_script_asks_from_the_given_second() {
         assert!(script(1_794_229_820_051).contains("--since \"@1794229820\""));
+    }
+
+    #[test]
+    fn the_script_asks_for_the_newest_lines_only() {
+        // Newest first (-r): then -n counts the lines --grep matches. Without -r, how -n and --grep
+        // combine depends on the version: systemd 259 counts back but prints newest first anyway.
+        assert!(script(0).contains(&format!(" -r -n {MAX_LINES} ")));
+        // The most lines asked for fit in what's read, at their longest.
+        const { assert!(MAX_LINES * 800 < MAX_OUTPUT) };
+    }
+
+    fn output(code: i32, stdout: &str) -> std::process::Output {
+        use std::os::unix::process::ExitStatusExt;
+        std::process::Output {
+            status: std::process::ExitStatus::from_raw(code),
+            stdout: stdout.into(),
+            stderr: b"Connection to lima closed by remote host.\n".to_vec(),
+        }
+    }
+
+    #[test]
+    fn an_answer_cut_at_the_limit_is_read_as_far_as_it_goes() {
+        // Killed (signal 9) at the limit, half way through its last line.
+        let cut = format!("{}{{\"__REALTIME", OUT);
+        assert_eq!(interpret(&output(9, &cut), true).unwrap().len(), 3);
+        // Not cut, a failure is a failure.
+        assert_eq!(
+            interpret(&output(255 << 8, OUT), false),
+            Err(JournalError::Unreachable("Connection to lima closed by remote host.".into()))
+        );
+        assert_eq!(interpret(&output(0, OUT), false).unwrap().len(), 3);
     }
 
     #[test]
