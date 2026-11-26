@@ -1,6 +1,7 @@
 <script lang="ts">
   import { api, type ContainerLive, type Series } from './api';
   import { bytes, cpuLabel } from './format';
+  import { visible } from './visible';
   import { band, ownLimit, selfMemory } from './almanac';
   import { inOrder } from './inOrder';
   import { portLinks, portsElsewhere } from './containers';
@@ -47,18 +48,18 @@
   // fetched when their tab opens, not every second (LogView would scroll back down under the reader).
   const id = $derived(c.id);
   const where = $derived(vm);
-  const name = $derived(c.name);
-  const image = $derived(c.image);
+  const name = $derived(visible(c.name));
+  const image = $derived(visible(c.image));
   $effect(() => {
-    if (tab === 'inspect') api.containerInspect(where, id).then((j) => (inspect = JSON.stringify(j, null, 2)), (e) => (error = String(e)));
+    if (tab === 'inspect') api.containerInspect(where, id).then((j) => (inspect = JSON.stringify(j, null, 2).split('\n').map(visible).join('\n')), (e) => (error = String(e)));
   });
 </script>
 
 <section class="wash detail">
   <div class="head">
     <div class="title">
-      <h3 class="serif">{c.name}</h3>
-      <span class="muted image">{c.image}</span>
+      <h3 class="serif"><bdi>{name}</bdi></h3>
+      <span class="muted image"><bdi>{image}</bdi></span>
     </div>
     {#each ['metrics', 'logs', 'inspect'] as const as t}
       <button class:active={tab === t} onclick={() => (tab = t)}>{t}</button>

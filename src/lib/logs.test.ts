@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { RawLogLine } from './api';
 import {
-  fetchedSentence, filterLog, levelOf, logCounts, logLines, logTime, matchTerms, parseQuery, pieces, shownSentence, tokenize,
+  fetchedSentence, filterLog, levelOf, logCounts, logLines, logTime, matchTerms, parseQuery, pieces, plainText, shownSentence, tokenize,
   type LogFilter, type LogLine,
 } from './logs';
 
@@ -38,6 +38,37 @@ describe('logLines', () => {
       '2026-11-10T10:00:01Z   indented, under a line of no level',
     ].join('\n')));
     expect(lines.map((l) => l.level)).toEqual(['error', 'error', 'error', null, null]);
+  });
+});
+
+describe('plainText', () => {
+  // A container's log is written by whatever runs in it: nothing in it may drive the terminal it
+  // was meant for, nor hide, overwrite or reorder what's shown.
+  it.each([
+    ['colours and cursor moves (CSI)', '\x1b[1;31mred\x1b[0m \x1b[2K\x1b[?25lgone', 'red gone'],
+    ['CSI with intermediate bytes and other finals', '\x1b[0 qa\x1b[>4;1mb\x1b[3~c', 'abc'],
+    ['an OSC 8 hyperlink, ended by ST', 'see \x1b]8;;https://evil.example/\x1b\\docs\x1b]8;;\x1b\\ here', 'see docs here'],
+    ['a window title, ended by BEL', '\x1b]0;pwned\x07ready', 'ready'],
+    ['an OSC never ended', 'ok \x1b]52;c;c2VjcmV0', 'ok '],
+    ['DCS, APC, PM and SOS strings', 'a\x1bP1$qm\x1b\\b\x1b_apc\x1b\\c\x1b^pm\x1b\\d\x1bXsos\x1b\\e', 'abcde'],
+    ['other ESC sequences (charset, keypad, reset)', 'a\x1b(0b\x1b=c\x1bcd\x1b7e\x1b#8f', 'abcdef'],
+    ['the C1 forms of CSI and OSC', 'a\u009b31mb\u009d0;t\u009cc', 'abc'],
+    ['a lone ESC at the end', 'done\x1b', 'done'],
+    ['C0 and C1 controls and DEL', 'a\x00b\x07c\x0bd\x0ce\x7ff\u0085g\u0080h', 'abcdefgh'],
+    ['backspaces, keeping what they would erase', 'pass\b\b\b\bxxxx', 'passxxxx'],
+    ['a carriage return at the end', 'line\r', 'line'],
+    ['a carriage return within, as a space, so nothing before it is hidden', 'harmless\rrm -rf /', 'harmless rm -rf /'],
+    ['progress redrawn with carriage returns', '10%\r50%\r\r100%', '10% 50% 100%'],
+  ])('drops %s', (_, line, text) => expect(plainText(line)).toBe(text));
+  it('keeps tabs, and text in any script', () => expect(plainText('a\tb\tcafé 日本 😀')).toBe('a\tb\tcafé 日本 😀'));
+  it('spells out what would turn the rest of a line round, and keeps what joins an emoji', () => {
+    // Text is the log's own, in any script, but an override or isolate can make a line pass for
+    // another ("evil" RLO "gnp.exe" reads "evilexe.png"). A zero-width joiner makes 👩‍💻 one emoji.
+    expect(plainText('ok evil\u202Egnp.exe \u2066x\u2069')).toBe('ok evil⟨U+202E⟩gnp.exe ⟨U+2066⟩x⟨U+2069⟩');
+    expect(plainText('👩\u200D💻 שלום')).toBe('👩\u200D💻 שלום');
+  });
+  it('is what logLines shows', () => {
+    expect(logLines([out('2026-11-10T10:00:00Z \x1b]0;x\x07ERROR \x1b]8;;http://x\x07boom\x1b]8;;\x07\r')])[0]).toMatchObject({ text: 'ERROR boom', level: 'error' });
   });
 });
 

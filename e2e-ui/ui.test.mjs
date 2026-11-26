@@ -9,7 +9,8 @@ import { mkdir } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { after, before, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { chromium } from 'playwright';
+import { chromium, webkit } from 'playwright';
+import { configuredPolicy, serveAsTauri } from './tauri-csp.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const shots = resolve(root, process.env.LD_SCREENSHOT_DIR ?? '.snapshots/ui');
@@ -1688,6 +1689,213 @@ test("A volume's files open under its line, a folder and a file at a time", asyn
   await close();
 });
 
+// A hostile guest's podman can say anything: the same container, image or volume listed twice, or
+// two files whose undecodable names read alike. Each page still draws every one of them.
+function listedTwice() {
+  const twice = (list) => [list[0], ...list];
+  const file = (name) => ({ name, kind: 'file', size: 1, modified: 1_794_000_000 });
+  window.__fakeAnswer = (cmd, args, answer) => {
+    // harbor's first container is the largest, so the popover lists it, twice.
+    if (cmd === 'snapshot') return { ...answer, vms: answer.vms.map((v) => (['atlas', 'harbor'].includes(v.instance.name) ? { ...v, containers: twice(v.containers) } : v)) };
+    if ((cmd === 'images' || cmd === 'volumes') && args.vm === 'atlas') return twice(answer);
+    if (cmd === 'guest_files' && args.path === '') return { ...answer, entries: [...answer.entries, file('a\uFFFD'), file('a\uFFFD')] };
+    return answer;
+  };
+}
+
+test('The same container, image, volume or file listed twice breaks no page', async () => {
+  const pages = [
+    ['/', async (page) => {
+      const atlas = page.locator('article', { has: page.locator('a.name', { hasText: /^atlas$/ }) });
+      await atlas.locator('.dot').first().waitFor();
+      assert.equal(await atlas.locator('.dot').count(), 14);
+    }],
+    ['/containers', (page) => page.locator('.line .name[title="atlas-frontend-1"]').nth(1).waitFor()],
+    ['/vm/atlas', (page) => page.locator('.line .name[title="atlas-frontend-1"]').nth(1).waitFor()],
+    ['/images', (page) => page.locator('.line', { hasText: 'atlas_frontend' }).nth(1).waitFor()],
+    ['/volumes', async (page) => {
+      const line = page.locator('.line', { has: page.locator('.name', { hasText: /^atlas_pgdata$/ }) });
+      await line.nth(1).waitFor();
+      await line.first().click();
+      // Both lines open, as one volume listed twice: the first one's files.
+      const detail = page.locator('section.detail').first();
+      await detail.locator('.entries .name', { hasText: 'a\uFFFD' }).nth(1).waitFor();
+      assert.match(await detail.innerText(), /2 folders, 5 files, 1 link/);
+    }],
+    ['/menubar?tab=mem', async (page) => {
+      await page.locator('.legend .row[data-container]').first().waitFor();
+      const names = await page.locator('.legend .row[data-container]').evaluateAll((rows) => rows.map((r) => r.dataset.container));
+      assert.equal(names[0], names[1]);
+    }],
+  ];
+  for (const [path, check] of pages) {
+    const { page, errors, close } = await open(path, { init: listedTwice });
+    await check(page);
+    assert.deepEqual(errors, [], path);
+    await close();
+  }
+});
+
+// Should a guest's answer find a way to make drawing fail (stood in for here by a value that throws
+// when it's read), only its own part of the page says so, and it's drawn again once it can be.
+function drawingFails() {
+  window.__breaks = true;
+  const breaking = (o, key) => {
+    const value = o[key];
+    return Object.defineProperty({ ...o }, key, {
+      enumerable: true,
+      get: () => { if (window.__breaks) throw new Error('drawing this fails'); return value; },
+    });
+  };
+  window.__fakeAnswer = (cmd, args, answer) => {
+    // lantern's own figures, and its one container's memory, as they're drawn.
+    const lantern = (v) => ({ ...v, latest: breaking(v.latest, 'psi_cpu_some'), containers: v.containers.map((c) => ({ ...c, latest: breaking(c.latest, 'mem_peak') })) });
+    if (cmd === 'snapshot') return { ...answer, vms: answer.vms.map((v) => (v.instance.name === 'lantern' ? lantern(v) : v)) };
+    if (cmd === 'guest_files' && args.path === 'base') return { ...answer, entries: answer.entries.map((e, i) => (i === 0 ? breaking(e, 'modified') : e)) };
+    return answer;
+  };
+}
+
+test("A VM whose report can't be drawn says so in its own row, and the rest of the overview carries on", async () => {
+  const { page, errors, close } = await open('/', { init: drawingFails });
+  const row = (name) => page.locator('article', { has: page.locator('a.name', { hasText: new RegExp(`^${name}$`) }) });
+  await page.locator('article .failed').waitFor();
+  assert.equal(await page.locator('article .failed').innerText(), "Something lantern reported couldn't be drawn.");
+  assert.equal(await page.locator('article .failed').count(), 1);
+  // Every other VM is drawn as usual.
+  assert.equal(await page.locator('article a.name').count(), 4);
+  assert.match(await row('atlas').innerText(), /More than three quarters of its memory is in use/);
+  // Once its report can be drawn again, it is, with the next measurement.
+  await page.evaluate(() => (window.__breaks = false));
+  await row('lantern').locator('a.name').waitFor();
+  await page.locator('article .failed').waitFor({ state: 'detached' });
+  assert.deepEqual(errors, []);
+  await close();
+});
+
+test("On Containers, a VM whose containers can't be drawn says so in its own group", async () => {
+  const { page, errors, close } = await open('/containers', { init: drawingFails });
+  const failed = page.locator('section .failed');
+  await failed.waitFor();
+  assert.equal(await failed.innerText(), "Something lantern reported couldn't be drawn.");
+  assert.equal(await failed.count(), 1);
+  assert.ok(await page.locator('.line .name[title="atlas-frontend-1"]').count() > 0);
+  await page.evaluate(() => (window.__breaks = false));
+  await page.locator('.line .name[title="lantern-devbox"]').waitFor();
+  assert.equal(await failed.count(), 0);
+  assert.deepEqual(errors, []);
+  await close();
+});
+
+test("A folder whose listing can't be drawn says so under its path, which still leads back", async () => {
+  const { page, errors, close } = await open('/volumes', { init: drawingFails });
+  await page.locator('.line', { has: page.locator('.name', { hasText: /^atlas_pgdata$/ }) }).first().click();
+  const detail = page.locator('section.detail');
+  await detail.getByRole('button', { name: 'base/' }).click();
+  await detail.locator('.failed').waitFor();
+  assert.equal(await detail.locator('.failed').innerText(), "Something in this folder couldn't be drawn.");
+  assert.match(await detail.locator('nav.path').innerText(), /atlas_pgdata\s*\/\s*base/);
+  // Back up the path, the folder above lists as usual.
+  await detail.locator('nav.path').getByRole('button', { name: 'atlas_pgdata' }).click();
+  await detail.getByRole('button', { name: 'pg_wal/' }).waitFor();
+  assert.equal(await detail.locator('.failed').count(), 0);
+  assert.deepEqual(errors, []);
+  await close();
+});
+
+// A hostile guest's names, made to deceive: a right-to-left override that turns the end of a name
+// round ("evil" RLO "gnp.exe" reads "evilexe.png"), a zero-width space that makes two names look
+// alike, and a name 300 characters long.
+function craftedNames() {
+  const RLO = String.fromCodePoint(0x202e), ZWSP = String.fromCodePoint(0x200b);
+  const long = `${'x'.repeat(299)}y`;
+  const modified = 1_794_000_000;
+  window.__fakeAnswer = (cmd, args, answer) => {
+    if (cmd === 'snapshot') return {
+      ...answer,
+      vms: answer.vms.map((v) => v.instance.name !== 'atlas' ? v : {
+        ...v,
+        containers: v.containers.map((c, i) => (
+          i === 0 ? { ...c, name: `evil${RLO}gnp.exe`, composeService: `web${RLO}1`, composeProject: `atlas${ZWSP}` }
+          : i === 1 ? { ...c, name: long, composeService: undefined, composeProject: undefined, image: `localhost/${long}:latest` }
+          : c)),
+      }),
+    };
+    // atlas_pgdata stays as it is, so its files open.
+    if (cmd === 'volumes' && args.vm === 'atlas') return answer.map((v, i) => (i === 3 ? { ...v, name: `data${RLO}txt.exe` } : i === 4 ? { ...v, name: long } : v));
+    if (cmd === 'images' && args.vm === 'atlas') return answer.map((im, i) => (i === 0 ? { ...im, tags: [`localhost/app${RLO}:latest`] } : im));
+    if (cmd === 'guest_files' && args.path === '') return { ...answer, entries: [...answer.entries, { name: `notes${RLO}txt.sh`, kind: 'file', size: 1, modified }, { name: long, kind: 'file', size: 1, modified }] };
+    return answer;
+  };
+}
+
+/** What the page shows that would hide or reorder text, in its text and its tooltips. */
+const hidden = (page) => page.evaluate(() => {
+  // Line breaks and tabs are a tooltip's own.
+  const re = /(?![\n\t])[\p{Cf}\p{Cc}]/u;
+  const texts = [document.body.innerText, ...[...document.querySelectorAll('[title], [aria-label], [aria-description]')].flatMap((e) => [e.getAttribute('title'), e.getAttribute('aria-label'), e.getAttribute('aria-description')]).filter(Boolean)];
+  return texts.filter((t) => re.test(t));
+});
+const sideways = (page) => page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+
+test("A guest's names are shown as they are: what would hide or turn text round is spelt out, and a long one stays in its line", async () => {
+  for (const [path, check] of [
+    ['/containers', async (page) => {
+      await page.locator('.line .name', { hasText: 'web⟨U+202E⟩1' }).waitFor();
+      assert.equal(await page.locator('.line .name', { hasText: 'web⟨U+202E⟩1' }).getAttribute('title'), 'evil⟨U+202E⟩gnp.exe');
+      // Set apart from what's beside it, so it can't reorder that either.
+      assert.equal(await page.locator('.line .name bdi', { hasText: 'web⟨U+202E⟩1' }).count(), 1);
+      assert.match(await page.locator('main').innerText(), /atlas⟨U\+200B⟩/);
+      // The long name is cut short in its line, which keeps to the page.
+      const line = page.locator('.line', { has: page.locator(`.name[title="${'x'.repeat(299)}y"]`) });
+      const [l, lines] = [await line.boundingBox(), await page.locator('.lines').boundingBox()];
+      assert.ok(l.x + l.width <= lines.x + lines.width + 1, 'the line keeps to the list');
+    }],
+    ['/', (page) => page.locator('article .dot[title^="web⟨U+202E⟩1"]').waitFor()],
+    ['/menubar?tab=mem', async (page) => {
+      await page.locator('.legend .row[data-container]').first().waitFor();
+    }],
+    ['/images', (page) => page.locator('.line .name', { hasText: 'app⟨U+202E⟩:latest' }).waitFor()],
+    ['/volumes', async (page) => {
+      await page.locator('.line .name', { hasText: 'data⟨U+202E⟩txt.exe' }).waitFor();
+      await page.locator('.line', { has: page.locator('.name', { hasText: /^atlas_pgdata$/ }) }).first().click();
+      const detail = page.locator('section.detail');
+      await detail.locator('.entries .name', { hasText: 'notes⟨U+202E⟩txt.sh' }).waitFor();
+      const [entry, list] = [await detail.locator('.entries li', { hasText: 'xxxxy' }).boundingBox(), await detail.locator('.entries').boundingBox()];
+      assert.ok(entry.width <= list.width + 1, "the long file name keeps to the folder's list");
+    }],
+  ]) {
+    for (const width of [1320, 420]) {
+      const { page, errors, close } = await open(path, { width, init: craftedNames });
+      await check(page);
+      assert.deepEqual(await hidden(page), [], `${path} at ${width} px: text that would hide or reorder`);
+      assert.ok(await sideways(page) <= 0, `${path} at ${width} px scrolls sideways`);
+      assert.deepEqual(errors, [], path);
+      await close();
+    }
+  }
+});
+
+// All of atlas's containers in one project, so the headlines name it: a guest's name in a sentence.
+function oneCraftedProject() {
+  const RLO = String.fromCodePoint(0x202e);
+  window.__fakeAnswer = (cmd, args, answer) => cmd !== 'snapshot' ? answer : {
+    ...answer,
+    vms: answer.vms.map((v) => v.instance.name !== 'atlas' ? v : { ...v, containers: v.containers.map((c) => ({ ...c, composeProject: `web${RLO}exe.gpj` })) }),
+  };
+}
+
+test("A headline that names a guest's compose project spells out what would turn the sentence round", async () => {
+  for (const [path, ready] of [['/containers', '.line'], ['/vm/atlas', '.line']]) {
+    const { page, errors, close } = await open(path, { init: oneCraftedProject });
+    await page.locator(ready).first().waitFor();
+    await page.waitForFunction(() => document.querySelector('main').innerText.includes('all in web⟨U+202E⟩exe.gpj'));
+    assert.deepEqual(await hidden(page), [], `${path}: text that would hide or reorder`);
+    assert.deepEqual(errors, [], path);
+    await close();
+  }
+});
+
 test('Images and Volumes open on what was already fetched', async () => {
   const { page, errors, close } = await open('/');
   await page.locator('article').first().waitFor();
@@ -2023,3 +2231,87 @@ test("A range whose charts fail to load shows none, not the previous range's", a
   assert.deepEqual(errors, []);
   await close();
 });
+
+// The app as Tauri serves a built one, under the policy in tauri.conf.json (tauri-csp.mjs): every
+// page draws, moves and opens what it should without the policy refusing anything, while what an
+// injected script would do (run inline code, reach a server) is refused. In Chromium, and in WebKit,
+// Tauri's engine on macOS and Linux, where it's installed (CI installs Chromium only).
+for (const engine of ['chromium', 'webkit']) {
+  test(`Every page runs under the app's Content Security Policy, which refuses an injected script (${engine})`, async (t) => {
+    const policy = await configuredPolicy(join(root, 'src-tauri/tauri.conf.json'));
+    assert.ok(policy, 'tauri.conf.json sets no Content Security Policy');
+    const launched = engine === 'chromium' ? browser : await webkit.launch().catch(() => null);
+    if (!launched) return t.skip("Playwright's WebKit isn't installed");
+    const served = await serveAsTauri(join(root, 'build'), policy);
+    const context = await launched.newContext({ viewport: { width: 1320, height: 900 }, locale: 'en-GB', timezoneId: 'UTC' });
+    try {
+      // The clock first, as open() has it: the fake backend reads the time as it loads.
+      await context.clock.setFixedTime(NOW);
+      await context.addInitScript({ path: join(root, 'e2e-ui/fake-backend.js') });
+      await context.addInitScript(() => {
+        window.__refused = [];
+        window.addEventListener('securitypolicyviolation', (e) => window.__refused.push(`${e.effectiveDirective} refused ${e.blockedURI || 'inline'}: ${e.sample}`), true);
+      });
+      const visit = async (path, use) => {
+        const page = await context.newPage();
+        const errors = [];
+        page.on('pageerror', (e) => errors.push(String(e)));
+        page.on('console', (m) => m.type() === 'error' && errors.push(m.text()));
+        const response = await page.goto(served.base + path);
+        assert.match(response.headers()['content-security-policy'], /script-src 'self' 'sha256-/, 'the inline scripts are hashed into the policy');
+        await use(page, errors);
+        await page.waitForTimeout(300);
+        assert.deepEqual(await page.evaluate(() => window.__refused), [], `${path}: what the policy refused`);
+        assert.deepEqual(errors, [], path);
+        await page.close();
+      };
+      await visit('/', async (page, errors) => {
+        // The page's own inline scripts ran (the theme's, and SvelteKit's start), its fonts and styles are in.
+        await page.locator('article .sketch:not(.empty)').first().waitFor();
+        await page.evaluate(() => document.fonts.ready);
+        assert.equal(await page.evaluate(() => getComputedStyle(document.querySelector('a.name')).fontFamily.includes('Newsreader')), true);
+        // A bar's card, placed by an inline style.
+        await page.locator('article .meter').first().locator('.bar').hover();
+        await page.locator('[role=tooltip]').first().waitFor();
+        // What an injected script would do is refused, and said (the refusals are reported a moment later).
+        const tried = await page.evaluate(async () => {
+          const s = document.createElement('script');
+          s.textContent = 'window.__ran = true';
+          document.head.append(s);
+          const fetched = await fetch('https://example.com/').then(() => 'fetched', () => 'refused');
+          return { ran: window.__ran ?? false, fetched };
+        });
+        assert.deepEqual(tried, { ran: false, fetched: 'refused' });
+        await page.waitForFunction(() => window.__refused.length >= 2);
+        const refused = await page.evaluate(() => window.__refused.splice(0).map((r) => r.split(' ')[0]));
+        assert.deepEqual(refused.map((d) => d.replace(/-elem$/, '')).sort(), ['connect-src', 'script-src']);
+        assert.deepEqual(errors.splice(0).filter((e) => !/Content Security Policy|ERR_BLOCKED_BY_CSP/.test(e)), []);
+      });
+      await visit('/vm/harbor', async (page) => {
+        // uPlot's charts, a container's detail unfolding, its charts and log.
+        await page.locator('.uplot').first().waitFor();
+        await page.locator('.line').first().click();
+        await page.locator('.detail .uplot').first().waitFor();
+        await page.locator('.detail').getByRole('button', { name: 'logs', exact: true }).click();
+        await page.locator('.ln').first().waitFor();
+      });
+      await visit('/containers', async (page) => {
+        await page.locator('.line').first().waitFor();
+        await page.locator('section .head button, section [aria-expanded]').first().click();
+      });
+      await visit('/volumes', async (page) => {
+        await page.locator('.line', { has: page.locator('.name', { hasText: /^atlas_pgdata$/ }) }).first().click();
+        await page.locator('section.detail').getByRole('button', { name: 'postgresql.conf' }).click();
+        await page.locator('section.detail pre').waitFor();
+      });
+      await visit('/images', (page) => page.locator('.line').first().waitFor());
+      await visit('/settings', (page) => page.getByRole('heading', { level: 1 }).waitFor());
+      // The popover's hatched patterns.
+      await visit('/menubar?tab=mem', (page) => page.locator('svg path.band.vm').first().waitFor());
+    } finally {
+      await context.close();
+      if (launched !== browser) await launched.close();
+      await served.close();
+    }
+  });
+}

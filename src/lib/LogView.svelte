@@ -166,8 +166,8 @@
 <dialog bind:this={dialog} class="window" aria-label={`${name}'s log`} onclose={() => move(false)} onkeydown={keys}>
   {#if full}
     <div class="head">
-      <h3 class="serif">{name}</h3>
-      <span class="muted">{image}</span>
+      <h3 class="serif"><bdi>{name}</bdi></h3>
+      <span class="muted"><bdi>{image}</bdi></span>
     </div>
     {@render viewer()}
   {/if}

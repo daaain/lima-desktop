@@ -5,6 +5,7 @@ import type { Hint } from './rightsize';
 import { bytes, cores, MiB, permille, uptime } from './format';
 import type { RichTip, TipRow } from './richTip';
 import { inRange, rangeMs, theLast, type RangeKey } from './ranges';
+import { visible } from './visible';
 
 /** Past this share of an allocation a figure, its bar and its sentence turn to the warning colour. */
 export const WARN_PCT = 75;
@@ -685,7 +686,8 @@ export function containersSentence(containers: { composeProject?: string }[]): s
   const n = containers.length;
   if (n === 0) return 'No containers.';
   const count = `${countWord(n)} ${n === 1 ? 'container' : 'containers'}`;
-  const projects = [...new Set(containers.map((c) => c.composeProject).filter((p): p is string => !!p))];
+  // A guest names its projects: spelt out, so one can't hide or turn round the rest of the sentence.
+  const projects = [...new Set(containers.map((c) => c.composeProject).filter((p): p is string => !!p))].map(visible);
   const inProjects = containers.filter((c) => c.composeProject).length;
   if (projects.length === 0) return `${count}.`;
   if (projects.length === 1 && inProjects === n) return n === 1 ? `${count}, in ${projects[0]}.` : `${count}, all in ${projects[0]}.`;
@@ -708,7 +710,8 @@ export function runsSentence(containers: Listed[]): string {
   const exited = down === 0 ? '' : `${down === 1 ? 'one has' : `${countWord(down).toLowerCase()} have`} exited`;
   if (up.length === 0) return down === 0 ? 'runs nothing.' : `runs nothing; ${exited}.`;
   const projects = [...new Set(up.map((c) => c.composeProject))];
-  const where = projects.length === 1 && projects[0] ? (up.length === 1 ? `, in ${projects[0]}` : `, all in ${projects[0]}`) : '';
+  const only = projects.length === 1 && projects[0] ? visible(projects[0]) : '';
+  const where = only ? (up.length === 1 ? `, in ${only}` : `, all in ${only}`) : '';
   return `runs ${countWord(up.length).toLowerCase()}${where}${exited ? `, and ${exited}` : ''}.`;
 }
 
@@ -726,7 +729,7 @@ export function exitedSentence(rows: { vm: string; c: Listed }[]): string {
   const down = rows.filter((r) => r.c.state !== 'running');
   if (down.length === 0) return '';
   if (down.length > 3) return `${countWord(down.length)} are not running.`;
-  const named = down.map((r) => `${r.c.composeService ?? r.c.name} in ${r.vm}`);
+  const named = down.map((r) => `${visible(r.c.composeService ?? r.c.name)} in ${r.vm}`);
   return `${down.length === 1 ? 'One is' : `${countWord(down.length)} are`} not running: ${list(named)}.`;
 }
 

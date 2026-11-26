@@ -8,6 +8,7 @@
   import type { ContainerLive, Series } from './api';
   import { band, rowMemory, share } from './almanac';
   import { bytes, cores, rate, uptime } from './format';
+  import { visible } from './visible';
   import { range } from './range.svelte';
   import Bar from './Bar.svelte';
   import ContainerActions from './ContainerActions.svelte';
@@ -34,9 +35,9 @@
 <div class="line num" class:off={!running} role="button" tabindex="0" aria-expanded={selected} onclick={onselect}
   onkeydown={(e) => { if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); onselect(); } }}>
   <div class="who">
-    <span class="name serif" title={c.name}>{c.composeService ?? c.name}{#if oom > 0}<span class="badge alert" title="Processes killed for running out of memory since it started">{oom} OOM</span>{/if}</span>
-    <span class="second" title={second === 'image' ? c.image : c.name}>
-      {#if second === 'image' || !running}{c.image}{:else}{l.pids ?? '–'} pids · net {rate(l.net_rx_bps)} in, {rate(l.net_tx_bps)} out{/if}
+    <span class="name serif" title={visible(c.name)}><bdi>{visible(c.composeService ?? c.name)}</bdi>{#if oom > 0}<span class="badge alert" title="Processes killed for running out of memory since it started">{oom} OOM</span>{/if}</span>
+    <span class="second" title={visible(second === 'image' ? c.image : c.name)}>
+      {#if second === 'image' || !running}<bdi>{visible(c.image)}</bdi>{:else}{l.pids ?? '–'} pids · net {rate(l.net_rx_bps)} in, {rate(l.net_tx_bps)} out{/if}
     </span>
   </div>
   {#if running}

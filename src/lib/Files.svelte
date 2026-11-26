@@ -6,6 +6,9 @@
   import { onMount } from 'svelte';
   import { api, type FileListing, type FilePeek, type FileSource } from './api';
   import { age, bytes } from './format';
+  import Guarded from './Guarded.svelte';
+  import { distinctKeys } from './keys';
+  import { visible } from './visible';
 
   let { vm, source, label, onclose, inset = false }: {
     vm: string; source: FileSource;
@@ -33,6 +36,8 @@
     ].filter(Boolean).join(', ');
   }
 
+  // Two names can read alike (bytes that aren't UTF-8 arrive as U+FFFD), and both are listed.
+  const entryKeys = $derived(listing ? distinctKeys(listing.entries, (e) => e.name) : []);
   const join = (dir: string, entry: string) => (dir ? `${dir}/${entry}` : entry);
   const crumbs = $derived.by(() => {
     const parts = (peek?.path ?? listing?.path ?? '').split('/').filter(Boolean);
@@ -73,14 +78,14 @@
 <section class="detail" class:wash={!inset} class:inset>
   <div class="head">
     <nav class="path serif" aria-label="Where in the folder">
-      <button class="crumb" onclick={() => open('')} disabled={!crumbs.length && !peek}>{label}</button>
+      <button class="crumb" onclick={() => open('')} disabled={!crumbs.length && !peek}><bdi>{visible(label)}</bdi></button>
       {#each crumbs as c, i (c.path)}
         <span class="sep">/</span>
         {#if i < crumbs.length - 1 || peek}
           <button class="crumb" onclick={() => (peek && i === crumbs.length - 1 ? read(c.path) : open(c.path))}
-            disabled={!!peek && i === crumbs.length - 1}>{c.part}</button>
+            disabled={!!peek && i === crumbs.length - 1}><bdi>{visible(c.part)}</bdi></button>
         {:else}
-          <span class="here">{c.part}</span>
+          <bdi class="here">{visible(c.part)}</bdi>
         {/if}
       {/each}
     </nav>
@@ -91,6 +96,7 @@
   </div>
   {#if error}<p class="error">{error}</p>{/if}
 
+  <Guarded said="Something in this folder couldn't be drawn." retry={peek ?? listing}>
   {#if peek}
     <!-- What it is said first: a file, and how big, so a binary one isn't taken for a folder that won't open. -->
     {#if peek.text == null}
@@ -111,19 +117,19 @@
       <p class="note">Empty.</p>
     {:else}
       <ul class="entries num">
-        {#each listing.entries as e (e.name)}
+        {#each listing.entries as e, i (entryKeys[i])}
           {@const path = join(listing.path, e.name)}
           <li>
             {#if e.kind === 'dir'}
-              <button class="entry" onclick={() => open(path)}><span class="name">{e.name}/</span></button>
+              <button class="entry" onclick={() => open(path)}><span class="name"><bdi>{visible(e.name)}</bdi>/</span></button>
             {:else if e.kind === 'file'}
-              <button class="entry" onclick={() => read(path)}><span class="name">{e.name}</span></button>
+              <button class="entry" onclick={() => read(path)}><span class="name"><bdi>{visible(e.name)}</bdi></span></button>
             {:else if e.kind === 'link'}
-              <button class="entry" onclick={() => follow(path)} title="A symbolic link"><span class="name">{e.name}</span> <span class="muted">→</span></button>
+              <button class="entry" onclick={() => follow(path)} title="A symbolic link"><span class="name"><bdi>{visible(e.name)}</bdi></span> <span class="muted">→</span></button>
             {:else if e.kind === 'removed'}
-              <span class="entry removed" title="This layer deletes what a lower one had here"><span class="name">{e.name}</span></span>
+              <span class="entry removed" title="This layer deletes what a lower one had here"><span class="name"><bdi>{visible(e.name)}</bdi></span></span>
             {:else}
-              <span class="entry other" title="A socket, device or pipe: nothing to read"><span class="name">{e.name}</span></span>
+              <span class="entry other" title="A socket, device or pipe: nothing to read"><span class="name"><bdi>{visible(e.name)}</bdi></span></span>
             {/if}
             <span class="size" class:label={e.kind === 'removed'}>{e.kind === 'file' ? bytes(e.size) : e.kind === 'removed' ? 'removed' : ''}</span>
             <span class="when label" title={new Date(e.modified * 1000).toLocaleString('en-GB')}>{age(e.modified)}</span>
@@ -134,6 +140,7 @@
   {:else if !error}
     <p class="muted">…</p>
   {/if}
+  </Guarded>
 </section>
 
 <style>

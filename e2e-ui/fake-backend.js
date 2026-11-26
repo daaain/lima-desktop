@@ -707,7 +707,10 @@
   window.__TAURI_INTERNALS__ = {
     invoke: async (cmd, args = {}) => {
       if (!(cmd in commands)) throw new Error(`fake backend: no command '${cmd}'`);
-      return commands[cmd](args);
+      const answer = await commands[cmd](args);
+      // A test can set __fakeAnswer(cmd, args, answer) to change any answer, as a hostile guest
+      // could: names made to deceive, or the same thing listed twice.
+      return window.__fakeAnswer ? window.__fakeAnswer(cmd, args, answer) : answer;
     },
     transformCallback: (callback) => {
       const id = nextId++;

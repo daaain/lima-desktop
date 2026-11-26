@@ -244,6 +244,11 @@ describe('containersSentence', () => {
     expect(containersSentence([c('shop'), c('shop'), c()])).toBe('Three containers, 2 of them in shop.');
     expect(containersSentence([c('shop'), c('blog')])).toBe('Two containers, in 2 compose projects.');
   });
+  it("spells out what in a project's name would hide or turn round the sentence", () => {
+    // A guest names its compose project: an override in it would reverse the rest of the headline.
+    expect(containersSentence([c('web\u202Eexe.gpj'), c('web\u202Eexe.gpj')])).toBe('Two containers, all in web⟨U+202E⟩exe.gpj.');
+    expect(containersSentence([c('web\u202E'), c()])).toBe('Two containers, 1 of them in web⟨U+202E⟩.');
+  });
 });
 
 describe('projectSaid', () => {
@@ -257,6 +262,10 @@ describe('projectSaid', () => {
 
 describe('the Containers view in sentences', () => {
   const c = (name: string, state = 'running', composeProject?: string) => ({ name, state, composeProject });
+  it("spells out what in a project's name would hide or turn round the sentence", () => {
+    expect(runsSentence([c('a', 'running', 'web\u202Eexe.gpj'), c('b', 'running', 'web\u202Eexe.gpj')])).toBe('runs two, all in web⟨U+202E⟩exe.gpj.');
+    expect(runsSentence([c('a', 'running', 'x\u200B')])).toBe('runs one, in x⟨U+200B⟩.');
+  });
   it('says what a VM runs', () => {
     expect(runsSentence([])).toBe('runs nothing.');
     expect(runsSentence([c('a', 'exited')])).toBe('runs nothing; one has exited.');

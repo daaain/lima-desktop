@@ -1,11 +1,12 @@
 <script lang="ts">
   import { api, type ContainerAction, type ContainerLive } from './api';
+  import { visible } from './visible';
 
   let { vm, c, onerror }: { vm: string; c: ContainerLive; onerror: (message: string | null) => void } = $props();
   let busy = $state(false);
 
   async function act(action: ContainerAction) {
-    if (action === 'remove' && !confirm(`Remove container '${c.name}'?`)) return;
+    if (action === 'remove' && !confirm(`Remove container '${visible(c.name)}'?`)) return;
     busy = true;
     onerror(null);
     try {

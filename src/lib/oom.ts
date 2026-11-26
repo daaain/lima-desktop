@@ -4,6 +4,7 @@
 import type { ContainerLive, OomEvent, VmStall } from './api';
 import { bytes, permille, uptime } from './format';
 import { theLast, type RangeKey } from './ranges';
+import { visible } from './visible';
 
 export type OomLevel = 'container' | 'cgroup' | 'vm' | 'unknown';
 
@@ -58,7 +59,7 @@ export function oomWho(e: ContainerRef, containers: ContainerLive[]): OomWho {
   const service = now?.composeService ?? e.composeService;
   const project = now?.composeProject ?? e.composeProject;
   const name = service ?? now?.name ?? e.containerName ?? e.containerId.slice(0, 12);
-  return { name, context: project ?? undefined, removed: !now };
+  return { name: visible(name), context: project != null ? visible(project) : undefined, removed: !now };
 }
 
 /** A moment marked on a chart, or a stretch of time when it has an `until` (both unix ms). */
@@ -72,7 +73,7 @@ export interface Marker {
 export function oomMarkers(events: OomEvent[], containerId?: string): Marker[] {
   return events
     .filter((e) => containerId == null || e.containerId === containerId)
-    .map((e) => ({ ts: e.ts, label: `OOM ${e.process ?? ''}`.trim() }));
+    .map((e) => ({ ts: e.ts, label: `OOM ${visible(e.process ?? '')}`.trim() }));
 }
 
 /** The badge a stall gets in the out-of-memory list. */

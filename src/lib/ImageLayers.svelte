@@ -8,6 +8,7 @@
   import { share } from './almanac';
   import { age, bytes, shortId } from './format';
   import { instruction } from './images';
+  import { visible } from './visible';
   import Bar from './Bar.svelte';
   import Files from './Files.svelte';
   import { unfold } from './motion';
@@ -81,12 +82,12 @@
               <span class="label">config</span>
             {/if}
           </span>
-          <code title={l.createdBy}>{instruction(l.createdBy) || '(not recorded)'}</code>
+          <code title={visible(l.createdBy)}><bdi>{visible(instruction(l.createdBy)) || '(not recorded)'}</bdi></code>
           <span class="when label" title={l.created ? new Date(l.created * 1000).toLocaleString('en-GB') : "The image doesn't record when"}>
             {l.created ? age(l.created) : '–'}{#if l.id}<br /><span title={l.id}>{shortId(l.id)}</span>{/if}
           </span>
           {#if l.comment || l.tags.length}
-            <span class="aside label">{[l.tags.join(', '), l.comment].filter(Boolean).join(' · ')}</span>
+            <span class="aside label"><bdi>{visible([l.tags.join(', '), l.comment].filter(Boolean).join(' · '))}</bdi></span>
           {/if}
           </div>
           {#if layer != null && open[layer]}
