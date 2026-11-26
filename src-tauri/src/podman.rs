@@ -198,10 +198,11 @@ impl ImageHashes {
 /// namespace, so an image's `com.docker.compose.project` can't slip in beside it. Its service is the
 /// one exception: podman-compose wrote no `io.podman.compose.service` before 1.5.0, but has always
 /// set `com.docker.compose.service` as it made the container, which outranks an image's label of
-/// the same key, so that one is its own. `image` is the
-/// container's image's hashes, None when that isn't listed: then nothing can be told, so it's in
-/// no project. Expected in none too: Docker Compose's lifecycle-hook containers (no hash) and
-/// `podman run` of a compose-built image.
+/// the same key, so that one is its own.
+///
+/// `image` is the container's image's hashes, None when that isn't listed: then nothing can be
+/// told, so it's in no project. Expected in none too: Docker Compose's lifecycle-hook containers
+/// (no hash) and `podman run` of a compose-built image.
 fn trusted_compose(labels: &BTreeMap<String, String>, image: Option<&ImageHashes>) -> Option<(String, Option<String>)> {
     let label = |ns: &str, key: &str| labels.get(&format!("{ns}.{key}")).filter(|v| !v.is_empty());
     image?.by_namespace().into_iter().find_map(|(ns, image_hash)| {

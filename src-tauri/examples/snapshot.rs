@@ -13,9 +13,9 @@
 //!   vms/<vm>/journal.out       the OOM reader's raw stdout (exit status and stderr in the manifest)
 //!   vms/<vm>/libpod/*.json     the list GETs once; stats.jsonl one body per line, one per second
 //! Never recorded: inspect, logs, the `Command` / `Mounts` fields of the container list and
-//! `system df`, and images' labels but their compose config hashes (those bodies are re-serialised
-//! without them). The host-side
-//! columns (hypervisor RSS/CPU, disk-image allocation) can't be replayed, so nothing is kept for them.
+//! `system df`, and images' labels other than their compose config hashes (those bodies are
+//! re-serialised without them). The host-side columns (hypervisor RSS/CPU, disk-image allocation)
+//! can't be replayed, so nothing is kept for them.
 //!
 //! It records into `<out>.partial` and only renames that to `<out>` when no line of it looks like a
 //! credential (`password`, `secret`, `token`, a private key's header); otherwise it deletes it and
