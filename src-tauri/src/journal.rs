@@ -36,7 +36,10 @@ const TIMEOUT: Duration = Duration::from_secs(60);
 const SSH_FAILED: i32 = 255;
 /// The most lines asked for, the newest: a kill is three or four (the memory use, `oom-kill:`, and
 /// `Killed process`), so this is some 5,000 kills, more than a crash loop leaves in the first
-/// read's retention. Past it the oldest are left out, rather than the ones still to come.
+/// read's retention. Past it the oldest are left out, rather than the ones still to come. They're
+/// asked for newest first (`-r`), as only then does `-n` count the lines `--grep` matches rather
+/// than the kernel's lines it looks through; and systemd 259 prints them newest first when `-n`
+/// and `--grep` meet anyway, `-r` or not.
 const MAX_LINES: usize = 20_000;
 /// The most of the answer read, in bytes: past it ssh is killed and what came is read. A line of
 /// JSON is at most some 800 bytes (journald's fields, and an `oom-kill:` line with two cgroup
@@ -63,7 +66,7 @@ else
   exit 0
 fi
 jc -q --no-pager _TRANSPORT=kernel -o json --output-fields=MESSAGE,_BOOT_ID \
-  --since "@{since}" -n {MAX_LINES} --grep 'oom-kill:|Killed process|^memory: usage'
+  --since "@{since}" -r -n {MAX_LINES} --grep 'oom-kill:|Killed process|^memory: usage'
 rc=$?
 [ "$rc" -le 1 ] || echo "E journalctl failed (exit $rc)"
 "#,
@@ -101,7 +104,7 @@ pub async fn read_oom_lines(ssh_config: &str, instance: &str, since_ms: i64) -> 
 /// killed: the lines that came whole are read, and the one it was cut in is skipped.
 fn interpret(out: &Output, cut: bool) -> Result<Vec<Entry>, JournalError> {
     if cut {
-        log::warn!("the kernel journal's answer was over {} MiB: only its start is read", MAX_OUTPUT >> 20);
+        log::warn!("the kernel journal's answer was over {} MiB: only its newest lines are read", MAX_OUTPUT >> 20);
     } else if !out.status.success() {
         let stderr = String::from_utf8_lossy(&out.stderr);
         let why = stderr
@@ -133,7 +136,8 @@ fn decode(line: &str) -> Option<Entry> {
     Some(Entry { ts_ms: us / 1000, boot: v["_BOOT_ID"].as_str().unwrap_or_default().to_string(), message })
 }
 
-/// The journal's answer, a JSON object per line, or the script's `E <reason>`.
+/// The journal's answer, a JSON object per line and newest first (`-r`), or the script's
+/// `E <reason>`. The entries come back oldest first: a kill's lines are read in the kernel's order.
 pub fn parse_output(stdout: &str) -> Result<Vec<Entry>, JournalError> {
     let mut entries = Vec::new();
     for line in stdout.lines().map(str::trim) {
@@ -146,6 +150,7 @@ pub fn parse_output(stdout: &str) -> Result<Vec<Entry>, JournalError> {
             entries.push(entry);
         }
     }
+    entries.reverse();
     Ok(entries)
 }
 
@@ -153,13 +158,15 @@ pub fn parse_output(stdout: &str) -> Result<Vec<Entry>, JournalError> {
 mod tests {
     use super::*;
 
-    const OUT: &str = r#"{"__CURSOR":"s=032b;i=527a3;b=f0be;m=5bcd7ba51;t=65fd7af11cea8;x=5b3d","__REALTIME_TIMESTAMP":"1794229820051112","_BOOT_ID":"f0bed60b3e5a481d9888c6d3966582f0","__MONOTONIC_TIMESTAMP":"24643091025","MESSAGE":"memory: usage 1048576kB, limit 1048576kB, failcnt 3051"}
+    /// The journal's answer as the script asks for it (`-r`): newest first.
+    const OUT: &str = r#"{"_BOOT_ID":"f0bed60b3e5a481d9888c6d3966582f0","__REALTIME_TIMESTAMP":"1794229820051900","MESSAGE":[77,101,109,111,114,121,255]}
 {"_BOOT_ID":"f0bed60b3e5a481d9888c6d3966582f0","__REALTIME_TIMESTAMP":"1794229820051400","MESSAGE":"oom-kill:constraint=CONSTRAINT_MEMCG,nodemask=(null),cpuset=user.slice,mems_allowed=0,task=python3,pid=1234,uid=501"}
-{"_BOOT_ID":"f0bed60b3e5a481d9888c6d3966582f0","__REALTIME_TIMESTAMP":"1794229820051900","MESSAGE":[77,101,109,111,114,121,255]}
+{"__CURSOR":"s=032b;i=527a3;b=f0be;m=5bcd7ba51;t=65fd7af11cea8;x=5b3d","__REALTIME_TIMESTAMP":"1794229820051112","_BOOT_ID":"f0bed60b3e5a481d9888c6d3966582f0","__MONOTONIC_TIMESTAMP":"24643091025","MESSAGE":"memory: usage 1048576kB, limit 1048576kB, failcnt 3051"}
 "#;
 
     #[test]
-    fn decodes_entries_including_a_non_utf8_message() {
+    fn decodes_entries_oldest_first_including_a_non_utf8_message() {
+        // The kernel's order, as oom::kernel_events reads a kill: its memory use, then `oom-kill:`.
         let entries = parse_output(OUT).unwrap();
         assert_eq!(entries.len(), 3);
         assert_eq!(entries[0].ts_ms, 1_794_229_820_051);
@@ -259,7 +266,9 @@ mod tests {
 
     #[test]
     fn the_script_asks_for_the_newest_lines_only() {
-        assert!(script(0).contains(&format!(" -n {MAX_LINES} ")));
+        // Newest first (-r): then -n counts the lines --grep matches. Without -r, how -n and --grep
+        // combine depends on the version: systemd 259 counts back but prints newest first anyway.
+        assert!(script(0).contains(&format!(" -r -n {MAX_LINES} ")));
         // The most lines asked for fit in what's read, at their longest.
         const { assert!(MAX_LINES * 800 < MAX_OUTPUT) };
     }
