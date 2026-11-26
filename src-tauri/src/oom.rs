@@ -288,14 +288,16 @@ pub fn kernel_events(vm: &str, entries: &[Entry]) -> Vec<OomEvent> {
 
 /// Kills seen between two probe blocks, by counter: one entry per kill, the container id where a
 /// container's own `oom_kill` rose, `None` for the rest of the VM's rise. A scope new since the
-/// last block counts from zero (it started within the probe's rescan interval). A counter that went
-/// down (a reboot) is a new baseline, not a kill. At most `MAX_COUNTER_KILLS` in all.
+/// last block counts from zero (it started within the probe's rescan interval), unless the last
+/// block had it contested (`Block::contested`): then its count before is unknown, and this block's
+/// is its baseline. A counter that went down (a reboot) is a new baseline, not a kill. At most
+/// `MAX_COUNTER_KILLS` in all.
 pub fn counter_kills(prev: &Block, cur: &Block) -> Vec<Option<String>> {
     let mut kills: Vec<Option<String>> = Vec::new();
     let mut attributed: u64 = 0;
     let mut ids: Vec<&String> = cur.cgroups.keys().collect();
     ids.sort();
-    for id in ids {
+    for id in ids.into_iter().filter(|id| !prev.contested.contains(*id)) {
         let now = cur.cgroups[id].oom_kills.unwrap_or(0);
         let before = prev.cgroups.get(id).map_or(Some(0), |c| c.oom_kills).unwrap_or(0);
         let rise = now.saturating_sub(before);
@@ -619,6 +621,15 @@ mod tests {
         assert!(counter_kills(&block(Some(3), &[(CT, 1)]), &block(Some(3), &[(CT, 1)])).is_empty());
         assert!(counter_kills(&block(Some(9), &[]), &block(Some(0), &[])).is_empty(), "a reboot");
         assert!(counter_kills(&block(None, &[]), &block(Some(4), &[])).is_empty());
+    }
+
+    #[test]
+    fn a_scope_back_from_a_contested_block_is_a_baseline_not_new() {
+        // An id on two lines of a block is in neither its cgroups nor counted from zero next time:
+        // its count before is unknown, so a container's whole history isn't taken as new kills.
+        let mut prev = block(Some(3), &[]);
+        prev.contested.insert(CT.to_string());
+        assert!(counter_kills(&prev, &block(Some(3), &[(CT, 7)])).is_empty());
     }
 
     #[test]
