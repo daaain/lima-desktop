@@ -6,6 +6,8 @@
   import { onMount } from 'svelte';
   import { api, type FileListing, type FilePeek, type FileSource } from './api';
   import { age, bytes } from './format';
+  import Guarded from './Guarded.svelte';
+  import { distinctKeys } from './keys';
 
   let { vm, source, label, onclose, inset = false }: {
     vm: string; source: FileSource;
@@ -33,6 +35,8 @@
     ].filter(Boolean).join(', ');
   }
 
+  // Two names can read alike (bytes that aren't UTF-8 arrive as U+FFFD), and both are listed.
+  const entryKeys = $derived(listing ? distinctKeys(listing.entries, (e) => e.name) : []);
   const join = (dir: string, entry: string) => (dir ? `${dir}/${entry}` : entry);
   const crumbs = $derived.by(() => {
     const parts = (peek?.path ?? listing?.path ?? '').split('/').filter(Boolean);
@@ -91,6 +95,7 @@
   </div>
   {#if error}<p class="error">{error}</p>{/if}
 
+  <Guarded said="Something in this folder couldn't be drawn." retry={peek ?? listing}>
   {#if peek}
     <!-- What it is said first: a file, and how big, so a binary one isn't taken for a folder that won't open. -->
     {#if peek.text == null}
@@ -111,7 +116,7 @@
       <p class="note">Empty.</p>
     {:else}
       <ul class="entries num">
-        {#each listing.entries as e (e.name)}
+        {#each listing.entries as e, i (entryKeys[i])}
           {@const path = join(listing.path, e.name)}
           <li>
             {#if e.kind === 'dir'}
@@ -134,6 +139,7 @@
   {:else if !error}
     <p class="muted">…</p>
   {/if}
+  </Guarded>
 </section>
 
 <style>

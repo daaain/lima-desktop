@@ -8,6 +8,8 @@
   import { theLast } from '$lib/ranges';
   import { BY_MEMORY, CONTAINER_COLUMNS, CONTAINER_SORTS, containerRows, filterContainers, groupContainers, lineHistory, readContainerFilter, type ContainerRow, type ContainerSort } from '$lib/containers';
   import type { ContainerLive } from '$lib/api';
+  import { distinctKeys } from '$lib/keys';
+  import Guarded from '$lib/Guarded.svelte';
   import { podmanFailures, podmanScope } from '$lib/perVm';
   import { withParam } from '$lib/url';
   import ContainerLine from '$lib/ContainerLine.svelte';
@@ -91,7 +93,7 @@
 {#if all.length}
   <div class="summary">
     <div class="dots" role="img" aria-label={containersHeadline(all)}>
-      {#each all as { vm, c } (`${vm}/${c.id}`)}<span class="dot" class:off={c.state !== 'running'} title={`${c.composeService ?? c.name} in ${vm}: ${c.state}`}></span>{/each}
+      {#each all as { vm, c }}<span class="dot" class:off={c.state !== 'running'} title={`${c.composeService ?? c.name} in ${vm}: ${c.state}`}></span>{/each}
     </div>
     {#if exitedSentence(all)}<p class="lede">{exitedSentence(all)}</p>{/if}
   </div>
@@ -127,7 +129,8 @@
   </div>
   <div class="narrow-order"><OrderPicker columns={CONTAINER_COLUMNS} {ordering} /></div>
   {#snippet lines(g: (typeof groups)[number], rows: ContainerRow[])}
-    {#each rows as { vm, c } (c.id)}
+    {@const keys = distinctKeys(rows, (r) => keyOf(r.vm, r.c.id))}
+    {#each rows as { vm, c }, i (keys[i])}
       {@const key = keyOf(vm, c.id)}
       <div animate:glide>
         <ContainerLine {vm} {c} history={history.get(lineHistory(vm, c))} vmHistory={history.get(g.live?.entity)} vmCpus={g.live?.instance.cpus ?? 1} vmMemory={g.live?.instance.memory ?? 0} second="image"
@@ -144,26 +147,28 @@
     {#each groups as g (g.vm)}
       {@const listed = listsLines({ folded: vmFolds.containers.has(g.vm), searching: searching || urlFilter.vm != null })}
       <section animate:glide>
-        <VmHead vm={g.vm} live={g.live} sentence={runsSentence(g.rows.map((r) => r.c))} history={history.get(g.live?.entity)}
-          folded={vmFolds.containers.has(g.vm)} listed={listed} now={live.snapshot?.updated} ontoggle={() => vmFolds.containers.toggle(g.vm)} />
-        {#if listed}
-        <div class="vm-lines" transition:unfold>
-          {#each g.projects as p (p.project)}
-            <div animate:glide>
-              {#if p.project}
-                {@const project = p.project}
-                <ProjectGroup {project} containers={projectContainers.get(keyOf(g.vm, project)) ?? []} history={history.get({ vm: g.vm, project })}
-                  vmHistory={history.get(g.live?.entity)} vmMemory={g.live?.instance.memory ?? 0} vmCpus={g.live?.instance.cpus ?? 1}
-                  folded={folds.has(g.vm, project)} ontoggle={() => folds.toggle(g.vm, project)} listed={listsLines({ folded: folds.has(g.vm, project), searching })}>
-                  {@render lines(g, p.rows)}
-                </ProjectGroup>
-              {:else}
-                <div class="rows">{@render lines(g, p.rows)}</div>
-              {/if}
-            </div>
-          {/each}
-        </div>
-        {/if}
+        <Guarded said={`Something ${g.vm} reported couldn't be drawn.`} retry={g}>
+          <VmHead vm={g.vm} live={g.live} sentence={runsSentence(g.rows.map((r) => r.c))} history={history.get(g.live?.entity)}
+            folded={vmFolds.containers.has(g.vm)} listed={listed} now={live.snapshot?.updated} ontoggle={() => vmFolds.containers.toggle(g.vm)} />
+          {#if listed}
+          <div class="vm-lines" transition:unfold>
+            {#each g.projects as p (p.project)}
+              <div animate:glide>
+                {#if p.project}
+                  {@const project = p.project}
+                  <ProjectGroup {project} containers={projectContainers.get(keyOf(g.vm, project)) ?? []} history={history.get({ vm: g.vm, project })}
+                    vmHistory={history.get(g.live?.entity)} vmMemory={g.live?.instance.memory ?? 0} vmCpus={g.live?.instance.cpus ?? 1}
+                    folded={folds.has(g.vm, project)} ontoggle={() => folds.toggle(g.vm, project)} listed={listsLines({ folded: folds.has(g.vm, project), searching })}>
+                    {@render lines(g, p.rows)}
+                  </ProjectGroup>
+                {:else}
+                  <div class="rows">{@render lines(g, p.rows)}</div>
+                {/if}
+              </div>
+            {/each}
+          </div>
+          {/if}
+        </Guarded>
       </section>
     {/each}
   </div>

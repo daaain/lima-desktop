@@ -1672,6 +1672,120 @@ test("A volume's files open under its line, a folder and a file at a time", asyn
   await close();
 });
 
+// A hostile guest's podman can say anything: the same container, image or volume listed twice, or
+// two files whose undecodable names read alike. Each page still draws every one of them.
+function listedTwice() {
+  const twice = (list) => [list[0], ...list];
+  const file = (name) => ({ name, kind: 'file', size: 1, modified: 1_794_000_000 });
+  window.__fakeAnswer = (cmd, args, answer) => {
+    // harbor's first container is the largest, so the popover lists it, twice.
+    if (cmd === 'snapshot') return { ...answer, vms: answer.vms.map((v) => (['atlas', 'harbor'].includes(v.instance.name) ? { ...v, containers: twice(v.containers) } : v)) };
+    if ((cmd === 'images' || cmd === 'volumes') && args.vm === 'atlas') return twice(answer);
+    if (cmd === 'guest_files' && args.path === '') return { ...answer, entries: [...answer.entries, file('a\uFFFD'), file('a\uFFFD')] };
+    return answer;
+  };
+}
+
+test('The same container, image, volume or file listed twice breaks no page', async () => {
+  const pages = [
+    ['/', async (page) => {
+      const atlas = page.locator('article', { has: page.locator('a.name', { hasText: /^atlas$/ }) });
+      await atlas.locator('.dot').first().waitFor();
+      assert.equal(await atlas.locator('.dot').count(), 14);
+    }],
+    ['/containers', (page) => page.locator('.line .name[title="atlas-frontend-1"]').nth(1).waitFor()],
+    ['/vm/atlas', (page) => page.locator('.line .name[title="atlas-frontend-1"]').nth(1).waitFor()],
+    ['/images', (page) => page.locator('.line', { hasText: 'atlas_frontend' }).nth(1).waitFor()],
+    ['/volumes', async (page) => {
+      const line = page.locator('.line', { has: page.locator('.name', { hasText: /^atlas_pgdata$/ }) });
+      await line.nth(1).waitFor();
+      await line.first().click();
+      // Both lines open, as one volume listed twice: the first one's files.
+      const detail = page.locator('section.detail').first();
+      await detail.locator('.entries .name', { hasText: 'a\uFFFD' }).nth(1).waitFor();
+      assert.match(await detail.innerText(), /2 folders, 5 files, 1 link/);
+    }],
+    ['/menubar?tab=mem', async (page) => {
+      await page.locator('.legend .row[data-container]').first().waitFor();
+      const names = await page.locator('.legend .row[data-container]').evaluateAll((rows) => rows.map((r) => r.dataset.container));
+      assert.equal(names[0], names[1]);
+    }],
+  ];
+  for (const [path, check] of pages) {
+    const { page, errors, close } = await open(path, { init: listedTwice });
+    await check(page);
+    assert.deepEqual(errors, [], path);
+    await close();
+  }
+});
+
+// Should a guest's answer find a way to make drawing fail (stood in for here by a value that throws
+// when it's read), only its own part of the page says so, and it's drawn again once it can be.
+function drawingFails() {
+  window.__breaks = true;
+  const breaking = (o, key) => {
+    const value = o[key];
+    return Object.defineProperty({ ...o }, key, {
+      enumerable: true,
+      get: () => { if (window.__breaks) throw new Error('drawing this fails'); return value; },
+    });
+  };
+  window.__fakeAnswer = (cmd, args, answer) => {
+    // lantern's own figures, and its one container's memory, as they're drawn.
+    const lantern = (v) => ({ ...v, latest: breaking(v.latest, 'psi_cpu_some'), containers: v.containers.map((c) => ({ ...c, latest: breaking(c.latest, 'mem_peak') })) });
+    if (cmd === 'snapshot') return { ...answer, vms: answer.vms.map((v) => (v.instance.name === 'lantern' ? lantern(v) : v)) };
+    if (cmd === 'guest_files' && args.path === 'base') return { ...answer, entries: answer.entries.map((e, i) => (i === 0 ? breaking(e, 'modified') : e)) };
+    return answer;
+  };
+}
+
+test("A VM whose report can't be drawn says so in its own row, and the rest of the overview carries on", async () => {
+  const { page, errors, close } = await open('/', { init: drawingFails });
+  const row = (name) => page.locator('article', { has: page.locator('a.name', { hasText: new RegExp(`^${name}$`) }) });
+  await page.locator('article .failed').waitFor();
+  assert.equal(await page.locator('article .failed').innerText(), "Something lantern reported couldn't be drawn.");
+  assert.equal(await page.locator('article .failed').count(), 1);
+  // Every other VM is drawn as usual.
+  assert.equal(await page.locator('article a.name').count(), 4);
+  assert.match(await row('atlas').innerText(), /More than three quarters of its memory is in use/);
+  // Once its report can be drawn again, it is, with the next measurement.
+  await page.evaluate(() => (window.__breaks = false));
+  await row('lantern').locator('a.name').waitFor();
+  await page.locator('article .failed').waitFor({ state: 'detached' });
+  assert.deepEqual(errors, []);
+  await close();
+});
+
+test("On Containers, a VM whose containers can't be drawn says so in its own group", async () => {
+  const { page, errors, close } = await open('/containers', { init: drawingFails });
+  const failed = page.locator('section .failed');
+  await failed.waitFor();
+  assert.equal(await failed.innerText(), "Something lantern reported couldn't be drawn.");
+  assert.equal(await failed.count(), 1);
+  assert.ok(await page.locator('.line .name[title="atlas-frontend-1"]').count() > 0);
+  await page.evaluate(() => (window.__breaks = false));
+  await page.locator('.line .name[title="lantern-devbox"]').waitFor();
+  assert.equal(await failed.count(), 0);
+  assert.deepEqual(errors, []);
+  await close();
+});
+
+test("A folder whose listing can't be drawn says so under its path, which still leads back", async () => {
+  const { page, errors, close } = await open('/volumes', { init: drawingFails });
+  await page.locator('.line', { has: page.locator('.name', { hasText: /^atlas_pgdata$/ }) }).first().click();
+  const detail = page.locator('section.detail');
+  await detail.getByRole('button', { name: 'base/' }).click();
+  await detail.locator('.failed').waitFor();
+  assert.equal(await detail.locator('.failed').innerText(), "Something in this folder couldn't be drawn.");
+  assert.match(await detail.locator('nav.path').innerText(), /atlas_pgdata\s*\/\s*base/);
+  // Back up the path, the folder above lists as usual.
+  await detail.locator('nav.path').getByRole('button', { name: 'atlas_pgdata' }).click();
+  await detail.getByRole('button', { name: 'pg_wal/' }).waitFor();
+  assert.equal(await detail.locator('.failed').count(), 0);
+  assert.deepEqual(errors, []);
+  await close();
+});
+
 test('Images and Volumes open on what was already fetched', async () => {
   const { page, errors, close } = await open('/');
   await page.locator('article').first().waitFor();

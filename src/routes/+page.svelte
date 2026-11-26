@@ -9,6 +9,7 @@
   import { range } from '$lib/range.svelte';
   import { theLast } from '$lib/ranges';
   import Bar from '$lib/Bar.svelte';
+  import Guarded from '$lib/Guarded.svelte';
   import Capacity from '$lib/Capacity.svelte';
   import Sketch from '$lib/Sketch.svelte';
   import VmActions from '$lib/VmActions.svelte';
@@ -118,61 +119,64 @@
         </p>
       {/snippet}
       {#each running as vm (vm.instance.name)}
-        {@const i = vm.instance}
-        {@const l = vm.latest}
-        {@const restart = restartNote(vm.instance.vmType, l.host_rss, l.mem_used)}
-        {@const g = gauges(vm)}
-        {@const h = history.get(vm.entity)}
-        {@const ctRunning = vm.containers.filter((c) => c.state === 'running').length}
-        {@const issues = problems(vm)}
-        {@const parts = containersPart(vm)}
-        {@const memTip = parts.memory && memoryTip(i.name, g.memory, parts.memory, i.vmType)}
-        {@const cpuCard = parts.cpu && cpuTip(i.name, g.cpu, parts.cpu, i.cpus)}
         <article class="row vm" animate:glide>
-          <div class="who">
-            <div class="name-line"><a class="name serif" href={href(i)} title={i.name}>{i.name}</a>{@render badges(vm)}</div>
-            <p class="sentence serif" class:hot={g.memory.hot || g.disk.hot} class:alert={vm.stalledSince != null}>{vmSentence(vm, range.key, bandRise(band(h, 'oom_kills')), live.snapshot?.updated)}</p>
-            {#if issues.length}<p class="error" title={issues.join('\n')}>{issues.join(' · ')}</p>{/if}
-            <VmActions inst={i} inlineError={false} bind:error={actionErrors[i.name]} />
-          </div>
-          <div class="meter num">
-            <span class="label narrow">Memory</span>
-            <p class="figure"><strong class:hot={g.memory.hot}>{bytes(g.memory.used)}</strong> <span class="muted">of {bytes(g.memory.size)}</span></p>
-            <Sketch band={band(h, 'mem_used')} ts={h?.ts} scale={g.memory.size} say={(v) => bytes(v)} of={`of ${bytes(g.memory.size)}`} hot={g.memory.hot} label="Memory" />
-            <Bar pct={g.memory.pct} inside={parts.memory && share(parts.memory.inside, g.memory.size)} others={parts.memory?.others != null ? share(parts.memory.others, g.memory.size) : undefined} label={`Memory: ${g.memory.pct.toFixed(0)} % of the allocation${partsLabel('memory', parts.memory)}`} tip={memTip} />
-            <p class="label" title="Pressure (Linux's PSI): the share of the last measurement in which at least one task waited for memory">{g.memory.pct.toFixed(0)} % · waiting {permille(l.psi_mem_some)}</p>
-            {#if parts.memory && memTip}{@render part('memory', parts.memory, memTip)}{/if}
-          </div>
-          <div class="meter num">
-            <span class="label narrow">CPU</span>
-            <p class="figure"><strong class:hot={g.cpu.hot}>{cores(l.cpu_mc)}</strong> <span class="muted">of {i.cpus} cores</span></p>
-            <Sketch band={band(h, 'cpu_mc')} ts={h?.ts} scale={g.cpu.size} say={cores} of={`of ${i.cpus} cores`} hot={g.cpu.hot} label="CPU" />
-            <Bar pct={g.cpu.pct} inside={parts.cpu && share(parts.cpu.inside, g.cpu.size)} label={`CPU: ${g.cpu.pct.toFixed(0)} % of the cores${partsLabel('cpu', parts.cpu)}`} tip={cpuCard} />
-            <p class="label" title="Pressure (Linux's PSI): the share of the last measurement in which at least one task waited for a CPU">{g.cpu.pct.toFixed(0)} % · waiting {permille(l.psi_cpu_some)}</p>
-            {#if parts.cpu && cpuCard}{@render part('cpu', parts.cpu, cpuCard)}{/if}
-          </div>
-          <div class="meter num">
-            <span class="label narrow">Disk</span>
-            <p class="figure"><strong class:hot={g.disk.hot}>{bytes(g.disk.used)}</strong> <span class="muted">of {bytes(g.disk.size)}</span></p>
-            <Sketch band={band(h, l.store_used != null ? 'store_used' : 'disk_used')} ts={h?.ts} scale={g.disk.size} say={(v) => bytes(v)} of={`of ${bytes(g.disk.size)}`} hot={g.disk.hot} label="Disk" />
-            <Bar pct={g.disk.pct} label={`Disk: ${g.disk.pct.toFixed(0)} % of the allocation`} />
-            <p class="label">{g.disk.pct.toFixed(0)} %</p>
-          </div>
-          <div class="containers num">
-            <span class="label narrow">Containers</span>
-            <div class="dots" role="img" aria-label={`${ctRunning} of ${vm.containers.length} containers running`}>
-              {#each vm.containers as c (c.id)}<span class="dot" class:off={c.state !== 'running'} title={`${c.composeService ?? c.name}: ${c.state}`}></span>{/each}
+          <!-- One VM's report that can't be drawn leaves its row saying so, not the window blank. -->
+          <Guarded said={`Something ${vm.instance.name} reported couldn't be drawn.`} retry={vm}>
+            {@const i = vm.instance}
+            {@const l = vm.latest}
+            {@const restart = restartNote(vm.instance.vmType, l.host_rss, l.mem_used)}
+            {@const g = gauges(vm)}
+            {@const h = history.get(vm.entity)}
+            {@const ctRunning = vm.containers.filter((c) => c.state === 'running').length}
+            {@const issues = problems(vm)}
+            {@const parts = containersPart(vm)}
+            {@const memTip = parts.memory && memoryTip(i.name, g.memory, parts.memory, i.vmType)}
+            {@const cpuCard = parts.cpu && cpuTip(i.name, g.cpu, parts.cpu, i.cpus)}
+            <div class="who">
+              <div class="name-line"><a class="name serif" href={href(i)} title={i.name}>{i.name}</a>{@render badges(vm)}</div>
+              <p class="sentence serif" class:hot={g.memory.hot || g.disk.hot} class:alert={vm.stalledSince != null}>{vmSentence(vm, range.key, bandRise(band(h, 'oom_kills')), live.snapshot?.updated)}</p>
+              {#if issues.length}<p class="error" title={issues.join('\n')}>{issues.join(' · ')}</p>{/if}
+              <VmActions inst={i} inlineError={false} bind:error={actionErrors[i.name]} />
             </div>
-            {#if vm.podmanError || !i.podmanSocket}
-              <span class="muted">{vm.podmanError ? 'podman not readable' : 'no podman socket'}</span>
-            {:else}
-              <a href={`/containers?vm=${encodeURIComponent(i.name)}`}>{ctRunning} of {vm.containers.length} running</a>
-            {/if}
-            <p class="label" title="What the VM costs this computer right now: the memory its virtual machine process holds, as Activity Monitor counts it">{bytes(l.host_rss)} RAM on your computer</p>
-            {#if restart}
-              <p class="label restart" title="On vz the VM keeps what its guest has used and freed, and its file cache; Lima has no way to ask for it back while it runs">{restart}</p>
-            {/if}
-          </div>
+            <div class="meter num">
+              <span class="label narrow">Memory</span>
+              <p class="figure"><strong class:hot={g.memory.hot}>{bytes(g.memory.used)}</strong> <span class="muted">of {bytes(g.memory.size)}</span></p>
+              <Sketch band={band(h, 'mem_used')} ts={h?.ts} scale={g.memory.size} say={(v) => bytes(v)} of={`of ${bytes(g.memory.size)}`} hot={g.memory.hot} label="Memory" />
+              <Bar pct={g.memory.pct} inside={parts.memory && share(parts.memory.inside, g.memory.size)} others={parts.memory?.others != null ? share(parts.memory.others, g.memory.size) : undefined} label={`Memory: ${g.memory.pct.toFixed(0)} % of the allocation${partsLabel('memory', parts.memory)}`} tip={memTip} />
+              <p class="label" title="Pressure (Linux's PSI): the share of the last measurement in which at least one task waited for memory">{g.memory.pct.toFixed(0)} % · waiting {permille(l.psi_mem_some)}</p>
+              {#if parts.memory && memTip}{@render part('memory', parts.memory, memTip)}{/if}
+            </div>
+            <div class="meter num">
+              <span class="label narrow">CPU</span>
+              <p class="figure"><strong class:hot={g.cpu.hot}>{cores(l.cpu_mc)}</strong> <span class="muted">of {i.cpus} cores</span></p>
+              <Sketch band={band(h, 'cpu_mc')} ts={h?.ts} scale={g.cpu.size} say={cores} of={`of ${i.cpus} cores`} hot={g.cpu.hot} label="CPU" />
+              <Bar pct={g.cpu.pct} inside={parts.cpu && share(parts.cpu.inside, g.cpu.size)} label={`CPU: ${g.cpu.pct.toFixed(0)} % of the cores${partsLabel('cpu', parts.cpu)}`} tip={cpuCard} />
+              <p class="label" title="Pressure (Linux's PSI): the share of the last measurement in which at least one task waited for a CPU">{g.cpu.pct.toFixed(0)} % · waiting {permille(l.psi_cpu_some)}</p>
+              {#if parts.cpu && cpuCard}{@render part('cpu', parts.cpu, cpuCard)}{/if}
+            </div>
+            <div class="meter num">
+              <span class="label narrow">Disk</span>
+              <p class="figure"><strong class:hot={g.disk.hot}>{bytes(g.disk.used)}</strong> <span class="muted">of {bytes(g.disk.size)}</span></p>
+              <Sketch band={band(h, l.store_used != null ? 'store_used' : 'disk_used')} ts={h?.ts} scale={g.disk.size} say={(v) => bytes(v)} of={`of ${bytes(g.disk.size)}`} hot={g.disk.hot} label="Disk" />
+              <Bar pct={g.disk.pct} label={`Disk: ${g.disk.pct.toFixed(0)} % of the allocation`} />
+              <p class="label">{g.disk.pct.toFixed(0)} %</p>
+            </div>
+            <div class="containers num">
+              <span class="label narrow">Containers</span>
+              <div class="dots" role="img" aria-label={`${ctRunning} of ${vm.containers.length} containers running`}>
+                {#each vm.containers as c}<span class="dot" class:off={c.state !== 'running'} title={`${c.composeService ?? c.name}: ${c.state}`}></span>{/each}
+              </div>
+              {#if vm.podmanError || !i.podmanSocket}
+                <span class="muted">{vm.podmanError ? 'podman not readable' : 'no podman socket'}</span>
+              {:else}
+                <a href={`/containers?vm=${encodeURIComponent(i.name)}`}>{ctRunning} of {vm.containers.length} running</a>
+              {/if}
+              <p class="label" title="What the VM costs this computer right now: the memory its virtual machine process holds, as Activity Monitor counts it">{bytes(l.host_rss)} RAM on your computer</p>
+              {#if restart}
+                <p class="label restart" title="On vz the VM keeps what its guest has used and freed, and its file cache; Lima has no way to ask for it back while it runs">{restart}</p>
+              {/if}
+            </div>
+          </Guarded>
         </article>
       {/each}
       <p class="note">

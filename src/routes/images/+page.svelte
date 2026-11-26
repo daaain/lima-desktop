@@ -4,6 +4,8 @@
   import { live } from '$lib/live.svelte';
   import { api, type Image } from '$lib/api';
   import { age, bytes, shortId } from '$lib/format';
+  import { distinctKeys } from '$lib/keys';
+  import Guarded from '$lib/Guarded.svelte';
   import { countWord, gauges, holdsSentence, unusedHeadline, unusedLede } from '$lib/almanac';
   import { danglingCount, filterImages, freesLabel, freesTitle, imageRows, imageUsers, inUse, listedImages, removal, splitReference, type ImageRow, type Removal } from '$lib/images';
   import { measured } from '$lib/measured.svelte';
@@ -155,7 +157,7 @@
 {#if held.length}
   <div class="summary">
     <div class="dots" role="img" aria-label={headline}>
-      {#each held as h (`${h.vm}/${h.image.id}`)}
+      {#each held as h}
         <span class="dot" class:off={!h.used} title={`${h.image.tags[0] ?? `untagged ${shortId(h.image.id)}`} in ${h.vm}: ${h.used ? 'in use' : 'unused'}`}></span>
       {/each}
     </div>
@@ -193,42 +195,45 @@
     {#each groups as g (g.vm)}
       {@const listed = listsLines({ folded: vmFolds.images.has(g.vm), searching: query.trim() !== '' || vmFilter != null })}
       <section animate:glide>
-        <GroupHead vm={g.vm} live={g.live} sentence={g.sentence} what="images" said={said[g.vm]}
-          folded={vmFolds.images.has(g.vm)} listed={listed} ontoggle={() => vmFolds.images.toggle(g.vm)}>
-          {#snippet actions()}
-            <ImagePrune vm={g.vm} dangling={g.dangling} unused={g.unused.length} onpruned={() => changed(g.vm)} bind:said={said[g.vm]} />
-          {/snippet}
-        </GroupHead>
-        {#if listed}
-        <div class="vm-lines" transition:unfold>
-          {#each g.lines as row (row.reference)}
-            {@const h = heldOf(row.vm, row.id)}
-            {@const r = removalOf(row.vm, row.id)}
-            <!-- A tag the image has others of frees nothing removed (it only untags): drawn and said so. -->
-            {@const otherTags = row.tagged ? (h?.image.tags ?? []).filter((t) => t !== row.name) : []}
-            {@const [from, short] = splitReference(row.name)}
-            {@const key = `${row.vm}/${row.reference}`}
-            <div animate:glide>
-              <ItemLine selected={!!open[key]} onselect={() => toggle(key)} title={row.tagged ? row.name : `untagged image ${row.id}`}
-                second={`${shortId(row.id)} · ${row.created ? `built ${age(row.created)}` : 'no build date'}`}
-                secondTitle={row.created ? `Built ${new Date(row.created * 1000).toLocaleString('en-GB')}` : "The image doesn't record when it was built"}
-                size={row.size} frees={r && otherTags.length ? 0 : r?.frees} {scale} sizeLabel={freesLabel(r, row.size, otherTags.length)}
-                sizeTitle={r ? freesTitle(r, row.size, otherTags) : undefined}
-                used={h?.used} usedText={usedText(h)} usedTitle={h?.users.length ? `Used by ${h.users.join(', ')}` : undefined}
-                removable={!h?.used && removing !== `${row.vm}/${row.reference}`}
-                removeTitle={h?.used ? 'In use — remove its containers first' : row.tagged ? 'Removes this tag; the image goes with its last one' : undefined}
-                onremove={() => remove(row)}>
-                {#snippet name()}{#if row.tagged}<span class="from">{from}</span>{short}{:else}<span class="from">untagged</span>{/if}{/snippet}
-              </ItemLine>
-              {#if open[key]}
-                <div transition:unfold>
-                  <ImageLayers vm={row.vm} id={row.id} title={row.tagged ? row.name : `untagged ${shortId(row.id)}`} onclose={() => toggle(key)} />
-                </div>
-              {/if}
-            </div>
-          {/each}
-        </div>
-        {/if}
+        <Guarded said={`Something ${g.vm} reported couldn't be drawn.`} retry={g}>
+        {@const lineKeys = distinctKeys(g.lines, (row) => row.reference)}
+          <GroupHead vm={g.vm} live={g.live} sentence={g.sentence} what="images" said={said[g.vm]}
+            folded={vmFolds.images.has(g.vm)} listed={listed} ontoggle={() => vmFolds.images.toggle(g.vm)}>
+            {#snippet actions()}
+              <ImagePrune vm={g.vm} dangling={g.dangling} unused={g.unused.length} onpruned={() => changed(g.vm)} bind:said={said[g.vm]} />
+            {/snippet}
+          </GroupHead>
+          {#if listed}
+          <div class="vm-lines" transition:unfold>
+            {#each g.lines as row, i (lineKeys[i])}
+              {@const h = heldOf(row.vm, row.id)}
+              {@const r = removalOf(row.vm, row.id)}
+              <!-- A tag the image has others of frees nothing removed (it only untags): drawn and said so. -->
+              {@const otherTags = row.tagged ? (h?.image.tags ?? []).filter((t) => t !== row.name) : []}
+              {@const [from, short] = splitReference(row.name)}
+              {@const key = `${row.vm}/${row.reference}`}
+              <div animate:glide>
+                <ItemLine selected={!!open[key]} onselect={() => toggle(key)} title={row.tagged ? row.name : `untagged image ${row.id}`}
+                  second={`${shortId(row.id)} · ${row.created ? `built ${age(row.created)}` : 'no build date'}`}
+                  secondTitle={row.created ? `Built ${new Date(row.created * 1000).toLocaleString('en-GB')}` : "The image doesn't record when it was built"}
+                  size={row.size} frees={r && otherTags.length ? 0 : r?.frees} {scale} sizeLabel={freesLabel(r, row.size, otherTags.length)}
+                  sizeTitle={r ? freesTitle(r, row.size, otherTags) : undefined}
+                  used={h?.used} usedText={usedText(h)} usedTitle={h?.users.length ? `Used by ${h.users.join(', ')}` : undefined}
+                  removable={!h?.used && removing !== `${row.vm}/${row.reference}`}
+                  removeTitle={h?.used ? 'In use — remove its containers first' : row.tagged ? 'Removes this tag; the image goes with its last one' : undefined}
+                  onremove={() => remove(row)}>
+                  {#snippet name()}{#if row.tagged}<span class="from">{from}</span>{short}{:else}<span class="from">untagged</span>{/if}{/snippet}
+                </ItemLine>
+                {#if open[key]}
+                  <div transition:unfold>
+                    <ImageLayers vm={row.vm} id={row.id} title={row.tagged ? row.name : `untagged ${shortId(row.id)}`} onclose={() => toggle(key)} />
+                  </div>
+                {/if}
+              </div>
+            {/each}
+          </div>
+          {/if}
+        </Guarded>
       </section>
     {/each}
   </div>

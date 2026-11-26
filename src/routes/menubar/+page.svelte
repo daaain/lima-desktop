@@ -9,6 +9,7 @@
   import { onMount } from 'svelte';
   import { listen } from '@tauri-apps/api/event';
   import { page } from '$app/state';
+  import { distinctKeys } from '$lib/keys';
   import { api, type Snapshot, type Stack, type Theme, type TopApps, type Warn } from '$lib/api';
   import { inOrder } from '$lib/inOrder';
   import {
@@ -254,6 +255,7 @@
         </li>
         {#if listsTop(tab)}
           {@const under = containersUnder.get(l.name) ?? []}
+          {@const underKeys = distinctKeys(under, (c) => c.id)}
           {@const allocated = allocatedAside(tab, l, under.length)}
           {@const inside = insideAside(tab, l, under.length)}
           {#snippet vmAside(j: number)}
@@ -266,7 +268,7 @@
               <span class="aside num"></span>
             {/if}
           {/snippet}
-          {#each under as c, j (c.id)}
+          {#each under as c, j (underKeys[j])}
             <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
             <li class="row sub" class:hl={lit === vmLit(l.name)} data-container={c.name} data-in={l.name} title={containerTip(tab, c)}
               onmouseenter={() => (lit = vmLit(l.name))} onmouseleave={() => (lit = null)}>

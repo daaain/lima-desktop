@@ -4,6 +4,8 @@
   import { live } from '$lib/live.svelte';
   import { api } from '$lib/api';
   import { age, bytes } from '$lib/format';
+  import { distinctKeys } from '$lib/keys';
+  import Guarded from '$lib/Guarded.svelte';
   import { countWord, gauges, holdsSentence, unusedHeadline, unusedLede } from '$lib/almanac';
   import { measured } from '$lib/measured.svelte';
   import { podmanScope } from '$lib/perVm';
@@ -138,7 +140,7 @@
 {#if held.length}
   <div class="summary">
     <div class="dots" role="img" aria-label={headline}>
-      {#each held as h (`${h.row.vm}/${h.row.v.name}`)}
+      {#each held as h}
         <span class="dot" class:off={h.used === false} class:unknown={h.used == null}
           title={`${h.row.v.name} in ${h.row.vm}: ${h.used == null ? 'not measured' : h.used ? 'in use' : 'unused'}`}></span>
       {/each}
@@ -177,38 +179,41 @@
     {#each groups as g (g.vm)}
       {@const listed = listsLines({ folded: vmFolds.volumes.has(g.vm), searching: query.trim() !== '' || vmFilter != null })}
       <section animate:glide>
-        <GroupHead vm={g.vm} live={g.live} sentence={g.sentence} what="volumes" said={said[g.vm]}
-          folded={vmFolds.volumes.has(g.vm)} listed={listed} ontoggle={() => vmFolds.volumes.toggle(g.vm)}>
-          {#snippet actions()}
-            <VolumePrune vm={g.vm} count={g.count} unused={g.unused} onpruned={() => changed(g.vm)} bind:said={said[g.vm]} />
-          {/snippet}
-        </GroupHead>
-        {#if listed}
-        <div class="vm-lines" transition:unfold>
-          {#each g.lines as row (row.v.name)}
-            {@const u = usageOf(row)}
-            {@const disk = g.live ? gauges(g.live).disk.size : undefined}
-            {@const key = `${row.vm}/${row.v.name}`}
-            <div animate:glide>
-              <ItemLine selected={!!open[key]} onselect={() => toggle(key)} title={row.v.name}
-                second={`created ${age(row.created)}${row.v.driver !== 'local' ? ` · ${row.v.driver} driver` : ''}`}
-                secondTitle={`In the VM at ${row.v.mountpoint}; created ${new Date(row.v.createdAt).toLocaleString('en-GB')}`}
-                size={u?.size} {scale} sizeLabel={u ? diskShare(u.size, disk) : 'not measured'}
-                used={usedOf(row)} usedText={usedText(row)}
-                removable={(u?.users ?? 0) === 0 && removing !== `${row.vm}/${row.v.name}`}
-                removeTitle={(u?.users ?? 0) > 0 ? 'In use — remove its containers first' : 'Deletes its data for good'}
-                onremove={() => remove(row)}>
-                {#snippet name()}{row.v.name}{/snippet}
-              </ItemLine>
-              {#if open[key]}
-                <div transition:unfold>
-                  <Files vm={row.vm} source={{ kind: 'volume', name: row.v.name }} label={row.v.name} onclose={() => toggle(key)} />
-                </div>
-              {/if}
-            </div>
-          {/each}
-        </div>
-        {/if}
+        <Guarded said={`Something ${g.vm} reported couldn't be drawn.`} retry={g}>
+        {@const lineKeys = distinctKeys(g.lines, (row) => row.v.name)}
+          <GroupHead vm={g.vm} live={g.live} sentence={g.sentence} what="volumes" said={said[g.vm]}
+            folded={vmFolds.volumes.has(g.vm)} listed={listed} ontoggle={() => vmFolds.volumes.toggle(g.vm)}>
+            {#snippet actions()}
+              <VolumePrune vm={g.vm} count={g.count} unused={g.unused} onpruned={() => changed(g.vm)} bind:said={said[g.vm]} />
+            {/snippet}
+          </GroupHead>
+          {#if listed}
+          <div class="vm-lines" transition:unfold>
+            {#each g.lines as row, i (lineKeys[i])}
+              {@const u = usageOf(row)}
+              {@const disk = g.live ? gauges(g.live).disk.size : undefined}
+              {@const key = `${row.vm}/${row.v.name}`}
+              <div animate:glide>
+                <ItemLine selected={!!open[key]} onselect={() => toggle(key)} title={row.v.name}
+                  second={`created ${age(row.created)}${row.v.driver !== 'local' ? ` · ${row.v.driver} driver` : ''}`}
+                  secondTitle={`In the VM at ${row.v.mountpoint}; created ${new Date(row.v.createdAt).toLocaleString('en-GB')}`}
+                  size={u?.size} {scale} sizeLabel={u ? diskShare(u.size, disk) : 'not measured'}
+                  used={usedOf(row)} usedText={usedText(row)}
+                  removable={(u?.users ?? 0) === 0 && removing !== `${row.vm}/${row.v.name}`}
+                  removeTitle={(u?.users ?? 0) > 0 ? 'In use — remove its containers first' : 'Deletes its data for good'}
+                  onremove={() => remove(row)}>
+                  {#snippet name()}{row.v.name}{/snippet}
+                </ItemLine>
+                {#if open[key]}
+                  <div transition:unfold>
+                    <Files vm={row.vm} source={{ kind: 'volume', name: row.v.name }} label={row.v.name} onclose={() => toggle(key)} />
+                  </div>
+                {/if}
+              </div>
+            {/each}
+          </div>
+          {/if}
+        </Guarded>
       </section>
     {/each}
   </div>

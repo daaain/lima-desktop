@@ -4,6 +4,7 @@
   import { live } from '$lib/live.svelte';
   import { api, type ContainerLive, type OomEvent, type Series, type VmStall } from '$lib/api';
   import { bytes } from '$lib/format';
+  import { distinctKeys } from '$lib/keys';
   import { containersPart, containersSentence, cpuTip, gauges, memoryTip, vmHeadline } from '$lib/almanac';
   import { History } from '$lib/history.svelte';
   import type { Hint } from '$lib/rightsize';
@@ -14,6 +15,7 @@
   import VmActions from '$lib/VmActions.svelte';
   import Sizing from '$lib/Sizing.svelte';
   import ContainerLine from '$lib/ContainerLine.svelte';
+  import Guarded from '$lib/Guarded.svelte';
   import ContainerDetail from '$lib/ContainerDetail.svelte';
   import ProjectGroup from '$lib/ProjectGroup.svelte';
   import OrderPicker from '$lib/OrderPicker.svelte';
@@ -305,7 +307,8 @@
         Above it, the VM over {theLast(range.key)}: its memory in use, soft, and this container's part in front. CPU: full width is this VM's {i.cpus} cores, with {theLast(range.key)} above. Compose projects are read-only groups; click one's heading to fold it. <a href={`/containers?vm=${encodeURIComponent(name)}`}>Filter and search them in Containers.</a>
       </p>
       {#snippet lines(rows: ContainerLive[])}
-        {#each rows as c (c.id)}
+        {@const keys = distinctKeys(rows, (c) => c.id)}
+        {#each rows as c, n (keys[n])}
           <div class="row" animate:glide>
             <ContainerLine vm={name} {c} history={history.get(lineHistory(name, c))} vmHistory={history.get(vm.entity)} vmCpus={i.cpus} vmMemory={i.memory} second="activity" now={live.snapshot?.updated}
               selected={open.includes(c.id)} onselect={() => toggle(c.id)} onerror={(e) => (actionError = e)} />
@@ -317,27 +320,29 @@
           </div>
         {/each}
       {/snippet}
-      <div class="lines">
-        <div class="narrow-order"><OrderPicker columns={CONTAINER_COLUMNS} {ordering} /></div>
-        <div class="column-heads" role="group" aria-label="Order the containers by">
-          {#each heads as h (h.key)}
-            <SortHead column={CONTAINER_COLUMNS[h.key]} active={ordering.current.by === h.key} reversed={ordering.current.reversed}
-              span={h.span} onclick={() => ordering.choose(h.key)}>{h.text}</SortHead>
+      <Guarded said={`Something ${name}'s containers reported couldn't be drawn.`} retry={vm}>
+        <div class="lines">
+          <div class="narrow-order"><OrderPicker columns={CONTAINER_COLUMNS} {ordering} /></div>
+          <div class="column-heads" role="group" aria-label="Order the containers by">
+            {#each heads as h (h.key)}
+              <SortHead column={CONTAINER_COLUMNS[h.key]} active={ordering.current.by === h.key} reversed={ordering.current.reversed}
+                span={h.span} onclick={() => ordering.choose(h.key)}>{h.text}</SortHead>
+            {/each}
+            <span></span>
+          </div>
+          {#each groups as g (g.project)}
+            {#if g.project}
+              {@const project = g.project}
+              <ProjectGroup {project} containers={g.rows} history={history.get({ vm: name, project })} vmHistory={history.get(vm.entity)} vmMemory={i.memory} vmCpus={i.cpus}
+                folded={folds.has(name, project)} ontoggle={() => folds.toggle(name, project)} listed={!folds.has(name, project)}>
+                {@render lines(g.rows)}
+              </ProjectGroup>
+            {:else}
+              <div class="rows">{@render lines(g.rows)}</div>
+            {/if}
           {/each}
-          <span></span>
         </div>
-        {#each groups as g (g.project)}
-          {#if g.project}
-            {@const project = g.project}
-            <ProjectGroup {project} containers={g.rows} history={history.get({ vm: name, project })} vmHistory={history.get(vm.entity)} vmMemory={i.memory} vmCpus={i.cpus}
-              folded={folds.has(name, project)} ontoggle={() => folds.toggle(name, project)} listed={!folds.has(name, project)}>
-              {@render lines(g.rows)}
-            </ProjectGroup>
-          {:else}
-            <div class="rows">{@render lines(g.rows)}</div>
-          {/if}
-        {/each}
-      </div>
+      </Guarded>
     {/if}
   </section>
 
