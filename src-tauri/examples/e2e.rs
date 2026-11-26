@@ -28,7 +28,7 @@ use lima_desktop_lib::collector::{Collector, Retention, now_ms};
 use lima_desktop_lib::journal;
 use lima_desktop_lib::lima::{self, Action, Instance, Resize};
 use lima_desktop_lib::oom::{self, CONSTRAINT_MEMCG};
-use lima_desktop_lib::podman::{Libpod, PodmanError};
+use lima_desktop_lib::podman::{self, Libpod, PodmanError};
 use lima_desktop_lib::probe::{self, Block};
 use lima_desktop_lib::store::{ABSENT, Store};
 
@@ -51,6 +51,9 @@ const CLIENT: &str = "ld-e2e-client";
 const OOM_CT: &str = "ld-e2e-oom";
 const OOM_LIMIT: i64 = 32 << 20;
 const COMPOSE_PROJECT: &str = "ld-e2e";
+/// Docker Compose's hash of a service's config, as it labels each container: any value the image
+/// doesn't carry.
+const COMPOSE_CONFIG_HASH: &str = "5d0c8e2a41b7f9e3c6a1d4b8e7f2a9c3b6d1e4f7a2c5b8e1d4f7a0c3b6e9d2f5";
 const GIB: u64 = 1 << 30;
 /// Where the template for the podman 4 VM is (the source tree, so it works from any cwd).
 const PODMAN4_TEMPLATE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/e2e/podman4.yaml");
@@ -553,10 +556,15 @@ async fn check_long_socket(ctx: &mut Ctx) -> Outcome {
 
 /// The containers the podman 5 VM runs: a tiny TCP server and a client asking it once a second,
 /// on one podman network — interface traffic without needing the internet once the image is
-/// pulled — compose-labelled. `--init` so they stop at once.
+/// pulled — labelled as Docker Compose labels the containers it creates, a config hash included:
+/// without it, a project label could have come from the image, and the app believes none.
+/// `--init` so they stop at once.
 fn containers_script(image: &str) -> String {
     let label = |svc: &str| {
-        format!("--label com.docker.compose.project={COMPOSE_PROJECT} --label com.docker.compose.service={svc}")
+        format!(
+            "--label com.docker.compose.project={COMPOSE_PROJECT} --label com.docker.compose.service={svc} \
+             --label com.docker.compose.config-hash={COMPOSE_CONFIG_HASH}"
+        )
     };
     format!(
         r#"set -e
@@ -594,10 +602,16 @@ async fn check_podman5(ctx: &mut Ctx) -> Outcome {
             }
         }
     }
-    let list = match pod.containers().await {
+    let mut list = match pod.containers().await {
         Ok(l) => l,
         Err(e) => return fail("podman 5: containers() failed", vec![e.to_string()]),
     };
+    // As the collector does: a project is believed once the container's image, found by its id in
+    // the images list, shows the config hash didn't come from it.
+    match pod.image_hashes().await {
+        Ok(images) => podman::trust_compose(&mut list, &images),
+        Err(e) => return fail("podman 5: image_hashes() failed", vec![e.to_string()]),
+    }
     let now = now_ms() / 1000;
     let mut problems = Vec::new();
     for want in [WEB, CLIENT] {
@@ -1433,6 +1447,8 @@ mod tests {
         let s = containers_script("alpine");
         assert!(s.contains(&format!("--network {NETWORK}")));
         assert!(s.contains("com.docker.compose.service=web"));
+        // Each carries the hash compose sets on a container it creates, or it's in no project.
+        assert_eq!(s.matches(&format!("--label com.docker.compose.config-hash={COMPOSE_CONFIG_HASH} ")).count(), 2);
         assert!(s.contains("{{.Name}} {{.Id}}"));
     }
 }

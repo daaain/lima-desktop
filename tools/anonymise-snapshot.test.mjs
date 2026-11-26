@@ -13,6 +13,7 @@ const IMG2 = '2b'.repeat(32);
 const POD = '3c'.repeat(32);
 const DIGEST = '4d'.repeat(32);
 const BOOT = '5e'.repeat(16);
+const CONFIG_HASH = '6f'.repeat(32); // compose's config hash: a sha256
 
 const SECRETS = ['alice', '/Users/alice', 'bob', '/home/bob.guest', 'secretproj', 'other-vm', 'acme', 'acme-web-1', 'acme-corp',
   'acme-pod', 'acme_pgdata', 'ghcr.io/acme-corp/web', 'hunter2', 's3cr3t-label', '51234', 'webdb'];
@@ -71,7 +72,8 @@ function syntheticSnapshot() {
   write(join(libpod, 'containers.json'), JSON.stringify([
     { Id: ID1, Names: ['acme-web-1'], Image: 'ghcr.io/acme-corp/web:1.2', ImageID: IMG1, State: 'running',
       Status: 'Up 2 minutes', Created: '2026-11-08T20:44:53Z', PodName: '', Pod: '',
-      Labels: { 'com.docker.compose.project': 'acme', 'com.docker.compose.service': 'webdb', 'com.acme.secret': 's3cr3t-label' },
+      Labels: { 'com.docker.compose.project': 'acme', 'com.docker.compose.service': 'webdb', 'com.acme.secret': 's3cr3t-label',
+        'com.docker.compose.config-hash': CONFIG_HASH },
       Networks: ['acme_default'], Ports: [{ host_port: 8080 }] },
     { Id: ID2, Names: ['db'], Image: 'docker.io/library/postgres:16', ImageID: IMG2, State: 'exited',
       Labels: null, PodName: 'acme-pod', Pod: POD },
@@ -82,7 +84,8 @@ function syntheticSnapshot() {
   write(join(libpod, 'images.json'), JSON.stringify([
     { Id: IMG1, RepoTags: ['ghcr.io/acme-corp/web:1.2'], RepoDigests: [`ghcr.io/acme-corp/web@sha256:${DIGEST}`],
       Names: ['ghcr.io/acme-corp/web:1.2'], History: ['ghcr.io/acme-corp/web:1.2'], Size: 1234,
-      Labels: { 'org.opencontainers.image.source': 'https://github.com/acme-corp/web' }, Containers: 1 },
+      Labels: { 'org.opencontainers.image.source': 'https://github.com/acme-corp/web',
+        'com.docker.compose.project': 'acme', 'com.docker.compose.config-hash': CONFIG_HASH }, Containers: 1 },
     { Id: IMG2, RepoTags: ['docker.io/library/postgres:16'], Size: 99, Labels: null, Containers: 1 },
   ]));
   write(join(libpod, 'version.json'), JSON.stringify({
@@ -148,7 +151,11 @@ test('containers: names, compose labels and pods mapped; other labels and fields
   const { json } = run();
   const [web, db] = json('vms/vm-a/libpod/containers.json');
   assert.deepEqual(web.Names, ['container-1']);
-  assert.deepEqual(web.Labels, { 'com.docker.compose.project': 'project-1', 'com.docker.compose.service': 'service-1' });
+  const hash = web.Labels['com.docker.compose.config-hash'];
+  assert.deepEqual(web.Labels, { 'com.docker.compose.project': 'project-1', 'com.docker.compose.service': 'service-1',
+    'com.docker.compose.config-hash': hash });
+  assert.match(hash, /^[0-9a-f]{64}$/, 'the config hash kept, as the app reads it');
+  assert.notEqual(hash, CONFIG_HASH, 'hashed again, like an id');
   assert.ok(!('Networks' in web) && !('Ports' in web));
   assert.equal(web.Image, 'registry.example/image-1:1.2', 'a private image, its tag kept');
   assert.equal(db.Image, 'docker.io/library/postgres:16', 'an official image as it is');
@@ -172,7 +179,10 @@ test('ids are hashed the same way in every file', () => {
   assert.equal(web.ImageID, img.Id);
   assert.match(img.RepoDigests[0], /^registry\.example\/image-1@sha256:[0-9a-f]{64}$/);
   assert.ok(!img.RepoDigests[0].includes(DIGEST));
-  assert.equal(img.Labels, null, 'image labels dropped');
+  // The app reads an image's config hashes, to tell whether a container's came from it: those
+  // stay, hashed as the container's are, so the two still match; every other label goes.
+  assert.deepEqual(img.Labels, { 'com.docker.compose.config-hash': web.Labels['com.docker.compose.config-hash'] });
+  assert.equal(json('vms/vm-a/libpod/images.json')[1].Labels, null);
 });
 
 test('the journal keeps its times and loses its cursor; the boot id is hashed', () => {

@@ -18,7 +18,7 @@ use crate::bounded;
 use crate::journal::{self, JournalError};
 use crate::lima::{self, Instance};
 use crate::oom::{self, OomEvent};
-use crate::podman::{Container, Libpod, PodmanError, RawStat};
+use crate::podman::{self, Container, ImageHashes, Libpod, PodmanError, RawStat};
 use crate::probe::{self, Block, Cgroup};
 use crate::stall::{self, Change, Watch};
 use crate::store::{ABSENT, CT_METRICS, HOST_METRICS, Kind, MINUTE, Store, VM_METRICS, add_sample};
@@ -26,6 +26,14 @@ use crate::store::{ABSENT, CT_METRICS, HOST_METRICS, Kind, MINUTE, Store, VM_MET
 const LIST_EVERY: Duration = Duration::from_secs(3);
 /// How often each VM's container list is read again, at most (and at least once a stats tick).
 const CONTAINERS_EVERY: Duration = Duration::from_secs(3);
+/// How long an image a container runs goes unasked about after libpod didn't list it: its
+/// containers are in no project meanwhile.
+const IMAGES_RECHECK: Duration = Duration::from_secs(60);
+/// How soon images are asked for again after libpod couldn't answer: mostly a socket not quite up,
+/// and until it answers the VM's compose containers are out of their projects. Twice as long after
+/// each failure in a row, up to `IMAGES_RECHECK`: whoever runs the engine decides what it answers,
+/// so one that never answers well isn't asked (up to 64 MiB) every list.
+const IMAGES_RETRY: Duration = Duration::from_secs(5);
 const FLUSH_EVERY: Duration = Duration::from_secs(10);
 const RETAIN_EVERY: Duration = Duration::from_secs(3600);
 const PROBE_RETRY: Duration = Duration::from_secs(5);
@@ -587,6 +595,7 @@ impl Collector {
 
     async fn podman_loop(self: Arc<Self>, name: String) {
         let mut prev: HashMap<String, (Instant, RawStat)> = HashMap::new();
+        let mut images = ImageCache::default();
         let mut tick: u32 = 0;
         // An unsupported podman: its error stands, and its stats aren't read, until it's upgraded.
         let mut refused = false;
@@ -618,7 +627,17 @@ impl Collector {
                 };
                 refused = matches!(list, Err(PodmanError::TooOld(_) | PodmanError::UnknownVersion(_)));
                 match list {
-                    Ok(list) => self.update_containers(&name, list),
+                    Ok(mut list) => {
+                        // Projects are settled here, as the list comes, so everything after (the
+                        // snapshot, the store's labels, each project's sums) sees only those
+                        // believed. Images are asked for only when a container runs one not seen.
+                        let now = Instant::now();
+                        if images.due(&list, now) {
+                            images.learn(pod.image_hashes().await, &list, now);
+                        }
+                        images.check(&mut list);
+                        self.update_containers(&name, list)
+                    }
                     Err(e) => {
                         self.set_vm(&name, |v| v.live.podman_error = Some(e.to_string()));
                         tick += 1;
@@ -752,7 +771,7 @@ impl Collector {
             .into_iter()
             .map(|c| {
                 let prev = old.get(&c.id);
-                let entity = prev.and_then(|p| p.entity).or_else(|| container_entity(&mut store, vm, &c, now));
+                let entity = entity_for(&mut store, vm, &c, prev, now);
                 ContainerLive { latest: prev.map(|p| p.latest.clone()).unwrap_or_default(), entity, container: c }
             })
             .collect();
@@ -763,14 +782,88 @@ impl Collector {
     }
 }
 
-/// A container's entity id, created or found, with its compose labels kept for after it's gone.
+/// What the podman loop knows of the images its VM's containers run: each one's own compose
+/// config hashes, for `podman::trust_compose`.
+///
+/// Asked for only when a container runs an image not seen yet, not on every list: an image's id is
+/// the digest of its config, labels and all, so what's known of an id never goes stale. Only the
+/// images containers run are kept, so it holds as much as the container list does, whatever the
+/// images list's size (which is read through libpod's capped reader, and only its hashes decoded).
+#[derive(Default)]
+struct ImageCache {
+    hashes: HashMap<String, ImageHashes>,
+    /// Images containers run that libpod didn't list, or couldn't be asked about: their containers
+    /// are in no project until they're asked about again, after `IMAGES_RECHECK`, or sooner when
+    /// the asking failed (`failures`).
+    missing: HashSet<String>,
+    asked: Option<Instant>,
+    /// How many asks in a row have failed, for how soon to try again (`IMAGES_RETRY`).
+    failures: u32,
+}
+
+/// The images a list's containers run, by id (a container without one has none to look up).
+fn images_run(list: &[Container]) -> HashSet<&str> {
+    list.iter().map(|c| c.image_id.as_str()).filter(|id| !id.is_empty()).collect()
+}
+
+impl ImageCache {
+    /// Whether libpod's images are to be asked for before `list` is checked: an image not seen yet,
+    /// or a missing one asked about long enough ago (soon, when the asking failed).
+    fn due(&self, list: &[Container], now: Instant) -> bool {
+        let wait = match self.failures {
+            0 => IMAGES_RECHECK,
+            n => IMAGES_RETRY.saturating_mul(1 << (n - 1).min(16)).min(IMAGES_RECHECK),
+        };
+        let recheck = self.asked.is_none_or(|t| now.duration_since(t) >= wait);
+        images_run(list).into_iter().any(|id| !self.hashes.contains_key(id) && (recheck || !self.missing.contains(id)))
+    }
+
+    /// libpod's answer, as of `now`: the hashes of the images `list` runs. Where it failed, what
+    /// was known stands, and the rest is missing.
+    fn learn(&mut self, answer: Result<HashMap<String, ImageHashes>, PodmanError>, list: &[Container], now: Instant) {
+        self.asked = Some(now);
+        self.failures = if answer.is_err() { self.failures.saturating_add(1) } else { 0 };
+        let run = images_run(list);
+        match answer {
+            Ok(mut all) => self.hashes = run.iter().filter_map(|id| all.remove_entry(*id)).collect(),
+            Err(e) => log::warn!("listing images for their compose labels: {e}"),
+        }
+        self.missing = run.into_iter().filter(|id| !self.hashes.contains_key(*id)).map(String::from).collect();
+    }
+
+    /// Set `list`'s compose projects from what's known, letting go of images no container runs.
+    fn check(&mut self, list: &mut [Container]) {
+        let run = images_run(list);
+        self.hashes.retain(|id, _| run.contains(id.as_str()));
+        self.missing.retain(|id| run.contains(id.as_str()));
+        podman::trust_compose(list, &self.hashes);
+    }
+}
+
+/// A container's entity id: created or found the first time it's listed, with its compose labels
+/// kept for after it's gone, which follow it when what's believed of it changes (its image found
+/// only on a later list, say).
+fn entity_for(store: &mut Store, vm: &str, c: &Container, prev: Option<&ContainerLive>, now: i64) -> Option<i64> {
+    let Some((prev, id)) = prev.and_then(|p| Some((p, p.entity?))) else {
+        return container_entity(store, vm, c, now);
+    };
+    if (&prev.container.compose_project, &prev.container.compose_service) != (&c.compose_project, &c.compose_service) {
+        label_container(store, id, c);
+    }
+    Some(id)
+}
+
 fn container_entity(store: &mut Store, vm: &str, c: &Container, now: i64) -> Option<i64> {
     let id = store.entity(Kind::Container, vm, &c.id, &c.name, now).ok()?;
+    label_container(store, id, c);
+    Some(id)
+}
+
+fn label_container(store: &mut Store, id: i64, c: &Container) {
     let (project, service) = (c.compose_project.as_deref(), c.compose_service.as_deref());
     if let Err(e) = store.label_entity(id, project, service) {
         log::warn!("labelling container {}: {e}", c.name);
     }
-    Some(id)
 }
 
 /// Queue the kills the counters saw for the journal reader, and wake it.
@@ -1283,5 +1376,138 @@ mod tests {
         let t0 = Instant::now();
         let row = container_row(Some(&(t0, stat(5_000, 0))), t0 + Duration::from_secs(1), &stat(10, 0), None);
         assert_eq!(row[0], ABSENT);
+    }
+
+    /// Containers as libpod lists them: (id, image id), each labelled as Docker Compose makes one
+    /// in project `shop`.
+    fn composed(rows: &[(&str, &str)]) -> Vec<Container> {
+        let rows: Vec<_> = rows
+            .iter()
+            .map(|(id, image)| {
+                serde_json::json!({"Id": id, "Names": [id], "ImageID": image, "Labels": {
+                    "com.docker.compose.project": "shop", "com.docker.compose.service": id,
+                    "com.docker.compose.config-hash": "8e5b"}})
+            })
+            .collect();
+        podman::parse_containers(serde_json::Value::Array(rows).to_string().as_bytes()).unwrap()
+    }
+
+    /// `images/json`'s answer: each id with the labels its Dockerfile gave it.
+    fn answer(rows: &[(&str, serde_json::Value)]) -> Result<HashMap<String, ImageHashes>, PodmanError> {
+        let rows: Vec<_> = rows.iter().map(|(id, labels)| serde_json::json!({"Id": id, "Labels": labels})).collect();
+        podman::parse_image_hashes(serde_json::Value::Array(rows).to_string().as_bytes())
+    }
+
+    fn projects(list: &[Container]) -> Vec<Option<&str>> {
+        list.iter().map(|c| c.compose_project.as_deref()).collect()
+    }
+
+    #[test]
+    fn images_are_asked_for_when_a_container_runs_one_not_seen_yet_and_not_again() {
+        let t0 = Instant::now();
+        let mut cache = ImageCache::default();
+        let mut list = composed(&[("web", "i1"), ("db", "i2")]);
+        assert!(cache.due(&list, t0), "nothing is known at first");
+        cache.learn(answer(&[("i1", serde_json::json!(null)), ("i2", serde_json::json!(null))]), &list, t0);
+        cache.check(&mut list);
+        assert_eq!(projects(&list), [Some("shop"), Some("shop")]);
+        // An image id names one config, labels and all, so what's known of it never goes stale.
+        assert!(!cache.due(&list, t0 + Duration::from_secs(86_400)));
+        let list = composed(&[("web", "i1"), ("db", "i2"), ("cache", "i3")]);
+        assert!(cache.due(&list, t0 + Duration::from_secs(1)), "a container on an image not seen yet");
+    }
+
+    #[test]
+    fn a_container_on_an_image_that_plants_compose_labels_is_in_no_project() {
+        let t0 = Instant::now();
+        let mut cache = ImageCache::default();
+        let mut list = composed(&[("web", "i1"), ("spy", "evil")]);
+        let planted =
+            serde_json::json!({"com.docker.compose.project": "shop", "com.docker.compose.config-hash": "8e5b"});
+        cache.learn(answer(&[("i1", serde_json::json!(null)), ("evil", planted)]), &list, t0);
+        cache.check(&mut list);
+        assert_eq!(projects(&list), [Some("shop"), None]);
+    }
+
+    #[test]
+    fn an_image_libpod_doesn_t_list_is_in_no_project_and_asked_about_again_only_after_a_while() {
+        let t0 = Instant::now();
+        let mut cache = ImageCache::default();
+        let mut list = composed(&[("web", "i1"), ("odd", "gone")]);
+        cache.learn(answer(&[("i1", serde_json::json!(null))]), &list, t0);
+        cache.check(&mut list);
+        assert_eq!(projects(&list), [Some("shop"), None]);
+        assert!(!cache.due(&list, t0 + Duration::from_secs(3)), "not every list");
+        assert!(cache.due(&list, t0 + IMAGES_RECHECK));
+        // A container with no image id at all has nothing to ask about.
+        let mut cache = ImageCache::default();
+        let mut list = composed(&[("rootfs", "")]);
+        assert!(!cache.due(&list, t0));
+        cache.check(&mut list);
+        assert_eq!(projects(&list), [None]);
+    }
+
+    #[test]
+    fn when_images_can_t_be_read_what_was_known_stands_and_the_rest_is_in_no_project() {
+        let t0 = Instant::now();
+        let mut cache = ImageCache::default();
+        let list = composed(&[("web", "i1")]);
+        cache.learn(answer(&[("i1", serde_json::json!(null))]), &list, t0);
+        let mut list = composed(&[("web", "i1"), ("db", "i2")]);
+        let t1 = t0 + Duration::from_secs(9);
+        assert!(cache.due(&list, t1));
+        cache.learn(Err(PodmanError::Timeout), &list, t1);
+        cache.check(&mut list);
+        assert_eq!(projects(&list), [Some("shop"), None]);
+        assert!(!cache.due(&list, t1 + Duration::from_secs(3)), "a failing engine isn't asked every list");
+        // But soon: a failure is mostly a socket not quite up, and until it answers, the VM's
+        // compose containers are out of their projects.
+        assert!(cache.due(&list, t1 + IMAGES_RETRY));
+        // Failing again, it waits twice as long each time, up to the whole while: whoever runs the
+        // engine decides what it answers, so a failure that never clears isn't fetched every list.
+        cache.learn(Err(PodmanError::Timeout), &list, t1 + IMAGES_RETRY);
+        assert!(!cache.due(&list, t1 + IMAGES_RETRY + IMAGES_RETRY));
+        assert!(cache.due(&list, t1 + IMAGES_RETRY + IMAGES_RETRY * 2));
+        for _ in 0..8 {
+            cache.learn(Err(PodmanError::Timeout), &list, t1);
+        }
+        assert!(!cache.due(&list, t1 + IMAGES_RECHECK - Duration::from_secs(1)));
+        assert!(cache.due(&list, t1 + IMAGES_RECHECK));
+        // An answer that doesn't list an image is an answer: that one waits the whole while.
+        cache.learn(answer(&[("i1", serde_json::json!(null))]), &list, t1 + IMAGES_RETRY);
+        assert!(!cache.due(&list, t1 + IMAGES_RETRY * 2));
+        assert!(cache.due(&list, t1 + IMAGES_RETRY + IMAGES_RECHECK));
+    }
+
+    #[test]
+    fn only_the_images_containers_run_are_kept() {
+        let t0 = Instant::now();
+        let mut cache = ImageCache::default();
+        let mut list = composed(&[("web", "i1"), ("db", "i2")]);
+        let all: Vec<(String, serde_json::Value)> =
+            (0..1000).map(|i| (format!("i{i}"), serde_json::json!(null))).collect();
+        let all: Vec<(&str, serde_json::Value)> = all.iter().map(|(id, l)| (id.as_str(), l.clone())).collect();
+        cache.learn(answer(&all), &list, t0);
+        assert_eq!(cache.hashes.len(), 2);
+        list.truncate(1);
+        cache.check(&mut list);
+        assert_eq!(cache.hashes.keys().collect::<Vec<_>>(), ["i1"], "a removed container's image is let go");
+    }
+
+    #[test]
+    fn a_container_s_project_in_the_store_follows_what_is_believed_of_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = Store::open(&dir.path().join("m.db")).unwrap();
+        let shop = |s: &mut Store| s.compose_entities("vm", "shop", None, 0, i64::MAX).unwrap().concat();
+        let mut list = composed(&[("web", "i1")]);
+        let first = entity_for(&mut store, "vm", &list[0], None, 1000);
+        assert!(first.is_some());
+        assert!(shop(&mut store).is_empty(), "its image not checked yet");
+        let prev = ContainerLive { container: list[0].clone(), entity: first, latest: HashMap::new() };
+        let mut cache = ImageCache::default();
+        cache.learn(answer(&[("i1", serde_json::json!(null))]), &list, Instant::now());
+        cache.check(&mut list);
+        assert_eq!(entity_for(&mut store, "vm", &list[0], Some(&prev), 2000), first);
+        assert_eq!(shop(&mut store), [first.unwrap()]);
     }
 }

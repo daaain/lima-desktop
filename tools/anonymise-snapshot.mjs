@@ -4,7 +4,8 @@
 //
 // 1. Keep only what the app reads: list rows lose provisioning, mounts, networks and messages
 //    (their config keeps socket port-forwards and the marker); containers lose ports, networks and
-//    namespaces; every label but compose project/service goes; journal entries keep their times,
+//    namespaces; every label but compose project/service/config hash goes (an image keeps only its
+//    config hashes); journal entries keep their times,
 //    boot and message. `--seconds` keeps the first N probe blocks and stats samples.
 // 2. Map what identifies anyone, the same way in every file: VM names (vm-a, vm-b…), container,
 //    compose project/service, pod and volume names, image repositories other than Docker's official
@@ -25,8 +26,12 @@ import {
 } from './snapshot-format.mjs';
 
 const SSH_PORT_BASE = 60022;
+/** The config hashes compose puts on each container it creates. The app believes a container's
+ * project only beside one its image doesn't carry, so an image keeps these labels too. Each is a
+ * sha256, so it's hashed with the ids and still matches between a container and its image. */
+const CONFIG_HASH_LABELS = new Set(['com.docker.compose.config-hash', 'io.podman.compose.config-hash']);
 const COMPOSE_LABELS = new Set(['com.docker.compose.project', 'com.docker.compose.service',
-  'io.podman.compose.project', 'io.podman.compose.service']);
+  'io.podman.compose.project', 'io.podman.compose.service', ...CONFIG_HASH_LABELS]);
 const OFFICIAL_REPO = /^docker\.io\/library\//;
 /** An official image reference: kept on purpose, so the safety net looks past it. */
 const OFFICIAL_REF = /docker\.io\/library\/[A-Za-z0-9._/-]+(?::[A-Za-z0-9._-]+)?/g;
@@ -225,9 +230,11 @@ function mapper(names, ids) {
   return { text, deep };
 }
 
-const composeOnly = (labels) => (labels && typeof labels === 'object'
-  ? Object.fromEntries(Object.entries(labels).filter(([k]) => COMPOSE_LABELS.has(k)))
+const labelsIn = (keep) => (labels) => (labels && typeof labels === 'object'
+  ? Object.fromEntries(Object.entries(labels).filter(([k]) => keep.has(k)))
   : labels);
+const composeOnly = labelsIn(COMPOSE_LABELS);
+const configHashesOnly = labelsIn(CONFIG_HASH_LABELS);
 
 function cleanMarker(m) {
   if (!m || typeof m !== 'object' || Array.isArray(m)) return null;
@@ -261,7 +268,7 @@ function cleanLibpod(libpod) {
     'version.json': version } = libpod;
   if (version !== undefined) out['version.json'] = pick(version, KEEP.version);
   if (cs !== undefined) out['containers.json'] = listOf(cs, KEEP.container, (c) => ({ ...c, Labels: composeOnly(c.Labels) }));
-  if (is !== undefined) out['images.json'] = listOf(is, KEEP.image, (i) => ('Labels' in i ? { ...i, Labels: null } : i));
+  if (is !== undefined) out['images.json'] = listOf(is, KEEP.image, (i) => ('Labels' in i ? { ...i, Labels: configHashesOnly(i.Labels) } : i));
   if (vs !== undefined) out['volumes.json'] = listOf(vs, KEEP.volume, (v) => ({ ...v, Labels: composeOnly(v.Labels) }));
   if (df !== undefined) {
     out['system-df.json'] = {

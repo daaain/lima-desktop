@@ -9,7 +9,7 @@ use hyper::body::{Body, Incoming};
 use hyper::{Method, Request, StatusCode};
 use hyper_util::rt::TokioIo;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tokio::net::UnixStream;
@@ -157,14 +157,74 @@ struct RawContainer {
     ports: Option<Vec<Port>>,
 }
 
-/// Compose labels: Docker Compose sets `com.docker.compose.*`; podman-compose sets those AND
-/// `io.podman.compose.*`.
-fn compose_label(labels: &BTreeMap<String, String>, key: &str) -> Option<String> {
-    labels
-        .get(&format!("com.docker.compose.{key}"))
-        .or_else(|| labels.get(&format!("io.podman.compose.{key}")))
-        .filter(|v| !v.is_empty())
-        .cloned()
+/// The labels Docker Compose and podman-compose put their config hash in, as [`ImageHashes`]
+/// decodes them: the only labels of an image the app reads.
+pub const CONFIG_HASH_LABELS: [&str; 2] = ["com.docker.compose.config-hash", "io.podman.compose.config-hash"];
+
+/// An image's own compose config-hash labels, as `images/json` lists them: all the app keeps of an
+/// image's labels ([`trust_compose`]). Decoded straight into these two, so an image's other labels
+/// are skipped over, never held.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+pub struct ImageHashes {
+    #[serde(rename = "com.docker.compose.config-hash")]
+    docker: Option<String>,
+    #[serde(rename = "io.podman.compose.config-hash")]
+    podman: Option<String>,
+}
+
+impl ImageHashes {
+    /// Each compose tool's label namespace with the image's own hash in it, in the order they're
+    /// believed: Docker Compose writes only `com.docker.compose.*`; podman-compose writes both
+    /// namespaces' project and service, and its hash only in its own.
+    fn by_namespace(&self) -> [(&'static str, Option<&str>); 2] {
+        [("com.docker.compose", self.docker.as_deref()), ("io.podman.compose", self.podman.as_deref())]
+    }
+}
+
+/// The compose project and service a container is in, or None when it can't be told from what a
+/// compose tool wrote.
+///
+/// Podman copies an image's labels (a Dockerfile's `LABEL`s) into every container made from it,
+/// and nothing says afterwards which came from the image: an untrusted image could carry
+/// `com.docker.compose.project=shop` and join the user's own `shop`, adding to its totals and its
+/// history. So a project is believed only beside a config hash written when the container was
+/// made: Docker Compose (since 2.0.0) and podman-compose (since 0.1.5) put one on each container
+/// they create, and neither writes one into an image. Anything baked into an image is in its own
+/// labels too, so a hash the image also has, with the same value, could have come from it, and
+/// vouches for nothing. Its project and service labels can't be the test: `docker compose build`
+/// stamps those into the images it builds.
+///
+/// A hash vouches only for its own tool's labels: a container podman-compose made is read in its
+/// namespace, so an image's `com.docker.compose.project` can't slip in beside it. Its service is the
+/// one exception: podman-compose wrote no `io.podman.compose.service` before 1.5.0, but has always
+/// set `com.docker.compose.service` as it made the container, which outranks an image's label of
+/// the same key, so that one is its own.
+///
+/// `image` is the container's image's hashes, None when that isn't listed: then nothing can be
+/// told, so it's in no project. Expected in none too: Docker Compose's lifecycle-hook containers
+/// (no hash) and `podman run` of a compose-built image.
+fn trusted_compose(labels: &BTreeMap<String, String>, image: Option<&ImageHashes>) -> Option<(String, Option<String>)> {
+    let label = |ns: &str, key: &str| labels.get(&format!("{ns}.{key}")).filter(|v| !v.is_empty());
+    image?.by_namespace().into_iter().find_map(|(ns, image_hash)| {
+        let hash = label(ns, "config-hash")?;
+        if image_hash == Some(hash.as_str()) {
+            return None;
+        }
+        let service = label(ns, "service")
+            .or_else(|| (ns == "io.podman.compose").then(|| label("com.docker.compose", "service")).flatten());
+        Some((label(ns, "project")?.clone(), service.cloned()))
+    })
+}
+
+/// Set each container's compose project and service from its labels where its image, found by id
+/// in `images` (never by name or tag: those move), shows a compose tool wrote them
+/// ([`trusted_compose`]); none otherwise.
+pub fn trust_compose(containers: &mut [Container], images: &HashMap<String, ImageHashes>) {
+    for c in containers {
+        let (project, service) = trusted_compose(&c.labels, images.get(&c.image_id)).unzip();
+        c.compose_project = project;
+        c.compose_service = service.flatten();
+    }
 }
 
 impl From<RawContainer> for Container {
@@ -180,8 +240,10 @@ impl From<RawContainer> for Container {
             // podman sends Go's zero time (year 1, so negative) for a container never started.
             started_at: r.started_at.filter(|&t| t > 0),
             name: r.names.first().cloned().unwrap_or_else(|| r.id.chars().take(12).collect()),
-            compose_project: compose_label(&labels, "project"),
-            compose_service: compose_label(&labels, "service"),
+            // In no project until its image has been checked (`trust_compose`): its labels may
+            // have come from the image.
+            compose_project: None,
+            compose_service: None,
             pod_name: Some(r.pod_name).filter(|p| !p.is_empty()),
             id: r.id,
             image: r.image,
@@ -951,6 +1013,11 @@ impl Libpod {
         parse_images(&self.get(IMAGES).await?)
     }
 
+    /// Every image's compose config hashes, by image id, for [`trust_compose`].
+    pub async fn image_hashes(&self) -> Result<HashMap<String, ImageHashes>, PodmanError> {
+        parse_image_hashes(&self.get(IMAGES).await?)
+    }
+
     /// Where each of an image's layers is kept in the guest, newest first (`parse_layer_dirs`).
     pub async fn layer_dirs(&self, id: &str) -> Result<Vec<String>, PodmanError> {
         parse_layer_dirs(&self.get(&format!("/images/{}/json", encode_component(id))).await?)
@@ -1018,6 +1085,25 @@ pub fn parse_images(body: &[u8]) -> Result<Vec<Image>, PodmanError> {
     Ok(classified(raw.unwrap_or_default()))
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct RawImageHashes {
+    id: String,
+    #[serde(default)]
+    labels: Option<ImageHashes>,
+}
+
+/// The body of `IMAGES`, read for each image's compose config hashes only, by image id. An id
+/// listed twice keeps its first row.
+pub fn parse_image_hashes(body: &[u8]) -> Result<HashMap<String, ImageHashes>, PodmanError> {
+    let raw: Option<Vec<RawImageHashes>> = serde_json::from_slice(body)?;
+    let mut out = HashMap::new();
+    for r in raw.unwrap_or_default() {
+        out.entry(r.id).or_insert_with(|| r.labels.unwrap_or_default());
+    }
+    Ok(out)
+}
+
 /// The body of `VOLUMES`, decoded.
 pub fn parse_volumes(body: &[u8]) -> Result<Vec<Volume>, PodmanError> {
     let raw: Option<Vec<RawVolume>> = serde_json::from_slice(body)?;
@@ -1063,19 +1149,156 @@ mod tests {
         assert!(parse_history(b"null").unwrap().is_empty());
     }
 
+    /// A container listed with these labels, on image `img`.
+    fn listed(labels: serde_json::Value) -> Container {
+        let row =
+            serde_json::json!({"Id": "abc123", "Names": ["web-1"], "ImageID": "img", "Labels": labels, "PodName": ""});
+        serde_json::from_value::<RawContainer>(row).unwrap().into()
+    }
+
+    /// `images/json` listing the one image, `img`, with these labels.
+    fn images(labels: serde_json::Value) -> HashMap<String, ImageHashes> {
+        let body = serde_json::json!([{"Id": "img", "RepoTags": ["localhost/shop_web:latest"], "Labels": labels}]);
+        parse_image_hashes(body.to_string().as_bytes()).unwrap()
+    }
+
+    fn checked(labels: serde_json::Value, images: &HashMap<String, ImageHashes>) -> Container {
+        let mut c = listed(labels);
+        trust_compose(std::slice::from_mut(&mut c), images);
+        c
+    }
+
+    fn group(c: &Container) -> (Option<&str>, Option<&str>) {
+        (c.compose_project.as_deref(), c.compose_service.as_deref())
+    }
+
+    /// As Docker Compose labels a container it creates (less what the app doesn't read).
+    fn docker_compose() -> serde_json::Value {
+        serde_json::json!({"com.docker.compose.project": "shop", "com.docker.compose.service": "web",
+            "com.docker.compose.config-hash": "8e5b", "com.docker.compose.version": "2.29.1"})
+    }
+
+    /// As podman-compose labels one: both namespaces' project and service, a hash under its own.
+    fn podman_compose() -> serde_json::Value {
+        serde_json::json!({"io.podman.compose.project": "shop", "io.podman.compose.service": "web",
+            "com.docker.compose.project": "shop", "com.docker.compose.service": "web",
+            "io.podman.compose.config-hash": "4f1c", "io.podman.compose.version": "1.6.0"})
+    }
+
     #[test]
-    fn container_from_list_row_reads_compose_labels() {
-        let row = serde_json::json!({
-            "Id": "abc123", "Names": ["web-1"], "Image": "docker.io/library/nginx:latest",
-            "State": "running", "Status": "Up 2 minutes",
-            "Labels": {"io.podman.compose.project": "shop", "com.docker.compose.service": "web"},
-            "PodName": ""
-        });
-        let c: Container = serde_json::from_value::<RawContainer>(row).unwrap().into();
+    fn a_listed_container_is_in_no_project_until_its_image_is_checked() {
+        let c = listed(docker_compose());
         assert_eq!(c.name, "web-1");
-        assert_eq!(c.compose_project.as_deref(), Some("shop"));
-        assert_eq!(c.compose_service.as_deref(), Some("web"));
         assert_eq!(c.pod_name, None);
+        assert_eq!(group(&c), (None, None));
+        assert_eq!(c.labels["com.docker.compose.project"], "shop", "its labels are all still there");
+    }
+
+    #[test]
+    fn a_compose_container_whose_image_lacks_its_hash_is_in_its_project() {
+        assert_eq!(group(&checked(docker_compose(), &images(serde_json::json!(null)))), (Some("shop"), Some("web")));
+        let other = images(serde_json::json!({"maintainer": "someone"}));
+        assert_eq!(group(&checked(docker_compose(), &other)), (Some("shop"), Some("web")));
+    }
+
+    #[test]
+    fn an_image_that_carries_a_project_and_its_hash_leaves_its_containers_in_none() {
+        // A Dockerfile's LABELs: podman copies them into every container made from the image, so
+        // `podman run` of it lists the very labels a compose container has.
+        assert_eq!(group(&checked(docker_compose(), &images(docker_compose()))), (None, None));
+    }
+
+    #[test]
+    fn a_compose_built_image_s_project_labels_don_t_stop_compose_s_own_container() {
+        // `docker compose build` stamps project, service and version into the image, never the hash.
+        let built = images(serde_json::json!({"com.docker.compose.project": "shop",
+            "com.docker.compose.service": "web", "com.docker.compose.version": "2.29.1"}));
+        assert_eq!(group(&checked(docker_compose(), &built)), (Some("shop"), Some("web")));
+    }
+
+    #[test]
+    fn a_hash_other_than_the_image_s_was_set_when_the_container_was_made() {
+        // An image committed from a compose container carries that container's hash; compose
+        // making a container of it sets its own.
+        let committed = images(serde_json::json!({"com.docker.compose.project": "shop",
+            "com.docker.compose.config-hash": "0ld"}));
+        assert_eq!(group(&checked(docker_compose(), &committed)), (Some("shop"), Some("web")));
+    }
+
+    #[test]
+    fn project_labels_without_a_config_hash_are_in_no_project() {
+        let none = images(serde_json::json!(null));
+        let labels = serde_json::json!({"com.docker.compose.project": "shop", "com.docker.compose.service": "web"});
+        assert_eq!(group(&checked(labels, &none)), (None, None));
+        // Nor with an empty one, which no compose tool writes.
+        let labels = serde_json::json!({"com.docker.compose.project": "shop", "com.docker.compose.config-hash": ""});
+        assert_eq!(group(&checked(labels, &none)), (None, None));
+    }
+
+    #[test]
+    fn a_container_whose_image_isn_t_listed_is_in_no_project() {
+        assert_eq!(group(&checked(docker_compose(), &HashMap::new())), (None, None));
+        // Matched by id alone: another image's labels are no word on this one's.
+        let mut c = listed(docker_compose());
+        c.image_id = "other".into();
+        trust_compose(std::slice::from_mut(&mut c), &images(serde_json::json!(null)));
+        assert_eq!(group(&c), (None, None));
+    }
+
+    #[test]
+    fn podman_compose_s_hash_vouches_for_its_containers_too() {
+        assert_eq!(group(&checked(podman_compose(), &images(serde_json::json!(null)))), (Some("shop"), Some("web")));
+        assert_eq!(group(&checked(podman_compose(), &images(podman_compose()))), (None, None));
+    }
+
+    #[test]
+    fn podman_compose_before_1_5_names_its_service_in_docker_compose_s_label() {
+        // podman-compose wrote no `io.podman.compose.service` until 1.5.0 (Ubuntu 24.04 has 1.0.6,
+        // Debian 13 1.3.0), but has always set `com.docker.compose.service` as it made a container:
+        // a label set then outranks an image's of the same key, so it's podman-compose's own.
+        let labels = serde_json::json!({"io.podman.compose.project": "shop", "com.docker.compose.project": "shop",
+            "com.docker.compose.service": "web", "io.podman.compose.config-hash": "4f1c",
+            "io.podman.compose.version": "1.0.6"});
+        assert_eq!(group(&checked(labels, &images(serde_json::json!(null)))), (Some("shop"), Some("web")));
+    }
+
+    #[test]
+    fn a_hash_vouches_only_for_its_own_tool_s_project_and_service() {
+        // The image plants Docker Compose's project; a tool that wrote only podman-compose's labels
+        // made the container. Its hash says nothing about labels it didn't write.
+        let labels = serde_json::json!({
+            "com.docker.compose.project": "planted", "com.docker.compose.service": "spy",
+            "io.podman.compose.project": "mine", "io.podman.compose.service": "app",
+            "io.podman.compose.config-hash": "4f1c"});
+        let planted = images(serde_json::json!({"com.docker.compose.project": "planted"}));
+        assert_eq!(group(&checked(labels, &planted)), (Some("mine"), Some("app")));
+        // A hash with no project of its own beside it is no project.
+        let labels =
+            serde_json::json!({"com.docker.compose.project": "planted", "io.podman.compose.config-hash": "4f1c"});
+        assert_eq!(group(&checked(labels, &planted)), (None, None));
+    }
+
+    #[test]
+    fn image_hashes_are_read_by_id_whatever_else_an_image_says() {
+        let body = br#"[
+          {"Id":"a1","RepoTags":["x:1"],"Labels":{"com.docker.compose.config-hash":"h1","maintainer":"m"}},
+          {"Id":"b2","Labels":{"io.podman.compose.config-hash":"h2"}},
+          {"Id":"c3","Labels":null},
+          {"Id":"d4"},
+          {"Id":"a1","Labels":{"com.docker.compose.config-hash":"second"}}
+        ]"#;
+        let got = parse_image_hashes(body).unwrap();
+        assert_eq!(got.len(), 4);
+        assert_eq!(got["a1"], ImageHashes { docker: Some("h1".into()), podman: None }, "an id's first row");
+        assert_eq!(got["b2"], ImageHashes { docker: None, podman: Some("h2".into()) });
+        assert_eq!(got["c3"], ImageHashes::default());
+        assert_eq!(got["d4"], ImageHashes::default());
+        assert!(parse_image_hashes(b"null").unwrap().is_empty());
+        // The labels named for others to keep (the snapshot recorder) are the ones decoded.
+        for key in CONFIG_HASH_LABELS {
+            let body = serde_json::json!([{"Id": "i", "Labels": {key: "h"}}]).to_string();
+            assert_ne!(parse_image_hashes(body.as_bytes()).unwrap()["i"], ImageHashes::default(), "{key}");
+        }
     }
 
     #[test]

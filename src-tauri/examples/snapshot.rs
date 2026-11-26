@@ -13,8 +13,9 @@
 //!   vms/<vm>/journal.out       the OOM reader's raw stdout (exit status and stderr in the manifest)
 //!   vms/<vm>/libpod/*.json     the list GETs once; stats.jsonl one body per line, one per second
 //! Never recorded: inspect, logs, the `Command` / `Mounts` fields of the container list and
-//! `system df`, and images' labels (those bodies are re-serialised without them). The host-side
-//! columns (hypervisor RSS/CPU, disk-image allocation) can't be replayed, so nothing is kept for them.
+//! `system df`, and images' labels other than their compose config hashes (those bodies are
+//! re-serialised without them). The host-side columns (hypervisor RSS/CPU, disk-image allocation)
+//! can't be replayed, so nothing is kept for them.
 //!
 //! It records into `<out>.partial` and only renames that to `<out>` when no line of it looks like a
 //! credential (`password`, `secret`, `token`, a private key's header); otherwise it deletes it and
@@ -33,14 +34,16 @@ use lima_desktop_lib::{journal, marker, probe};
 
 /// Container commands and mounts (host paths among them): never written down.
 const COMMANDS_AND_MOUNTS: &[&str] = &["Command", "Mounts"];
-/// The GETs made once, the file each body goes to, and the fields it never keeps (the app reads
-/// none of them).
-const ONCE: &[(&str, &str, &[&str])] = &[
-    (podman::CONTAINERS, "containers.json", COMMANDS_AND_MOUNTS),
-    (podman::IMAGES, "images.json", &["Labels"]),
-    (podman::VOLUMES, "volumes.json", &[]),
-    (podman::SYSTEM_DF, "system-df.json", COMMANDS_AND_MOUNTS),
-    (podman::VERSION, "version.json", &[]),
+/// The GETs made once, the file each body goes to, the fields it never keeps (the app reads none of
+/// them), and the only labels its rows keep, where it doesn't keep them all. Of an image's labels,
+/// the app reads only its compose config hashes, to tell whether a container's came from it.
+type Once = (&'static str, &'static str, &'static [&'static str], Option<&'static [&'static str]>);
+const ONCE: &[Once] = &[
+    (podman::CONTAINERS, "containers.json", COMMANDS_AND_MOUNTS, None),
+    (podman::IMAGES, "images.json", &[], Some(&podman::CONFIG_HASH_LABELS)),
+    (podman::VOLUMES, "volumes.json", &[], None),
+    (podman::SYSTEM_DF, "system-df.json", COMMANDS_AND_MOUNTS, None),
+    (podman::VERSION, "version.json", &[], None),
 ];
 const STATS_FILE: &str = "stats.jsonl";
 /// What a list row keeps; the anonymiser reads the same file.
@@ -284,9 +287,9 @@ async fn record_once(pod: Option<&Libpod>, dir: &Path) -> Value {
     let Some(pod) = pod else {
         return Value::Object(errors);
     };
-    for (path, file, private) in ONCE {
+    for (path, file, private, labels) in ONCE {
         let written = match pod.get(path).await {
-            Ok(body) => write_body(&dir.join(file), &body, private),
+            Ok(body) => write_body(&dir.join(file), &body, private, *labels),
             Err(e) => Err(e.into()),
         };
         if let Err(e) = written {
@@ -296,11 +299,13 @@ async fn record_once(pod: Option<&Libpod>, dir: &Path) -> Value {
     Value::Object(errors)
 }
 
-/// A body as it came, unless it carries `private` fields: then re-serialised without them.
-fn write_body(file: &Path, body: &[u8], private: &[&str]) -> Res<()> {
+/// A body as it came, unless it carries `private` fields, or a row's labels other than `labels`
+/// (when given): then re-serialised without them.
+fn write_body(file: &Path, body: &[u8], private: &[&str], labels: Option<&[&str]>) -> Res<()> {
     std::fs::create_dir_all(file.parent().expect("a file in a dir"))?;
     let mut doc: Value = serde_json::from_slice(body)?;
-    if strip(&mut doc, private) {
+    let stripped = strip(&mut doc, private);
+    if labels.is_some_and(|keep| only_labels(&mut doc, keep)) | stripped {
         std::fs::write(file, serde_json::to_vec(&doc)?)?;
     } else {
         std::fs::write(file, body)?;
@@ -321,6 +326,18 @@ fn strip(v: &mut Value, fields: &[&str]) -> bool {
         Value::Array(items) => items.iter_mut().fold(false, |r, v| strip(v, fields) | r),
         _ => false,
     }
+}
+
+/// Of each listed row's `Labels`, keep only `keep`; true when any other went.
+fn only_labels(doc: &mut Value, keep: &[&str]) -> bool {
+    let Value::Array(rows) = doc else { return false };
+    let mut removed = false;
+    for labels in rows.iter_mut().filter_map(|r| r.get_mut("Labels")?.as_object_mut()) {
+        let before = labels.len();
+        labels.retain(|k, _| keep.contains(&k.as_str()));
+        removed |= labels.len() != before;
+    }
+    removed
 }
 
 /// `seconds` whole blocks of the probe's output, as printed.
@@ -517,14 +534,23 @@ mod tests {
     }
 
     #[test]
-    fn images_lose_their_labels_and_containers_their_commands() {
+    fn images_keep_only_their_config_hashes_and_containers_lose_their_commands() {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("images.json");
-        let body = br#"[{"Id":"x","Labels":{"org.opencontainers.image.description":"a secret store"}}]"#;
-        write_body(&file, body, &["Labels"]).unwrap();
-        assert_eq!(std::fs::read_to_string(&file).unwrap(), r#"[{"Id":"x"}]"#);
-        let untouched = br#"[{"Name":"v"}]"#;
-        write_body(&file, untouched, &["Labels"]).unwrap();
+        let images = ONCE.iter().find(|(path, ..)| *path == podman::IMAGES).unwrap();
+        let body = br#"[{"Id":"x","Labels":{"org.opencontainers.image.description":"a secret store",
+            "com.docker.compose.config-hash":"h1","io.podman.compose.config-hash":"h2"}},{"Id":"y","Labels":null}]"#;
+        write_body(&file, body, images.2, images.3).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&file).unwrap(),
+            r#"[{"Id":"x","Labels":{"com.docker.compose.config-hash":"h1","io.podman.compose.config-hash":"h2"}},{"Id":"y","Labels":null}]"#
+        );
+        let containers = ONCE.iter().find(|(path, ..)| *path == podman::CONTAINERS).unwrap();
+        let body = br#"[{"Id":"c","Command":["sh"],"Labels":{"com.example":"kept"}}]"#;
+        write_body(&file, body, containers.2, containers.3).unwrap();
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), r#"[{"Id":"c","Labels":{"com.example":"kept"}}]"#);
+        let untouched = br#"[{"Id":"x","Labels":{"com.docker.compose.config-hash":"h1"}}]"#;
+        write_body(&file, untouched, images.2, images.3).unwrap();
         assert_eq!(std::fs::read(&file).unwrap(), untouched, "as it came when nothing is stripped");
     }
 }
