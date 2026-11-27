@@ -1141,7 +1141,7 @@ fn stamp_span(line: &str) -> i64 {
 }
 
 /// Paging back a log with `until`, under each log driver podman has here: the lines up to a moment
-/// are every line written up to the end of its millisecond and none after, which is what the log
+/// are every line written up to the end of its stamp and none after, which is what the log
 /// view's Fetch earlier counts on to join pages without a gap or a repeat. journald and k8s-file
 /// disagree on a line at exactly `until`, and k8s-file applies `tail` before `until`.
 async fn check_logs_until(ctx: &mut Ctx) -> Outcome {
@@ -1197,7 +1197,7 @@ async fn logs_until_with(pod: &Libpod, driver: &str, name: &str) -> Result<Strin
     if stamped.len() != all.len() {
         return Err(format!("{driver}: a line without a timestamp: {:?}", all.first().map(|l| &l.line)));
     }
-    // The moment: the middle line's millisecond; every line in it is wanted, none after.
+    // The moment: the middle line's stamp; every line stamped in it is wanted, none after.
     let pivot = stamped[LOG_LINES / 2].0;
     // Asked up to the end of what its stamp could stand for, as the UI asks: under podman 5 that's
     // the whole second, every line stamped with it included.
