@@ -80,9 +80,11 @@
     font: inherit; font-size: 0.9rem; height: 2.3rem; padding: 0 1rem; border-radius: 1.15rem;
     border: 1px solid var(--border); background: transparent; color: var(--fg); cursor: pointer; white-space: nowrap;
   }
-  :global(button:hover:not(:disabled)) { border-color: var(--fg); }
-  :global(button:disabled) { color: var(--muted); cursor: not-allowed; }
-  :global(button.danger:hover:not(:disabled)) { border-color: var(--alert); color: var(--alert); }
+  /* A button busy with what it was pressed for is `aria-disabled`, not disabled, so it keeps the
+     keyboard's focus, and looks it. */
+  :global(button:hover:not(:disabled, [aria-disabled='true'])) { border-color: var(--fg); }
+  :global(button:disabled), :global(button[aria-disabled='true']) { color: var(--muted); cursor: not-allowed; }
+  :global(button.danger:hover:not(:disabled, [aria-disabled='true'])) { border-color: var(--alert); color: var(--alert); }
   :global(button.active) { background: var(--fg); border-color: var(--fg); color: var(--bg); }
 
   /* Type: .serif for names and sentences, .num for figures, .label for the rare small label. */

@@ -12,8 +12,13 @@
   import Bar from './Bar.svelte';
   import Files from './Files.svelte';
   import { unfold } from './motion';
+  import { closeToOpener } from './opener';
 
-  let { vm, id, title, onclose }: { vm: string; id: string; title: string; onclose: () => void } = $props();
+  let { detail, vm, id, title, onclose }: {
+    /** Its element's id, which its line's `aria-controls` names (opener.ts). */
+    detail: string;
+    vm: string; id: string; title: string; onclose: () => void;
+  } = $props();
 
   let layers = $state<Layer[] | null>(null);
   let error = $state<string | null>(null);
@@ -43,7 +48,7 @@
   const scale = $derived(Math.max(1, ...sized.map((l) => l.size)));
 </script>
 
-<section class="wash detail">
+<section class="wash detail" id={detail}>
   <div class="head">
     <h3 class="serif" {title}>{title}</h3>
     {#if layers}
@@ -56,7 +61,7 @@
         {configToo ? 'Hide' : 'Show'} {configSteps} config {configSteps === 1 ? 'step' : 'steps'}
       </button>
     {/if}
-    <button onclick={onclose} aria-label="Close">✕</button>
+    <button onclick={() => closeToOpener(detail, onclose)} aria-label="Close">✕</button>
   </div>
   {#if error}
     <p class="error">{error}</p>

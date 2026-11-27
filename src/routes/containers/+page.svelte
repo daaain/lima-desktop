@@ -6,7 +6,7 @@
   import { History } from '$lib/history.svelte';
   import { range, rangeWindow } from '$lib/range.svelte';
   import { theLast } from '$lib/ranges';
-  import { BY_MEMORY, CONTAINER_COLUMNS, CONTAINER_SORTS, containerRows, filterContainers, groupContainers, lineHistory, readContainerFilter, type ContainerRow, type ContainerSort } from '$lib/containers';
+  import { BY_MEMORY, CONTAINER_COLUMNS, CONTAINER_SORTS, containerRows, filterContainers, groupContainers, holdGroups, lineHistory, readContainerFilter, type ContainerGroup, type ContainerRow, type ContainerSort } from '$lib/containers';
   import type { ContainerLive } from '$lib/api';
   import { distinctKeys } from '$lib/keys';
   import Guarded from '$lib/Guarded.svelte';
@@ -22,6 +22,9 @@
   import OrderPicker from '$lib/OrderPicker.svelte';
   import SortHead from '$lib/SortHead.svelte';
   import { glide, unfold } from '$lib/motion';
+  import { detailId } from '$lib/opener';
+  import { focusWithin } from '$lib/focusWithin';
+  import { Held } from '$lib/heldOrder';
   import { Ordering } from '$lib/ordering.svelte';
   import { folds, vmFolds } from '$lib/folds.svelte';
   import { listsLines } from '$lib/folds';
@@ -68,7 +71,17 @@
   // the VM using the most memory first, then its projects, then the largest container in each; a
   // column head orders all three by its column (containers.ts).
   const ordering = new Ordering('containers', CONTAINER_SORTS, BY_MEMORY);
-  const groups = $derived(groupContainers(rows, ordering.current).map((g) => ({ ...g, live: live.vm(g.vm) })));
+  const sorted = $derived(groupContainers(rows, ordering.current));
+  // While the keyboard is in the list, its lines keep the order they had as it came in, so the one
+  // it's on doesn't jump away (or lose the focus) as the memory each uses changes (heldOrder.ts).
+  // Where the focus is, is looked at each poll and as it moves in or out of the list.
+  let list = $state<HTMLElement>();
+  let focusMoved = $state(0);
+  const held = new Held<ContainerGroup[]>();
+  const groups = $derived.by(() => {
+    void focusMoved;
+    return held.shown(sorted, focusWithin(list), holdGroups).map((g) => ({ ...g, live: live.vm(g.vm) }));
+  });
   const heads = $derived<{ key: ContainerSort; text: string; span?: number }[]>([
     { key: 'name', text: `${countWord(groups.length)} ${groups.length === 1 ? 'VM' : 'VMs'}` },
     { key: 'memory', text: 'Memory', span: 2 },
@@ -106,7 +119,7 @@
     <input type="checkbox" checked={urlFilter.runningOnly} onchange={(e) => setParam('running', e.currentTarget.checked ? '1' : null)} />
     running only
   </label>
-  <input type="search" placeholder="Search name, service, project, image" bind:value={query} />
+  <input type="search" placeholder="Search name, service, project, image" aria-label="Search containers" bind:value={query} />
   <span class="muted num">{rows.length} of {all.length}</span>
 </div>
 
@@ -133,18 +146,19 @@
     {@const keys = distinctKeys(rows, (r) => keyOf(r.vm, r.c.id))}
     {#each rows as { vm, c }, i (keys[i])}
       {@const key = keyOf(vm, c.id)}
+      {@const detail = detailId(keys[i])}
       <div animate:glide>
         <ContainerLine {vm} {c} history={history.get(lineHistory(vm, c))} vmHistory={history.get(g.live?.entity)} vmCpus={g.live?.instance.cpus ?? 1} vmMemory={g.live?.instance.memory ?? 0} second="image"
-          now={live.snapshot?.updated} selected={key in open} onselect={() => toggle(key)} onerror={(e) => (actionError = e)} />
+          now={live.snapshot?.updated} selected={key in open} controls={detail} onselect={() => toggle(key)} onerror={(e) => (actionError = e)} />
         {#if open[key] != null}
           <div transition:unfold>
-            <ContainerDetail {vm} {c} from={span.from} to={span.to} over={range.key} vmMemory={g.live?.instance.memory ?? 0} onclose={() => close(key)} />
+            <ContainerDetail id={detail} {vm} {c} from={span.from} to={span.to} over={range.key} vmMemory={g.live?.instance.memory ?? 0} onclose={() => close(key)} />
           </div>
         {/if}
       </div>
     {/each}
   {/snippet}
-  <div class="lines">
+  <div class="lines" bind:this={list} onfocusin={() => focusMoved++} onfocusout={() => focusMoved++}>
     {#each groups as g (g.vm)}
       {@const listed = listsLines({ folded: vmFolds.containers.has(g.vm), searching: searching || urlFilter.vm != null })}
       <section animate:glide>

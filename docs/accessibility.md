@@ -15,11 +15,13 @@ The audit for [#28](https://github.com/daaain/lima-desktop/issues/28), the start
 
 ### 1. Rows are buttons with buttons inside (major, maybe blocker under VoiceOver)
 
-`ContainerLine.svelte:34` and `ItemLine.svelte:40` are `role=button` divs that hold Stop/Restart/Remove buttons, bars and charts. A button's children are presentational, so the line's name is all of its text run together (300+ characters, ending "Stop Restart"), the bars' card text is lost inside it, and VoiceOver may not reach the inner buttons as buttons. The actions themselves are named only "Stop", "Remove" (17 "Stop"s on Containers), with no target. `aria-controls` is missing though the detail has an id.
+`ContainerLine.svelte:34` and `ItemLine.svelte:40` are `role=button` divs that hold Stop/Restart/Remove buttons, bars and charts. A button's children are presentational, so the line's name is all of its text run together (300+ characters, ending "Stop Restart"), the bars' card text is lost inside it, and VoiceOver may not reach the inner buttons as buttons. **Fixed:** each action is named for what it acts on after its own word ("Stop harbor"), and a line has `aria-controls` while its detail is open.
 
 This bears on the chart question: if a row opens into its detail, the opener should be a real `<button aria-expanded aria-controls>` (the name, as `ProjectHead` does), and the row a plain container around it.
 
 ### 2. Focus lost to `<body>` (major)
+
+**Fixed** for each case below, by focus events alone, nothing watching the page: a button busy with what it was pressed for is `aria-disabled` and ignores presses, not disabled, so it keeps the focus; Stop and Start (and a container's Restart and Remove) are one button each whose word follows the state, so nothing is swapped from under the focus; Settings saves choices one after another instead of disabling every control while one is saved; a VM's buttons drawn afresh in the overview's other list take the focus over (`handOver.ts`); Containers' lines and the overview's running VMs keep their order while the keyboard is in them (`heldOrder.ts`: where the focus is, is looked at every poll and as it moves, as WebKit says nothing when a control is taken out with it), as a keyed list moves a line by taking it out, focus and all; `opener.ts` gives the focus back to the line that opened what was closed; and Files puts it on what each step opened. Still lost: an image's or volume's line once its Remove has removed it, a line that a filter takes away, and a VM's Start while it can't be started (neither running nor stopped, or managed by another tool), which is `disabled` and drops the focus as its VM comes to that (see the disabled buttons' reasons, below).
 
 - Pressing a control that disables itself while it works: VM and container Stop/Start (`VmActions`, `ContainerActions`), every Settings control (`disabled={saving}`), Images/Volumes Refresh and Measure.
 - Closing something: a container's detail ✕ (`ContainerDetail.svelte:66`), an image's layers ✕ (`ImageLayers.svelte:58`), the full-window log (`LogView.svelte:83-103`, its opener was unmounted).
@@ -37,18 +39,17 @@ This bears on the chart question: if a row opens into its detail, the opener sho
 
 ### 4. Tooltip text that's lost or out of reach
 
-- **Bug:** an element with both `aria-label` and `title` loses the title for screen readers once hovered: `textOf` moves it to `data-tip` and only copies it to `aria-description` when there's no label (`Tooltip.svelte:23`). Hit: the log search's syntax help and icon buttons (`LogView.svelte:113-140`), `UpdateNotice.svelte:27`, the range picker's explanation (`Masthead.svelte:46`).
+- **Fixed:** an element with both `aria-label` and `title` loses the title for screen readers once hovered: `textOf` moves it to `data-tip` and only copies it to `aria-description` when there's no label (`Tooltip.svelte:23`). Hit: the log search's syntax help and icon buttons (`LogView.svelte:113-140`), `UpdateNotice.svelte:27`, the range picker's explanation (`Masthead.svelte:46`).
 - Disabled buttons say why only in `title`, and a disabled button can't take focus: "Stop it first" (`VmActions`), "Stop the VM to resize it" (`Sizing.svelte:122`), "In use — remove its containers first" (20× on Images), prune buttons.
 - Hover-only text on things that can't take focus: status dots' names, Pressure (PSI), a container's full name and start time, image/volume names and mountpoints, the OOM badge, Activity Monitor's figure and the asides in the popover, log timestamps, truncated build steps.
 - WCAG 1.4.13: dismissable and persistent pass; _hoverable_ fails (the tip has `pointer-events: none` and follows the pointer), which matters under a magnifier for a 21rem card.
 
 ### 5. Widgets that don't behave as their role says
 
-- Container detail's Metrics/Logs/Inspect show the selected one by a class only (`ContainerDetail.svelte:64`).
-- The popover's tablist has no arrow keys or roving tabindex, no `aria-controls`; the panel isn't labelled by its tab (`menubar/+page.svelte:191-197`).
-- The VM page's OOM table rows are `<tr onclick>` with no keyboard route (`vm/[name]/+page.svelte:258`).
-- Scroll boxes without `tabindex` can't be scrolled by keyboard in WebKit: the log (`LogView.svelte:151`), inspect `<pre>` (`ContainerDetail.svelte:121`), Files' viewer (`Files.svelte:104`).
-- Minor: single-choice groups use `aria-pressed` (radio would fit); SortHead's `aria-pressed` reverses rather than releases; "Show 3 config steps" has no expanded state; searches labelled only by placeholder; no skip link past 12 masthead stops; sticky heads cover a focused row on Shift+Tab (16 of 86 on Containers at 600 px); Escape doesn't close a container's detail; VM `<article>`s unnamed.
+- **Fixed:** container detail's Metrics/Logs/Inspect showed the selected one by a class only; the popover's tablist had no arrow keys or roving tabindex, no `aria-controls`, and its panel wasn't labelled by its tab. Both are tablists now (`tabKeys.ts`).
+- **Fixed:** the VM page's OOM table rows were `<tr onclick>` with no keyboard route; the container's name is a button now.
+- **Fixed:** scroll boxes without `tabindex` can't be scrolled by keyboard in WebKit: the log, inspect output and Files' viewer are named regions in the Tab order now.
+- Minor: single-choice groups use `aria-pressed` (radio would fit); SortHead's `aria-pressed` reverses rather than releases; "Show 3 config steps" has no expanded state; searches labelled only by placeholder (**fixed**); no skip link past 12 masthead stops; sticky heads cover a focused row on Shift+Tab (16 of 86 on Containers at 600 px); Escape doesn't close a container's detail; VM `<article>`s unnamed.
 - `svelte-ignore a11y_no_noninteractive_element_interactions` in the popover (7×) hides exactly this issue's problem; the rest are justified.
 
 ### 6. Non-text contrast (WCAG 1.4.11, 3:1), where nothing else carries it
@@ -70,7 +71,7 @@ Passing: every line, fill and dashed full-scale line against its ground; text th
 
 ## Proposed order of work
 
-1. **Small, independent fixes:** the `aria-description` bug; focus kept or returned (disabled-while-working → `aria-disabled` or keep focus; close → back to the opener; Files steps); detail tabs' selected state; popover tabs' arrow keys; OOM rows reachable; scroll boxes focusable; searches labelled; action buttons name their target.
+1. **Small, independent fixes** (**done**, but for the focus cases still open under 2): the `aria-description` bug; focus kept or returned (disabled-while-working → `aria-disabled` or keep focus; close → back to the opener; Files steps); detail tabs' selected state; popover tabs' arrow keys; OOM rows reachable; scroll boxes focusable; searches labelled; action buttons name their target.
 2. **Rows as disclosures:** the line's opener a real button, actions outside it. Unblocks the chart decision below.
 3. **Tooltips on `:focus-visible`,** anchored to the element, Escape to dismiss; disabled reasons said where a keyboard reaches them.
 4. **Charts:** summaries in the label on lines and headings; the keyboard convention (focusable, arrows between columns, Home/End, card shown and read through a polite live region) where the full chart is: the VM page and a container's detail (uPlot), and Sketch/MemoryShare wherever they have no detail behind them (project heading).

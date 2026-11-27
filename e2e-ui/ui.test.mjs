@@ -43,6 +43,21 @@ after(async () => {
   server?.kill();
 });
 
+/**
+ * Waits until the settings the fake backend holds satisfy `ok` (run here, on what it answers), and
+ * gives them. Not `waitForFunction` with an async function: the promise it returns is truthy, so it
+ * would pass at once.
+ */
+async function settingsCome(page, ok, timeout = 3000) {
+  const until = Date.now() + timeout;
+  for (;;) {
+    const s = await page.evaluate(() => window.__TAURI_INTERNALS__.invoke('settings'));
+    if (ok(s)) return s;
+    if (Date.now() > until) assert.fail(`the settings never came to that: ${JSON.stringify(s)}`);
+    await new Promise((r) => setTimeout(r, 50));
+  }
+}
+
 /** `init`, if given, runs in the page before the app does (after the fake backend is set up). */
 async function open(path, { dark = false, width = 1320, height = 900, init } = {}) {
   const context = await browser.newContext({
@@ -508,11 +523,11 @@ test('Settings chooses when each menu bar item warns: memory and CPU by the perc
   ]);
 
   await warns('Memory').selectOption({ label: 'past 90 %' });
-  await page.waitForFunction(async () => (await window.__TAURI_INTERNALS__.invoke('settings')).menuBar.warn.memoryPct === 90);
+  await settingsCome(page, (s) => s.menuBar.warn.memoryPct === 90);
   await warns('CPU').selectOption({ label: 'never' });
-  await page.waitForFunction(async () => (await window.__TAURI_INTERNALS__.invoke('settings')).menuBar.warn.cpuPct === null);
+  await settingsCome(page, (s) => s.menuBar.warn.cpuPct === null);
   await warns('Disk').selectOption({ label: 'under 200 GB free' });
-  await page.waitForFunction(async () => (await window.__TAURI_INTERNALS__.invoke('settings')).menuBar.warn.diskFreeGb === 200);
+  await settingsCome(page, (s) => s.menuBar.warn.diskFreeGb === 200);
   assert.deepEqual((await page.evaluate(() => window.__TAURI_INTERNALS__.invoke('settings'))).menuBar.warn, {
     memoryPct: 90, cpuPct: null, diskFreeGb: 200,
   });
@@ -552,7 +567,7 @@ test('Settings chooses each menu bar item\'s drawing and figure, and whether clo
   await memory.getByRole('button', { name: 'None' }).click();
   await page.waitForFunction(() => document.querySelector('[aria-label="Memory drawn in the menu bar as"] [aria-pressed="true"]')?.textContent === 'None');
   await figure('CPU').click();
-  await page.waitForFunction(async () => !(await window.__TAURI_INTERNALS__.invoke('settings')).menuBar.cpu.figure);
+  await settingsCome(page, (s) => !s.menuBar.cpu.figure);
   assert.equal(await figure('CPU').isChecked(), false);
   assert.deepEqual((await stored()).menuBar, {
     memory: { drawing: 'off', figure: true },
@@ -565,12 +580,12 @@ test('Settings chooses each menu bar item\'s drawing and figure, and whether clo
   const names = page.getByRole('checkbox', { name: /Name each one/ });
   assert.equal(await names.isChecked(), true);
   await names.click();
-  await page.waitForFunction(async () => !(await window.__TAURI_INTERNALS__.invoke('settings')).menuBar.names);
+  await settingsCome(page, (s) => !s.menuBar.names);
 
   const keep = page.getByRole('checkbox', { name: 'Keep recording, in the menu bar' });
   assert.equal(await keep.isChecked(), true);
   await keep.click();
-  await page.waitForFunction(async () => !(await window.__TAURI_INTERNALS__.invoke('settings')).keepRunning);
+  await settingsCome(page, (s) => !s.keepRunning);
   assert.equal(await keep.isChecked(), false);
   assert.deepEqual(errors, []);
   await close();
@@ -622,11 +637,11 @@ test('The new version opens its release page, stays dismissed, and a later one s
   const check = page.getByRole('checkbox', { name: 'Say when a new version is out' });
   assert.equal(await check.isChecked(), true);
   await check.click();
-  await page.waitForFunction(async () => !(await window.__TAURI_INTERNALS__.invoke('settings')).checkUpdates);
+  await settingsCome(page, (s) => !s.checkUpdates);
   await asked(page, 2);
   assert.equal(await notice.count(), 0, 'nothing is said with the check off');
   await check.click();
-  await page.waitForFunction(async () => (await window.__TAURI_INTERNALS__.invoke('settings')).checkUpdates);
+  await settingsCome(page, (s) => s.checkUpdates);
   await notice.getByText('Lima Desktop 0.4.0 is out').waitFor();
   assert.deepEqual(errors, []);
   await close();
@@ -1480,7 +1495,7 @@ test("A container's detail says what it publishes, and opens a TCP port in the b
 test("A container's log opens at its newest line, each with podman's time", async () => {
   const { page, errors, close } = await open('/containers');
   await page.locator('.line', { has: page.locator('.name', { hasText: /^frontend/ }) }).first().click();
-  await page.locator('section.detail').getByRole('button', { name: 'logs' }).click();
+  await page.locator('section.detail').getByRole('tab', { name: 'logs' }).click();
   const log = page.locator('section.detail .log');
   await log.locator('.ln').first().waitFor();
   assert.equal(await log.locator('.ln').count(), 120);
@@ -1505,7 +1520,7 @@ test("A container's detail keeps its tabs beside its name when the name and imag
   const image = await head.locator('.image').boundingBox();
   assert.ok(image.y >= name.y + name.height - 1, 'the image is under the name');
   for (const label of ['metrics', 'logs', 'inspect', 'Close']) {
-    const b = await head.getByRole('button', { name: label, exact: true }).boundingBox();
+    const b = await head.getByRole(label === 'Close' ? 'button' : 'tab', { name: label, exact: true }).boundingBox();
     const middle = b.y + b.height / 2;
     assert.ok(middle > name.y && middle < name.y + name.height, `${label} is level with the name`);
   }
@@ -1517,7 +1532,7 @@ test("A container's log is searched by its words, filtered by level, stream and 
   const { page, errors, close } = await open('/containers');
   await page.locator('.line', { has: page.locator('.name', { hasText: /^frontend/ }) }).first().click();
   const detail = page.locator('section.detail');
-  await detail.getByRole('button', { name: 'logs' }).click();
+  await detail.getByRole('tab', { name: 'logs' }).click();
   const log = detail.locator('.log');
   await log.locator('.ln').first().waitFor();
   const note = detail.locator('.logs p.note');
@@ -1588,7 +1603,7 @@ test("A container's log is searched by its words, filtered by level, stream and 
 async function openLog(page, name) {
   await page.locator('.line', { has: page.locator('.name', { hasText: name }) }).first().click();
   const detail = page.locator('section.detail');
-  await detail.getByRole('button', { name: 'logs' }).click();
+  await detail.getByRole('tab', { name: 'logs' }).click();
   const log = detail.locator('.log');
   await log.locator('.ln').first().waitFor();
   return { detail, log, note: detail.locator('.logs p.note') };
@@ -2369,7 +2384,7 @@ for (const engine of ['chromium', 'webkit']) {
         await page.locator('.uplot').first().waitFor();
         await page.locator('.line').first().click();
         await page.locator('.detail .uplot').first().waitFor();
-        await page.locator('.detail').getByRole('button', { name: 'logs', exact: true }).click();
+        await page.locator('.detail').getByRole('tab', { name: 'logs', exact: true }).click();
         await page.locator('.ln').first().waitFor();
       });
       await visit('/containers', async (page) => {
@@ -2392,3 +2407,469 @@ for (const engine of ['chromium', 'webkit']) {
     }
   });
 }
+
+// ---- Keyboard and screen readers (#28, docs/accessibility.md) ----
+
+test('A labelled element keeps its tooltip as its description once the pointer has shown it', async () => {
+  const { page, errors, close } = await open('/');
+  const ranges = page.getByRole('group', { name: 'Time range' });
+  const said = 'Every chart, peak and verdict in the app is over this range';
+  assert.equal(await ranges.getAttribute('title'), said);
+  await ranges.hover();
+  await page.locator('[role=tooltip]').waitFor({ timeout: 1000 });
+  assert.equal(await ranges.getAttribute('title'), null);
+  assert.equal(await ranges.getAttribute('aria-description'), said);
+  // Labelled by another element: a tooltip that says the same isn't said again, one that says more is.
+  await page.evaluate(() => document.body.insertAdjacentHTML('beforeend',
+    '<p style="position:fixed;bottom:0"><span id="t-name">harbor</span><span id="t-long">harbor\n   running</span><button id="t-same" aria-labelledby="t-name" title="harbor">a</button><button id="t-more" aria-labelledby="t-name" title="harbor, running">b</button><button id="t-wrapped" aria-labelledby="t-long" title="harbor running">c</button></p>'));
+  // The label's text as a screen reader says it, its spaces and line breaks one space.
+  for (const [id, described] of [['t-same', null], ['t-more', 'harbor, running'], ['t-wrapped', null]]) {
+    await page.locator(`#${id}`).hover();
+    await page.locator('[role=tooltip]').waitFor({ timeout: 1000 });
+    assert.equal(await page.locator(`#${id}`).getAttribute('aria-description'), described, id);
+  }
+  assert.deepEqual(errors, []);
+  await close();
+});
+
+// What has focus, by its label, else its text; BODY when nothing has.
+const focused = (page) =>
+  page.evaluate(() => {
+    const el = document.activeElement;
+    return !el || el === document.body ? 'BODY' : el.getAttribute('aria-label') ?? (el.labels?.[0] ?? el).textContent.trim();
+  });
+
+test("The popover's tabs are one Tab stop, chosen with the arrow keys, Home and End, each labelling its panel", async () => {
+  const { page, errors, close } = await open('/menubar?tab=mem', { width: 396, height: 560 });
+  const tab = (name) => page.getByRole('tab', { name });
+  await page.locator('.legend .row[data-vm]').first().waitFor();
+  await tab('Memory').focus();
+  await page.keyboard.press('ArrowRight');
+  assert.equal(await focused(page), 'CPU');
+  assert.equal(await tab('CPU').getAttribute('aria-selected'), 'true');
+  assert.equal(await page.getByRole('tabpanel', { name: 'CPU' }).count(), 1);
+  await page.keyboard.press('End');
+  assert.equal(await focused(page), 'Disk');
+  await page.keyboard.press('ArrowRight');
+  assert.equal(await focused(page), 'Memory', 'round from the end');
+  await page.keyboard.press('ArrowLeft');
+  assert.equal(await focused(page), 'Disk');
+  await page.keyboard.press('Home');
+  assert.equal(await focused(page), 'Memory');
+  // Tab leaves the row for the panel, not the next tab.
+  await page.keyboard.press('Tab');
+  assert.notEqual(await page.evaluate(() => document.activeElement?.getAttribute('role')), 'tab');
+  assert.deepEqual(errors, []);
+  await close();
+});
+
+test("A container's detail's tabs say which is chosen, and the arrow keys choose another", async () => {
+  const { page, errors, close } = await open('/containers', { height: 1400 });
+  const line = page.locator('.line', { has: page.locator('.name', { hasText: /^frontend/ }) }).first();
+  await line.focus();
+  await page.keyboard.press('Enter');
+  const detail = page.locator('section.detail');
+  await detail.waitFor();
+  const tabs = detail.getByRole('tablist');
+  assert.equal(await tabs.getByRole('tab', { name: 'metrics' }).getAttribute('aria-selected'), 'true');
+  await tabs.getByRole('tab', { name: 'metrics' }).focus();
+  await page.keyboard.press('ArrowRight');
+  assert.equal(await focused(page), 'logs');
+  assert.equal(await tabs.getByRole('tab', { name: 'logs' }).getAttribute('aria-selected'), 'true');
+  await detail.getByRole('tabpanel', { name: 'logs' }).waitFor();
+  assert.deepEqual(errors, []);
+  await close();
+});
+
+test("An OOM kill's container is a button, so the keyboard opens its detail too, and goes on there", async () => {
+  const { page, errors, close } = await open('/vm/harbor');
+  const app = page.locator('#oom').getByRole('button', { name: 'app', exact: true });
+  await app.focus();
+  await page.keyboard.press('Enter');
+  await page.locator('[id^="detail-"]').waitFor();
+  // The detail is further down the page, brought into view: the focus goes with it, to its heading,
+  // so Tab goes on into the detail, not back in the table.
+  await page.waitForFunction(() => document.activeElement?.matches('section.detail h3'));
+  await page.keyboard.press('Tab');
+  assert.ok(await page.evaluate(() => !!document.activeElement?.closest('section.detail')), 'Tab goes on in the detail');
+  // A removed container has no detail to open, so it isn't a button.
+  assert.equal(await page.locator('#oom tbody tr:not(.clickable) button').count(), 0);
+  assert.deepEqual(errors, []);
+  await close();
+});
+
+test("A container's inspect output is a named region the keyboard reaches and scrolls, as WebKit won't on its own", async () => {
+  const { page, errors, close } = await open('/containers', { height: 900 });
+  await page.locator('.line', { has: page.locator('.name', { hasText: /^frontend/ }) }).first().click();
+  const detail = page.locator('section.detail');
+  await detail.getByRole('tab', { name: 'inspect' }).click();
+  const region = detail.getByRole('region', { name: 'Inspect output' });
+  await page.waitForFunction(() => document.querySelector('section.detail pre')?.textContent.length > 10);
+  assert.equal(await region.getAttribute('tabindex'), '0');
+  await region.focus();
+  await page.keyboard.press('End');
+  await page.waitForFunction(() => document.querySelector('section.detail pre').scrollTop > 0);
+  assert.deepEqual(errors, []);
+  await close();
+});
+
+test('Each list\'s search is labelled for what it searches, not only by its placeholder', async () => {
+  for (const [path, label] of [['/containers', 'Search containers'], ['/images', 'Search images'], ['/volumes', 'Search volumes']]) {
+    const { page, errors, close } = await open(path);
+    const search = page.locator('input[type=search]');
+    await search.waitFor();
+    assert.equal(await search.getAttribute('aria-label'), label, path);
+    assert.deepEqual(errors, []);
+    await close();
+  }
+});
+
+// ---- Keyboard: focus kept and returned ----
+
+test('Each action button is named for what it acts on, its visible word first', async () => {
+  const { page, errors, close } = await open('/containers');
+  // 17 containers have a Stop: each says which.
+  await page.getByRole('button', { name: 'Stop harbor-devbox', exact: true }).waitFor();
+  assert.equal(await page.getByRole('button', { name: 'Stop', exact: true }).count(), 0);
+  await page.getByRole('button', { name: 'Restart harbor-devbox', exact: true }).waitFor();
+  await page.getByRole('button', { name: 'Start atlas-devbox', exact: true }).waitFor();
+  await page.getByRole('button', { name: 'Remove atlas-devbox', exact: true }).waitFor();
+  await page.goto(`${base}/`);
+  await page.getByRole('button', { name: 'Stop harbor', exact: true }).waitFor();
+  await page.getByRole('button', { name: 'Restart harbor', exact: true }).waitFor();
+  await page.getByRole('button', { name: 'Delete harbor', exact: true }).waitFor();
+  await page.getByRole('button', { name: 'Start foundry', exact: true }).waitFor();
+  // While it works, the name says so, as the button does.
+  await page.getByRole('button', { name: 'Stop harbor', exact: true }).focus();
+  await page.keyboard.press('Enter');
+  await page.getByRole('button', { name: 'Stopping… harbor', exact: true }).waitFor();
+  await page.goto(`${base}/volumes`);
+  await page.getByRole('button', { name: 'Remove atlas_pgdata', exact: true }).waitFor();
+  await page.goto(`${base}/images`);
+  await page.getByText('atlas_frontend').first().waitFor();
+  assert.equal(await page.getByRole('button', { name: 'Remove', exact: true }).count(), 0);
+  await page.getByRole('button', { name: /^Remove localhost\/atlas_frontend/ }).first().waitFor();
+  assert.deepEqual(errors, []);
+  await close();
+});
+
+/** Waits for focus to come to rest on `name`, else fails saying where it is. */
+async function focusComesTo(page, name, timeout = 3000) {
+  const until = Date.now() + timeout;
+  let now;
+  while ((now = await focused(page)) !== name && Date.now() < until) await page.waitForTimeout(50);
+  assert.equal(now, name);
+}
+// The snapshot from now on with `vm` stopped (`change` 'stop'), or one of its containers exited
+// or shrunk to use far less memory (`change` [name, 'exited' | 'shrunk']).
+function changeSnapshot(page, vm, change) {
+  return page.evaluate(([vm, change]) => {
+    const stopped = (v) => ({ instance: { ...v.instance, status: 'Stopped', podmanSocket: undefined }, latest: {}, containers: [] });
+    const changed = {
+      exited: (c) => ({ ...c, state: 'exited', status: 'Exited (0)', latest: {} }),
+      shrunk: (c) => ({ ...c, latest: { ...c.latest, mem: c.latest.mem / 50 } }),
+    };
+    window.__fakeAnswer = (cmd, args, answer) => cmd !== 'snapshot' ? answer : {
+      ...answer,
+      vms: answer.vms.map((v) => {
+        if (v.instance.name !== vm) return v;
+        if (change === 'stop') return stopped(v);
+        const [name, how] = change;
+        return { ...v, containers: v.containers.map((c) => (c.name === name ? changed[how](c) : c)) };
+      }),
+    };
+  }, [vm, change]);
+}
+
+test("A VM's Stop keeps focus while it works, and hands it to Start once the VM has stopped", async () => {
+  // On the overview a stopped VM moves to the list below, its buttons drawn afresh there.
+  const { page, errors, close } = await open('/');
+  // A stop that takes a moment, as a real one does.
+  await page.evaluate(() => (window.__fakeAnswer = (cmd, args, answer) => (cmd === 'vm_action' ? new Promise((r) => setTimeout(() => r(answer), 1000)) : answer)));
+  await page.getByRole('button', { name: 'Stop harbor', exact: true }).focus();
+  await page.keyboard.press('Enter');
+  await page.getByRole('button', { name: 'Stopping… harbor', exact: true }).waitFor();
+  await focusComesTo(page, 'Stopping… harbor');
+  // Still a Tab stop while it works, but pressed again it does nothing more.
+  assert.equal(await page.getByRole('button', { name: 'Stopping… harbor' }).getAttribute('aria-disabled'), 'true');
+  await page.keyboard.press('Enter');
+  assert.equal((await page.evaluate(() => window.__fakeCalls.filter((c) => c.cmd === 'vm_action'))).length, 1);
+  await focusComesTo(page, 'Stop harbor');
+  await changeSnapshot(page, 'harbor', 'stop');
+  await focusComesTo(page, 'Start harbor');
+  await page.keyboard.press('Tab');
+  assert.equal(await focused(page), 'Delete harbor');
+  // On its own page, the same buttons swap in place.
+  await page.goto(`${base}/vm/lantern`);
+  await page.getByRole('button', { name: 'Stop lantern', exact: true }).focus();
+  await page.keyboard.press('Enter');
+  await page.getByRole('button', { name: 'Stopping… lantern', exact: true }).waitFor();
+  await focusComesTo(page, 'Stop lantern');
+  await changeSnapshot(page, 'lantern', 'stop');
+  await focusComesTo(page, 'Start lantern');
+  // Focus put down by the user (a click on the page itself) stays down as the buttons change again.
+  await page.evaluate(() => document.activeElement.blur());
+  await page.evaluate(() => (window.__fakeAnswer = undefined));
+  await page.getByRole('button', { name: 'Stop lantern', exact: true }).waitFor();
+  assert.equal(await focused(page), 'BODY');
+  assert.deepEqual(errors, []);
+  await close();
+});
+
+test("A container's Stop keeps focus while it works and turns into Start, its line keeping its place while focus is in the list", async () => {
+  const { page, errors, close } = await open('/containers');
+  await page.getByRole('button', { name: 'Stop atlas-graph-api-1', exact: true }).focus();
+  await page.keyboard.press('Enter');
+  await focusComesTo(page, 'Stop atlas-graph-api-1');
+  const at = async () => (await page.locator('.line .name').allInnerTexts()).indexOf('graph-api');
+  const before = await at();
+  // The largest first: shrunk, then stopped, it would move down, but not under the keyboard.
+  await changeSnapshot(page, 'atlas', ['atlas-graph-api-1', 'shrunk']);
+  await page.waitForTimeout(2500);
+  assert.equal(await at(), before, 'its line stays put while focus is on it');
+  assert.equal(await focused(page), 'Stop atlas-graph-api-1');
+  await changeSnapshot(page, 'atlas', ['atlas-graph-api-1', 'exited']);
+  await focusComesTo(page, 'Start atlas-graph-api-1');
+  assert.equal(await at(), before);
+  await page.keyboard.press('Tab');
+  assert.equal(await focused(page), 'Remove atlas-graph-api-1');
+  // Focus gone from the list (to its search), it takes its place among the stopped.
+  await page.getByRole('searchbox', { name: 'Search containers' }).focus();
+  await page.waitForFunction((before) => [...document.querySelectorAll('.line .name')].map((n) => n.innerText).indexOf('graph-api') > before, before);
+  assert.deepEqual(errors, []);
+  await close();
+});
+
+test('A Settings control keeps focus as what it chose is saved, and choices made at once are each saved', async () => {
+  const { page, errors, close } = await open('/settings');
+  await page.getByRole('heading', { level: 1 }).waitFor();
+  const dark = page.getByRole('group', { name: 'Theme' }).getByRole('button', { name: 'Dark' });
+  await dark.focus();
+  await page.keyboard.press('Enter');
+  await page.waitForFunction((el) => el.getAttribute('aria-pressed') === 'true', await dark.elementHandle());
+  assert.equal(await focused(page), 'Dark');
+  await page.getByRole('checkbox', { name: /Keep recording/ }).focus();
+  await page.keyboard.press('Space');
+  await page.waitForTimeout(400);
+  assert.equal(await focused(page), 'Keep recording, in the menu bar');
+  // Another theme, then the saved one again before the first is saved: the last choice is what's stored.
+  const theme = (await settingsCome(page, () => true)).theme;
+  const other = theme === 'light' ? 'Dark' : 'Light';
+  const label = { system: 'System', light: 'Light', dark: 'Dark' }[theme];
+  await page.getByRole('group', { name: 'Theme' }).evaluate((g, [a, b]) => {
+    const press = (name) => [...g.querySelectorAll('button')].find((x) => x.textContent.trim() === name).click();
+    press(a);
+    press(b);
+  }, [other, label]);
+  await page.waitForTimeout(600);
+  assert.equal((await settingsCome(page, () => true)).theme, theme);
+  // Two at once, the second sent before the first is saved: neither is lost to the other.
+  const boxes = page.locator('input[type=checkbox]');
+  const was = await boxes.evaluateAll((bs) => bs.map((b) => b.checked));
+  await boxes.evaluateAll((bs) => { bs.at(-1).click(); bs.at(-2).click(); });
+  await page.waitForTimeout(600);
+  // What's stored, not what the boxes show: a box shows its click even where the choice was dropped.
+  const stored = await page.evaluate(() => window.__TAURI_INTERNALS__.invoke('settings'));
+  assert.deepEqual([stored.checkUpdates, stored.keepRunning], was.slice(-2).map((c) => !c).reverse());
+  assert.deepEqual(errors, []);
+  await close();
+});
+
+test('Refresh and Measure on Images and Volumes keep focus while they work', async () => {
+  const { page, errors, close } = await open('/images', {
+    // Lists that take a moment to come, as a busy VM's do.
+    init: () => {
+      window.__fakeAnswer = (cmd, args, answer) => (cmd === 'images' || cmd === 'volumes' ? new Promise((r) => setTimeout(() => r(answer), 300)) : answer);
+    },
+  });
+  for (const path of ['/images', '/volumes']) {
+    if (path !== '/images') await page.goto(base + path);
+    const measure = page.getByRole('button', { name: 'Measure again' });
+    await measure.waitFor();
+    await measure.focus();
+    await page.keyboard.press('Enter');
+    await page.getByRole('button', { name: 'Measuring…' }).waitFor();
+    await focusComesTo(page, 'Measure again');
+    await page.getByRole('button', { name: 'Refresh', exact: true }).focus();
+    await page.keyboard.press('Enter');
+    await page.getByRole('button', { name: 'Refreshing…' }).waitFor();
+    await focusComesTo(page, 'Refresh');
+  }
+  assert.deepEqual(errors, []);
+  await close();
+});
+
+test("Closing a container's detail, an image's layers or a volume's files gives focus back to its line", async () => {
+  const { page, errors, close } = await open('/containers');
+  // Each line opens its detail with Enter, says which it controls, and takes focus back from its ✕.
+  const opensAndCloses = async (name) => {
+    const line = page.locator('.line', { has: page.locator('.name', { hasText: name }) }).first();
+    await line.focus();
+    await page.keyboard.press('Enter');
+    await page.waitForFunction((el) => el.getAttribute('aria-expanded') === 'true', await line.elementHandle());
+    const detail = page.locator(`[id="${await line.getAttribute('aria-controls')}"]`);
+    await detail.waitFor();
+    assert.ok(await detail.evaluate((el) => el.matches('section.detail')), 'it controls its detail');
+    await detail.getByRole('button', { name: 'Close', exact: true }).focus();
+    await page.keyboard.press('Enter');
+    await page.waitForFunction(() => document.querySelectorAll('section.detail').length === 0);
+    assert.ok(await line.evaluate((el) => el === document.activeElement), `focus is back on ${name}'s line`);
+    assert.equal(await line.getAttribute('aria-expanded'), 'false');
+  };
+  await opensAndCloses(/^frontend/);
+  await page.goto(`${base}/vm/harbor`);
+  await opensAndCloses(/^harbor-devbox/);
+  await page.goto(`${base}/images`);
+  await opensAndCloses('atlas_frontend');
+  await page.goto(`${base}/volumes`);
+  await opensAndCloses(/^atlas_pgdata$/);
+  assert.deepEqual(errors, []);
+  await close();
+});
+
+test('The full-window log gives focus back to its Full window button as it closes, by Escape or its own button', async () => {
+  const { page, errors, close } = await open('/containers');
+  const line = page.locator('.line', { has: page.locator('.name', { hasText: /^frontend/ }) }).first();
+  await line.focus();
+  await page.keyboard.press('Enter');
+  const detail = page.locator('section.detail');
+  await detail.getByRole('tab', { name: 'logs' }).focus();
+  await page.keyboard.press('Enter');
+  await detail.locator('.ln').first().waitFor();
+  const win = page.getByRole('dialog', { name: /frontend-1's log$/ });
+  for (const how of ['Escape', 'its button']) {
+    await detail.getByRole('button', { name: 'Full window' }).focus();
+    await page.keyboard.press('Enter');
+    await win.waitFor();
+    assert.equal(await focused(page), 'Search the log');
+    if (how === 'Escape') await page.keyboard.press('Escape');
+    else {
+      await win.getByRole('button', { name: 'Close the full window' }).focus();
+      await page.keyboard.press('Enter');
+    }
+    await win.waitFor({ state: 'hidden' });
+    await focusComesTo(page, 'Full window');
+  }
+  assert.deepEqual(errors, []);
+  await close();
+});
+
+test("Each step through a folder's files puts focus on what it opened: the first entry, else what the view says", async () => {
+  const { page, errors, close } = await open('/volumes');
+  const line = page.locator('.line', { has: page.locator('.name', { hasText: /^atlas_pgdata$/ }) }).first();
+  await line.focus();
+  await page.keyboard.press('Enter');
+  const files = page.locator('section.detail');
+  await files.getByRole('button', { name: 'base/' }).waitFor();
+  // Opening leaves focus on the line.
+  assert.ok(await line.evaluate((el) => el === document.activeElement), 'focus stays on the line as it opens');
+  const step = async (button) => {
+    await button.focus();
+    await page.keyboard.press('Enter');
+  };
+  // Into a folder: its first entry, and Tab goes on down the list.
+  await step(files.getByRole('button', { name: 'base/' }));
+  await focusComesTo(page, '1/');
+  await page.keyboard.press('Tab');
+  assert.equal(await focused(page), '16384/');
+  // A file that isn't text: what it is, said.
+  await step(files.getByRole('button', { name: 'pg_filenode.map' }));
+  await focusComesTo(page, 'A binary file of 524 B. It isn\'t text, so there\'s nothing to show here.');
+  // Back to the folder: its first entry again.
+  await step(files.getByRole('button', { name: 'Back to the folder' }));
+  await focusComesTo(page, '1/');
+  // An empty one says so.
+  await step(files.getByRole('button', { name: '16384/' }));
+  await focusComesTo(page, 'Empty.');
+  // Up by the path; then a text file: its text, to read and scroll.
+  await step(files.locator('nav.path').getByRole('button', { name: 'atlas_pgdata' }));
+  await focusComesTo(page, 'base/');
+  await step(files.getByRole('button', { name: 'postgresql.conf' }));
+  await page.waitForFunction(() => document.activeElement?.tagName === 'PRE');
+  assert.equal(await focused(page), 'postgresql.conf');
+  // A link to a folder lists it.
+  await step(files.getByRole('button', { name: 'Back to the folder' }));
+  await step(files.getByRole('button', { name: /^current/ }));
+  await focusComesTo(page, '1/');
+  assert.match(await files.locator('nav.path').innerText(), /atlas_pgdata\s*\/\s*current/);
+  assert.deepEqual(errors, []);
+  await close();
+});
+
+test("A container's log and a volume's file are named regions the keyboard reaches and scrolls", async () => {
+  const { page, errors, close } = await open('/containers', { height: 900 });
+  await page.locator('.line', { has: page.locator('.name', { hasText: /^frontend/ }) }).first().click();
+  const detail = page.locator('section.detail');
+  await detail.getByRole('tab', { name: 'logs' }).click();
+  const log = detail.getByRole('region', { name: 'Log' });
+  await log.waitFor();
+  assert.equal(await log.getAttribute('tabindex'), '0');
+  // It opens at its newest line; Home takes it to the top.
+  await page.waitForFunction(() => document.querySelector('section.detail .log').scrollTop > 0);
+  await log.focus();
+  await page.keyboard.press('Home');
+  await page.waitForFunction(() => document.querySelector('section.detail .log').scrollTop === 0);
+  assert.deepEqual(errors, []);
+  await close();
+
+  const vol = await open('/volumes');
+  await vol.page.locator('.line', { has: vol.page.locator('.name', { hasText: /^atlas_pgdata$/ }) }).first().click();
+  const files = vol.page.locator('section.detail');
+  await files.getByRole('button', { name: 'postgresql.conf' }).click();
+  const file = files.getByRole('region', { name: 'postgresql.conf' });
+  await file.waitFor();
+  assert.equal(await file.getAttribute('tabindex'), '0');
+  assert.deepEqual(vol.errors, []);
+  await vol.close();
+});
+
+test("A list's order held under the keyboard lets go once the focus has gone, even with what had it taken away", async () => {
+  const { page, errors, close } = await open('/');
+  await page.getByRole('group', { name: 'Order the VMs by' }).getByRole('button', { name: /memory/i }).click();
+  const order = () => page.locator('.fleet article.row.vm a.name').allInnerTexts();
+  await page.getByRole('button', { name: 'Stop harbor', exact: true }).focus();
+  await page.keyboard.press('Enter');
+  // harbor stops: its buttons go to the stopped list, and the focus with them (handOver).
+  await changeSnapshot(page, 'harbor', 'stop');
+  await focusComesTo(page, 'Start harbor');
+  const before = await order();
+  const last = before.at(-1);
+  // Now the last running VM uses nearly all its memory: it belongs first, focus or not, as the
+  // keyboard has left the running list.
+  await page.evaluate((last) => {
+    const was = window.__fakeAnswer;
+    window.__fakeAnswer = (cmd, args, answer) => {
+      const a = was(cmd, args, answer);
+      if (cmd !== 'snapshot') return a;
+      return { ...a, vms: a.vms.map((v) => (v.instance.name !== last ? v : { ...v, latest: { ...v.latest, mem_used: (v.latest.mem_total ?? v.instance.memory) * 0.99 } })) };
+    };
+  }, last);
+  await page.waitForFunction((last) => document.querySelector('.fleet article.row.vm a.name')?.textContent === last, last, { timeout: 5000 });
+  assert.deepEqual(errors, []);
+  await close();
+});
+
+test("A step through a folder's files overtaken by another leaves the focus where the keyboard is", async () => {
+  const { page, errors, close } = await open('/volumes');
+  await page.locator('.line', { has: page.locator('.name', { hasText: /^atlas_pgdata$/ }) }).first().click();
+  const detail = page.locator('section.detail');
+  await detail.getByRole('button', { name: 'pg_wal/' }).waitFor();
+  // base/ answers in a moment, pg_wal/ a good while later: base/'s answer comes after pg_wal/ was asked for.
+  await page.evaluate(() => {
+    const slow = { base: 300, pg_wal: 1500 };
+    window.__fakeAnswer = (cmd, args, answer) => {
+      const ms = cmd === 'guest_files' ? slow[args.path?.replace(/\/$/, '')] : undefined;
+      return ms ? new Promise((r) => setTimeout(() => r(answer), ms)) : answer;
+    };
+  });
+  await detail.getByRole('button', { name: 'base/' }).focus();
+  await page.keyboard.press('Enter');
+  await page.keyboard.press('Tab');
+  assert.equal(await focused(page), 'pg_wal/');
+  await page.keyboard.press('Enter');
+  // base/'s answer, overtaken, isn't shown, and doesn't move the focus either.
+  await page.waitForTimeout(700);
+  assert.equal(await focused(page), 'pg_wal/');
+  assert.deepEqual(errors, []);
+  await close();
+});

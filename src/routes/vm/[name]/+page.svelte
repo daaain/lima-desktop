@@ -5,6 +5,7 @@
   import { api, type ContainerLive, type OomEvent, type Series, type VmStall } from '$lib/api';
   import { bytes } from '$lib/format';
   import { distinctKeys } from '$lib/keys';
+  import { detailId } from '$lib/opener';
   import { containersPart, containersSentence, cpuTip, gauges, memoryTip, vmHeadline } from '$lib/almanac';
   import { History } from '$lib/history.svelte';
   import type { Hint } from '$lib/rightsize';
@@ -177,12 +178,20 @@
   function toggle(id: string) {
     open = open.includes(id) ? open.filter((o) => o !== id) : [...open, id];
   }
-  /** From an OOM kill: open its container's detail (if it isn't, unfolding its project) and bring it into view. */
+  /**
+   * From an OOM kill: open its container's detail (if it isn't, unfolding its project) and bring it
+   * into view, the focus with it, on its heading: left in the table, the next Tab would go on there
+   * and take the page back up.
+   */
   function show(id: string) {
     if (!open.includes(id)) open = [...open, id];
     const project = vm?.containers.find((c) => c.id === id)?.composeProject;
     if (project && folds.has(name, project)) folds.toggle(name, project);
-    tick().then(() => document.getElementById(`detail-${id}`)?.scrollIntoView({ block: 'center', behavior: 'smooth' }));
+    tick().then(() => {
+      const detail = document.getElementById(detailId(id));
+      detail?.querySelector<HTMLElement>('h3')?.focus({ preventScroll: true });
+      detail?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    });
   }
 
   async function loadDf() {
@@ -262,7 +271,8 @@
                 <td class="when num">{when(row.ts)}</td>
                 <td>
                   {#if who}
-                    <bdi class="cname">{who.name}</bdi>{#if who.context}<bdi class="muted cid">{who.context}</bdi>{/if}
+                    <!-- The row opens the detail for a pointer; its name is the button a keyboard reaches. -->
+                    {#if shown}<button class="open cname" onclick={(e) => { e.stopPropagation(); show(shown); }}><bdi>{who.name}</bdi></button>{:else}<bdi class="cname">{who.name}</bdi>{/if}{#if who.context}<bdi class="muted cid">{who.context}</bdi>{/if}
                     {#if who.removed}<span class="badge" title="This container no longer exists; its name comes from the history.">removed</span>{/if}
                   {:else if row.kill}
                     <span class="cname">not in a container</span>
@@ -312,10 +322,10 @@
         {#each rows as c, n (keys[n])}
           <div class="row" animate:glide>
             <ContainerLine vm={name} {c} history={history.get(lineHistory(name, c))} vmHistory={history.get(vm.entity)} vmCpus={i.cpus} vmMemory={i.memory} second="activity" now={live.snapshot?.updated}
-              selected={open.includes(c.id)} onselect={() => toggle(c.id)} onerror={(e) => (actionError = e)} />
+              selected={open.includes(c.id)} controls={detailId(keys[n])} onselect={() => toggle(c.id)} onerror={(e) => (actionError = e)} />
             {#if open.includes(c.id)}
-              <div id={`detail-${c.id}`} transition:unfold>
-                <ContainerDetail vm={name} {c} {from} {to} over={range.key} vmMemory={i.memory} oomMarkers={oomCurrent ? oomMarkers(oom, c.id) : []} onclose={() => toggle(c.id)} />
+              <div transition:unfold>
+                <ContainerDetail id={detailId(keys[n])} vm={name} {c} {from} {to} over={range.key} vmMemory={i.memory} oomMarkers={oomCurrent ? oomMarkers(oom, c.id) : []} onclose={() => toggle(c.id)} />
               </div>
             {/if}
           </div>
@@ -361,6 +371,9 @@
   .column-heads + :global(.compose) > :global(.project), .column-heads + .rows > .row:first-child > :global(.line) { border-top: 0; }
   .narrow-order { display: none; }
   .cname { font-weight: 500; }
+  /* As the name it is, not a button's chrome: the row says it opens. */
+  button.open { all: unset; cursor: pointer; font-weight: 500; }
+  button.open:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   .cid { margin-left: 0.4rem; }
   #oom tbody tr.clickable { cursor: pointer; }
   #oom .when { white-space: nowrap; }

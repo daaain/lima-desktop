@@ -12,6 +12,7 @@
   import { distinctKeys } from '$lib/keys';
   import { api, type Snapshot, type Stack, type Theme, type TopApps, type Warn } from '$lib/api';
   import { inOrder } from '$lib/inOrder';
+  import { onTabKey } from '$lib/tabKeys';
   import {
     agoLabel, allocatedAside, allocatedTip, amount, appTip, APPS_PENDING, chartLabel, containersByVm, containerTip, insideAside, insideTip, layerAside, layerFigure, layers, listsTop, ofSentence,
     parseTab, parseTabRange, percentFigure, rangeLabel, recordingPhrase, reportedFigure, reportedTip, shares, sizeTip, stackChart, stackRefreshMs, stalledTip, topApps,
@@ -191,11 +192,12 @@
 <div class="popover" class:warm={now?.hot} bind:this={root}>
   <div class="seg" role="tablist" aria-label="Resource">
     {#each TABS as t (t.key)}
-      <button role="tab" aria-selected={tab === t.key} onclick={() => (tab = t.key)}>{t.label}</button>
+      <button role="tab" id="tab-{t.key}" aria-selected={tab === t.key} aria-controls="panel" tabindex={tab === t.key ? 0 : -1}
+        onclick={() => (tab = t.key)} onkeydown={(e) => onTabKey(e, TABS.map((t) => t.key), tab, (k) => (tab = k))}>{t.label}</button>
     {/each}
   </div>
 
-  <div role="tabpanel" aria-label={TABS.find((t) => t.key === tab)?.label}>
+  <div role="tabpanel" id="panel" aria-labelledby="tab-{tab}">
     <div class="top">
       <div class="big num" class:hot={now?.hot}>{percentFigure(now)}</div>
       <div class="ranges" role="group" aria-label="Over the last">

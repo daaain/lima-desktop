@@ -5,14 +5,18 @@
   import { band, ownLimit, selfMemory } from './almanac';
   import { inOrder } from './inOrder';
   import { portLinks, portsElsewhere } from './containers';
+  import { onTabKey } from './tabKeys';
   import { live } from './live.svelte';
+  import { closeToOpener } from './opener';
   import { openUrl } from '@tauri-apps/plugin-opener';
   import type { RangeKey } from './ranges';
   import Bar from './Bar.svelte';
   import Chart from './Chart.svelte';
   import LogView from './LogView.svelte';
 
-  let { vm, c, from, to, over, vmMemory, oomMarkers = [], onclose }: {
+  let { id: detail, vm, c, from, to, over, vmMemory, oomMarkers = [], onclose }: {
+    /** Its id, which its line's `aria-controls` names (opener.ts). */
+    id: string;
     vm: string; c: ContainerLive; from: number; to: number;
     /** The range [from, to] is, for its sentence to say. */
     over: RangeKey;
@@ -25,7 +29,10 @@
   // A stopped container's ports are only what it would publish: nothing answers there to open.
   const running = $derived(c.state === 'running');
   const limit = $derived(ownLimit(c.latest.mem_limit, vmMemory));
-  let tab = $state<'metrics' | 'logs' | 'inspect'>('metrics');
+  const TABS = ['metrics', 'logs', 'inspect'] as const;
+  let tab = $state<(typeof TABS)[number]>('metrics');
+  // The tabs' and their panel's ids: several details can be open on one page.
+  const uid = $props.id();
   let series = $state<Series | null>(null);
   // The range the series was fetched for: the sentence says it, not one just chosen, until it lands.
   let fetchedOver = $state<RangeKey | null>(null);
@@ -55,16 +62,20 @@
   });
 </script>
 
-<section class="wash detail">
+<section class="wash detail" id={detail}>
   <div class="head">
     <div class="title">
-      <h3 class="serif"><bdi>{name}</bdi></h3>
+      <!-- A place to put the focus on (from an OOM kill, `vm/[name]`), not a Tab stop. -->
+      <h3 class="serif" tabindex="-1"><bdi>{name}</bdi></h3>
       <span class="muted image"><bdi>{image}</bdi></span>
     </div>
-    {#each ['metrics', 'logs', 'inspect'] as const as t}
-      <button class:active={tab === t} onclick={() => (tab = t)}>{t}</button>
-    {/each}
-    <button onclick={onclose} aria-label="Close">✕</button>
+    <div class="tabs" role="tablist" aria-label="Container">
+      {#each TABS as t}
+        <button role="tab" id="{uid}-{t}" aria-selected={tab === t} aria-controls="{uid}-panel" tabindex={tab === t ? 0 : -1}
+          class:active={tab === t} onclick={() => (tab = t)} onkeydown={(e) => onTabKey(e, TABS, tab, (k) => (tab = k))}>{t}</button>
+      {/each}
+    </div>
+    <button onclick={() => closeToOpener(detail, onclose)} aria-label="Close">✕</button>
   </div>
   {#if ports.length}
     <div class="ports num">
@@ -88,45 +99,50 @@
     </div>
   {/if}
   {#if error}<p class="error">{error}</p>{/if}
-  {#if tab === 'metrics'}
-    {#if c.entity == null}
-      <p class="muted">No history for this container yet.</p>
-    {:else}
-      {#if self && series}
-        <div class="self num">
-          <p class="serif">{self.sentence}</p>
-          <p class="muted">{self.figures}</p>
-          {#if self.ownSaid}<p class="muted">{self.ownSaid}</p>{/if}
-          <Bar pct={self.pct} behind={self.behind} own={self.own} tick={self.tick} hot={self.hot} label={self.label} />
+  <div class="panel" role="tabpanel" id="{uid}-panel" aria-labelledby="{uid}-{tab}">
+    {#if tab === 'metrics'}
+      {#if c.entity == null}
+        <p class="muted">No history for this container yet.</p>
+      {:else}
+        {#if self && series}
+          <div class="self num">
+            <p class="serif">{self.sentence}</p>
+            <p class="muted">{self.figures}</p>
+            {#if self.ownSaid}<p class="muted">{self.ownSaid}</p>{/if}
+            <Bar pct={self.pct} behind={self.behind} own={self.own} tick={self.tick} hot={self.hot} label={self.label} />
+          </div>
+        {/if}
+        <div class="charts">
+          <Chart title="Memory" data={series} format={(v) => bytes(v)} ceiling={limit} markers={oomMarkers}
+            lines={[
+              { key: 'mem', label: 'used', color: '--series-1' },
+              // The bar's strongest part's colour: the CPU chart beside this one has the third series'.
+              { key: 'mem_own', label: "processes' own", color: '--fg' },
+              { key: 'mem_peak', label: 'peak (cgroup)', color: '--series-2' },
+            ]} />
+          <Chart title="CPU" data={series} format={cpuLabel}
+            lines={[{ key: 'cpu_mc', label: 'cpu', color: '--series-3' }]} />
+          <Chart title="Network" data={series} format={(v) => `${bytes(v)}/s`}
+            lines={[{ key: 'net_rx_bps', label: 'in', color: '--series-4' }, { key: 'net_tx_bps', label: 'out', color: '--series-1' }]} />
+          <Chart title="Block I/O" data={series} format={(v) => `${bytes(v)}/s`}
+            lines={[{ key: 'blk_r_bps', label: 'read', color: '--series-4' }, { key: 'blk_w_bps', label: 'write', color: '--series-2' }]} />
         </div>
       {/if}
-      <div class="charts">
-        <Chart title="Memory" data={series} format={(v) => bytes(v)} ceiling={limit} markers={oomMarkers}
-          lines={[
-            { key: 'mem', label: 'used', color: '--series-1' },
-            // The bar's strongest part's colour: the CPU chart beside this one has the third series'.
-            { key: 'mem_own', label: "processes' own", color: '--fg' },
-            { key: 'mem_peak', label: 'peak (cgroup)', color: '--series-2' },
-          ]} />
-        <Chart title="CPU" data={series} format={cpuLabel}
-          lines={[{ key: 'cpu_mc', label: 'cpu', color: '--series-3' }]} />
-        <Chart title="Network" data={series} format={(v) => `${bytes(v)}/s`}
-          lines={[{ key: 'net_rx_bps', label: 'in', color: '--series-4' }, { key: 'net_tx_bps', label: 'out', color: '--series-1' }]} />
-        <Chart title="Block I/O" data={series} format={(v) => `${bytes(v)}/s`}
-          lines={[{ key: 'blk_r_bps', label: 'read', color: '--series-4' }, { key: 'blk_w_bps', label: 'write', color: '--series-2' }]} />
-      </div>
+    {:else if tab === 'logs'}
+      <LogView vm={where} {id} {name} {image} />
+    {:else}
+      <!-- Focusable, as WebKit doesn't let the keyboard scroll a box that isn't (axe's scrollable-region-focusable). -->
+      <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+      <pre tabindex="0" role="region" aria-label="Inspect output">{inspect || '…'}</pre>
     {/if}
-  {:else if tab === 'logs'}
-    <LogView vm={where} {id} {name} {image} />
-  {:else}
-    <pre>{inspect || '…'}</pre>
-  {/if}
+  </div>
 </section>
 
 <style>
-  .detail { display: grid; gap: 0.75rem; }
+  .detail, .panel { display: grid; gap: 0.75rem; }
   /* The tabs stay on the name's line: a long name or image wraps within the title instead. */
   .head { display: flex; align-items: baseline; gap: 0.5rem; }
+  h3:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   .title { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; align-items: baseline; column-gap: 0.5rem; }
   .title > * { overflow-wrap: anywhere; }
   .head > button { flex: none; }
@@ -136,6 +152,7 @@
   .ports { display: flex; align-items: baseline; gap: 0.75rem; font-size: 0.85rem; }
   .ports ul { display: grid; gap: 0.15rem; margin: 0; padding: 0; list-style: none; }
   .muted { color: var(--muted); font-size: 0.8rem; }
+  .tabs { display: flex; gap: 0.5rem; }
   .head button { height: 1.9rem; padding: 0 0.8rem; font-size: 0.82rem; }
   .self { display: grid; gap: 0.2rem; max-width: 36rem; --bar-height: 7px; }
   .self p { margin: 0; line-height: 1.35; }

@@ -3,14 +3,17 @@
   // directory at a time, and the start of a file. Read-only, over Lima's ssh (guest_files.rs):
   // nothing here can change what's there. Inset, it sits inside another detail (a layer's, under
   // its step) and leaves closing to it.
-  import { onMount } from 'svelte';
+  import { onMount, tick } from 'svelte';
   import { api, type FileListing, type FilePeek, type FileSource } from './api';
   import { age, bytes } from './format';
   import Guarded from './Guarded.svelte';
   import { distinctKeys } from './keys';
   import { visible } from './visible';
+  import { closeToOpener } from './opener';
 
-  let { vm, source, label, onclose, inset = false }: {
+  let { id, vm, source, label, onclose, inset = false }: {
+    /** Its id, which its line's `aria-controls` names (opener.ts); given with `onclose`. */
+    id?: string;
     vm: string; source: FileSource;
     /** The folder's name, at the head of the path. */
     label: string;
@@ -44,38 +47,61 @@
     return parts.map((part, i) => ({ part, path: parts.slice(0, i + 1).join('/') }));
   });
 
-  /** Ask, keeping only the latest answer; the error is said, unless `quiet` (the caller handles it). */
-  async function ask<T>(call: () => Promise<T>, done: (value: T) => void, quiet = false): Promise<boolean> {
+  /**
+   * Ask, keeping only the latest answer; the error is said, unless `quiet` (the caller handles it).
+   * Says what became of it: shown, overtaken by a later step (and neither shown nor said), or failed.
+   */
+  async function ask<T>(call: () => Promise<T>, done: (value: T) => void, quiet = false): Promise<'shown' | 'overtaken' | 'failed'> {
     const n = ++asked;
     busy = true;
     error = null;
     try {
       const value = await call();
-      if (n === asked) done(value);
-      return true;
+      if (n !== asked) return 'overtaken';
+      done(value);
+      return 'shown';
     } catch (e) {
-      if (n === asked && !quiet) error = String(e);
-      return false;
+      if (n !== asked) return 'overtaken';
+      if (!quiet) error = String(e);
+      return 'failed';
     } finally {
       if (n === asked) busy = false;
     }
   }
+  // Each step taken from here (an entry, the path, Back) draws a new view in place of the control
+  // that took it, so focus would drop to <body> and Tab start again from the top. Once the view is
+  // drawn, focus goes to its first entry, else to what it says (the file, or that it's binary or
+  // empty); unless it has gone somewhere else meanwhile.
+  let section = $state<HTMLElement>();
+  async function arrive() {
+    await tick();
+    const active = document.activeElement;
+    if (!section || (active && active !== document.body && !section.contains(active))) return;
+    (section.querySelector<HTMLElement>('.entries button.entry') ?? section.querySelector<HTMLElement>('[data-arrive]'))?.focus();
+  }
+
   const showList = (l: FileListing) => ((listing = l), (peek = null));
-  const open = (path: string) => ask(() => api.files(vm, source, path), showList);
-  const read = (path: string) => ask(() => api.file(vm, source, path), (p) => (peek = p));
+  const list = (path: string) => ask(() => api.files(vm, source, path), showList);
+  // Only a view drawn takes the focus: an answer overtaken by a later step would move it as the
+  // keyboard goes on.
+  const open = async (path: string) => (await list(path)) === 'shown' && arrive();
+  const read = async (path: string) => (await ask(() => api.file(vm, source, path), (p) => (peek = p))) === 'shown' && arrive();
   // A link may lead to a directory or a file: try it as a directory, else read it.
   async function follow(path: string) {
-    if (!(await ask(() => api.files(vm, source, path), showList, true))) read(path);
+    const listed = await ask(() => api.files(vm, source, path), showList, true);
+    if (listed === 'shown') arrive();
+    else if (listed === 'failed') read(path);
   }
 
   // Once, as it opens: not an effect, which would rerun (and go back to the top) whenever the
-  // page's list refreshes and hands this a new row with the same names in it.
+  // page's list refreshes and hands this a new row with the same names in it. Focus stays on what
+  // opened it.
   onMount(() => {
-    open('');
+    list('');
   });
 </script>
 
-<section class="detail" class:wash={!inset} class:inset>
+<section class="detail" class:wash={!inset} class:inset {id} bind:this={section}>
   <div class="head">
     <nav class="path serif" aria-label="Where in the folder">
       <button class="crumb" onclick={() => open('')} disabled={!crumbs.length && !peek}><bdi>{visible(label)}</bdi></button>
@@ -92,7 +118,7 @@
     <span class="spacer"></span>
     {#if busy}<span class="muted">…</span>{/if}
     {#if peek}<button onclick={() => open(crumbs.slice(0, -1).map((c) => c.part).join('/'))}>Back to the folder</button>{/if}
-    {#if onclose}<button onclick={onclose} aria-label="Close">✕</button>{/if}
+    {#if onclose}<button onclick={() => (id ? closeToOpener(id, onclose) : onclose())} aria-label="Close">✕</button>{/if}
   </div>
   {#if error}<p class="error">{error}</p>{/if}
 
@@ -100,21 +126,23 @@
   {#if peek}
     <!-- What it is said first: a file, and how big, so a binary one isn't taken for a folder that won't open. -->
     {#if peek.text == null}
-      <p class="note num">A binary file of {bytes(peek.size)}. It isn't text, so there's nothing to show here.</p>
+      <p class="note num" tabindex="-1" data-arrive>A binary file of {bytes(peek.size)}. It isn't text, so there's nothing to show here.</p>
     {:else if peek.size === 0}
-      <p class="note">An empty file.</p>
+      <p class="note" tabindex="-1" data-arrive>An empty file.</p>
     {:else}
       <p class="muted num">
         A text file of {bytes(peek.size)}{#if peek.truncated}; only the first {bytes(SHOWN)} is shown{/if}.
       </p>
-      <pre>{peek.text}</pre>
+      <!-- A Tab stop, as WebKit doesn't let the keyboard scroll a box that isn't (axe's scrollable-region-focusable). -->
+      <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+      <pre tabindex="0" role="region" aria-label={peek.path.split('/').pop()} data-arrive>{peek.text}</pre>
     {/if}
   {:else if listing}
     {#if listing.entries.length}
-      <p class="muted num">{counted(listing.entries)}{#if listing.truncated} (only the first {listing.entries.length} listed){/if}</p>
+      <p class="muted num" tabindex="-1" data-arrive>{counted(listing.entries)}{#if listing.truncated} (only the first {listing.entries.length} listed){/if}</p>
     {/if}
     {#if listing.entries.length === 0}
-      <p class="note">Empty.</p>
+      <p class="note" tabindex="-1" data-arrive>Empty.</p>
     {:else}
       <ul class="entries num">
         {#each listing.entries as e, i (entryKeys[i])}

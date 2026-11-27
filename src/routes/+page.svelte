@@ -18,13 +18,25 @@
   import SortHead from '$lib/SortHead.svelte';
   import { glide } from '$lib/motion';
   import { Ordering } from '$lib/ordering.svelte';
+  import { focusWithin } from '$lib/focusWithin';
+  import { Held, heldOrder } from '$lib/heldOrder';
   import { BY_NAME, sortRunning, sortStopped, VM_COLUMNS, VM_SORTS, type VmSort } from '$lib/vmSort';
 
   const vms = $derived(live.snapshot?.vms ?? []);
   // By name unless a column head was chosen; the choice is kept for next time. A live order (the
   // fullest memory first, say) can change at every measurement: the rows glide to their places.
   const ordering = new Ordering('vms', VM_SORTS, BY_NAME);
-  const running = $derived(sortRunning(vms.filter((v) => v.instance.status === 'Running'), ordering.current));
+  const sorted = $derived(sortRunning(vms.filter((v) => v.instance.status === 'Running'), ordering.current));
+  // While the keyboard is in a VM's row, the rows keep the order they had as it came in, so the one
+  // it's on doesn't jump away (or lose the focus) as a live order changes (heldOrder.ts).
+  // Where the focus is, is looked at each poll and as it moves in or out of the rows.
+  let fleet = $state<HTMLElement>();
+  let focusMoved = $state(0);
+  const held = new Held<VmLive[]>();
+  const running = $derived.by(() => {
+    void focusMoved;
+    return held.shown(sorted, focusWithin(fleet, 'article.row.vm'), (now, was) => heldOrder(now, was, (v) => v.instance.name));
+  });
   const others = $derived(sortStopped(vms.filter((v) => v.instance.status !== 'Running'), ordering.current));
   const heads = $derived<{ key: VmSort; text: string }[]>([
     { key: 'name', text: `${countWord(running.length)} ${running.length === 1 ? 'is' : 'are'} running` },
@@ -97,7 +109,7 @@
   </div>
 
   {#if running.length}
-    <section class="fleet">
+    <section class="fleet" bind:this={fleet} onfocusin={() => focusMoved++} onfocusout={() => focusMoved++}>
       <!-- A head orders the list by its column: the rule under the chosen one is drawn heavier. -->
       <div class="row heads column-heads" role="group" aria-label="Order the VMs by">
         {#each heads as h (h.key)}
