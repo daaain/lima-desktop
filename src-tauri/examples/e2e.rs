@@ -1132,6 +1132,14 @@ fn line_ms(line: &str) -> Option<i64> {
     Some(chrono::DateTime::parse_from_rfc3339(stamp).ok()?.timestamp_millis())
 }
 
+/// How many ms past its own a line's stamp could stand for, as the UI's `pageUntil` reckons it:
+/// 999 for one to the second (podman 5), 99 or 9 for one or two digits of fraction, else none.
+fn stamp_span(line: &str) -> i64 {
+    let stamp = line.split_once(' ').map_or(line, |(s, _)| s);
+    let digits = stamp.split_once('.').map_or(0, |(_, f)| f.bytes().take_while(u8::is_ascii_digit).count());
+    [999, 99, 9].get(digits).copied().unwrap_or(0)
+}
+
 /// Paging back a log with `until`, under each log driver podman has here: the lines up to a moment
 /// are every line written up to the end of its millisecond and none after, which is what the log
 /// view's Fetch earlier counts on to join pages without a gap or a repeat. journald and k8s-file
@@ -1191,9 +1199,12 @@ async fn logs_until_with(pod: &Libpod, driver: &str, name: &str) -> Result<Strin
     }
     // The moment: the middle line's millisecond; every line in it is wanted, none after.
     let pivot = stamped[LOG_LINES / 2].0;
+    // Asked up to the end of what its stamp could stand for, as the UI asks: under podman 5 that's
+    // the whole second, every line stamped with it included.
+    let until = pivot + stamp_span(stamped[LOG_LINES / 2].1);
     let want: Vec<&str> = stamped.iter().filter(|(ms, _)| *ms <= pivot).map(|(_, l)| *l).collect();
     let page =
-        pod.logs(&id, 10_000, None, Some(pivot)).await.map_err(|e| format!("{driver}: logs(until) failed: {e}"))?;
+        pod.logs(&id, 10_000, None, Some(until)).await.map_err(|e| format!("{driver}: logs(until) failed: {e}"))?;
     let got: Vec<&str> = page.iter().map(|l| l.line.as_str()).collect();
     if got != want {
         let first_diff = got.iter().zip(&want).position(|(a, b)| a != b).unwrap_or(got.len().min(want.len()));
@@ -1206,7 +1217,7 @@ async fn logs_until_with(pod: &Libpod, driver: &str, name: &str) -> Result<Strin
         ));
     }
     // And a tail within it: the newest lines up to the moment, not the file's newest.
-    let tail = pod.logs(&id, 10, None, Some(pivot)).await.map(|p| p.into_iter().map(|l| l.line).collect::<Vec<_>>());
+    let tail = pod.logs(&id, 10, None, Some(until)).await.map(|p| p.into_iter().map(|l| l.line).collect::<Vec<_>>());
     if tail.as_deref().ok() != Some(&want[want.len() - 10..].iter().map(|l| l.to_string()).collect::<Vec<_>>()) {
         return Err(format!("{driver}: tail 10 until {pivot} isn't the 10 lines before it: {tail:?}"));
     }
@@ -1397,6 +1408,16 @@ fn main() -> std::process::ExitCode {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_stamp_s_span_is_what_its_precision_leaves_open() {
+        // As the UI's pageUntil: podman 5 stamps to the second, podman 6 to the nanosecond.
+        assert_eq!(stamp_span("2026-11-27T00:10:01Z line1"), 999);
+        assert_eq!(stamp_span("2026-11-27T00:10:01.5Z line1"), 99);
+        assert_eq!(stamp_span("2026-11-27T00:10:01.25Z line1"), 9);
+        assert_eq!(stamp_span("2026-11-27T00:10:01.123456789Z line1"), 0);
+        assert_eq!(line_ms("2026-11-27T00:10:01Z x").map(|ms| ms % 1000), Some(0));
+    }
 
     #[test]
     fn the_home_defaults_beside_the_users_own_and_can_be_overridden() {

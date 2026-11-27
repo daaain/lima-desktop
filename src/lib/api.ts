@@ -411,8 +411,9 @@ export const api = {
   containerAction: (vm: string, id: string, action: ContainerAction) =>
     invoke<void>('container_action', { vm, id, action }),
   /** A container's newest `tail` lines (at most 20,000), only those since `since` and up to the end
-   * of the millisecond `until` (both Unix ms) if given: `until` pages back, and sends that
-   * millisecond whole, lines already held included. */
+   * of the millisecond `until` (both Unix ms) if given: `until` pages back (`pageUntil` sets it to
+   * the end of what the oldest held line's stamp could stand for), and sends that millisecond whole,
+   * lines already held included. */
   containerLogs: (vm: string, id: string, tail = 500, since: number | null = null, until: number | null = null) =>
     invoke<RawLogLine[]>('container_logs', { vm, id, tail, since, until }),
   containerInspect: (vm: string, id: string) => invoke<unknown>('container_inspect', { vm, id }),

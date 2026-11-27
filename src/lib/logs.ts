@@ -50,8 +50,10 @@ const CONTROLS = /[\x00-\x08\x0b-\x0c\x0e-\x1f\x7f-\x9f]/g;
 export const plainText = (line: string) =>
   bidiVisible(line.replace(ESCAPES, '').replace(/[\r\n]+$/, '').replace(/[\r\n]+/g, ' ').replace(CONTROLS, ''));
 
-// How many ms a stamp could stand for past its own, by how many digits its fraction has: none (to
-// the second, as podman 5 writes them), one or two; to the ms or finer, none.
+// At most how many ms a stamp could stand for past its own, by how many digits its fraction has:
+// none (to the second, as podman 5 writes them), one or two; to the ms or finer, none. At most: a
+// stamp to the nanosecond whose trailing zeros were trimmed (`.5Z`) reads as coarser than it is,
+// which only asks a page past lines already held, and `withoutOverlap` drops those.
 const SPAN = [999, 99, 9];
 
 /**
@@ -387,8 +389,8 @@ export interface Held {
   tooMuch?: boolean;
   /** Set once earlier lines were fetched: the oldest held line's time, whether there may be more
    * before it, whether the view holds as much as it will, and whether the last page brought
-   * nothing new (`stuck`: more lines in one millisecond than a fetch holds, so none can reach past
-   * them). */
+   * nothing new (`stuck`: more lines on one stamp, a millisecond or podman 5's whole second, than
+   * a fetch holds, so none can reach past them). */
   paged?: { from: number | null; more: boolean; full: boolean; stuck?: boolean };
   /** For saying the day only where it isn't today. */
   now?: number;
