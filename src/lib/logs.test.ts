@@ -250,6 +250,19 @@ describe('paging back', () => {
     expect(texts(withoutOverlap([l(1, 'x')], [{ ...l(0, 'q'), at: null }]))).toEqual(['1:x']);
   });
 
+  it('leaves out what was written after the lines held, when all of them share the stamp the page reaches', () => {
+    // podman 5 stamps to the second: every line held is of second 2, the page is asked up to its
+    // end, and the guest wrote on in that second after the lines held were fetched.
+    const held = [l(2, 'a'), l(2, 'b')];
+    const page = [l(1, 'x'), l(2, 'early'), l(2, 'a'), l(2, 'b'), l(2, 'later'), l(2, 'a')];
+    expect(texts(withoutOverlap(page, held))).toEqual(['1:x', '2:early']);
+    expect(texts(joinEarlier(held, page).lines)).toEqual(['1:x', '2:early', '2:a', '2:b']);
+    // Nothing of the held lines' run in the page (all of it written after): nothing from there on.
+    expect(texts(withoutOverlap([l(2, 'later'), l(2, 'on')], held))).toEqual([]);
+    // Lines held past the page's last stamp: nothing written after them can be in the page.
+    expect(texts(withoutOverlap([l(1, 'x'), l(2, 'early'), l(2, 'a')], [l(2, 'a'), l(3, 'c')]))).toEqual(['1:x', '2:early']);
+  });
+
   it('drops the repeats in time in proportion to the lines, however many share a millisecond', () => {
     const n = 200_000;
     const held = Array.from({ length: n }, () => l(5, 'tick'));

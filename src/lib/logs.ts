@@ -320,6 +320,11 @@ const identity = (l: LogLine) => `${l.at}\u0000${l.stream ?? ''}\u0000${l.text}`
  * there on are lines held, and those of that stamp written before the oldest held. Lines can share
  * a stamp, and read alike in it (a repeated message), so the held lines in that stretch are counted
  * by their time, stream and text, and as many of each are dropped from the page's newest end.
+ * When every line held is of that stretch (podman 5 stamps to the second, and a busy guest writes
+ * more in one than a fetch holds), the guest may have written on in it after they were fetched:
+ * those lines come after the newest held, and are left out with it. (After the last line alike
+ * to it: should the guest have written that same line again since, what it wrote in between
+ * still comes before the lines held.)
  * Linear: a guest can write as many lines to one stamp as it likes.
  */
 export function withoutOverlap(page: LogLine[], held: LogLine[]): LogLine[] {
@@ -330,13 +335,20 @@ export function withoutOverlap(page: LogLine[], held: LogLine[]): LogLine[] {
   while (start > 0 && page[start - 1].at != null && page[start - 1].at! >= from) to = Math.max(to, page[--start].at!);
   if (start === page.length) return page;
   const counts = new Map<string, number>();
+  let counted = 0;
   for (const l of held) {
     if (l.at == null || l.at > to) break;
     const k = identity(l);
     counts.set(k, (counts.get(k) ?? 0) + 1);
+    counted++;
+  }
+  let end = page.length;
+  if (counted === held.length) {
+    const newest = identity(held[held.length - 1]);
+    while (end > start && identity(page[end - 1]) !== newest) end--;
   }
   const kept: LogLine[] = [];
-  for (let i = page.length - 1; i >= start; i--) {
+  for (let i = end - 1; i >= start; i--) {
     const k = identity(page[i]);
     const c = counts.get(k);
     if (c) counts.set(k, c - 1);
