@@ -257,8 +257,12 @@ describe('paging back', () => {
     const page = [l(1, 'x'), l(2, 'early'), l(2, 'a'), l(2, 'b'), l(2, 'later'), l(2, 'a')];
     expect(texts(withoutOverlap(page, held))).toEqual(['1:x', '2:early']);
     expect(texts(joinEarlier(held, page).lines)).toEqual(['1:x', '2:early', '2:a', '2:b']);
+    // The newest held line written again since: the held lines are found as the run they are.
+    expect(texts(withoutOverlap([l(1, 'x'), l(2, 'early'), l(2, 'a'), l(2, 'b'), l(2, 'c'), l(2, 'b')], held))).toEqual(['1:x', '2:early']);
     // Nothing of the held lines' run in the page (all of it written after): nothing from there on.
     expect(texts(withoutOverlap([l(2, 'later'), l(2, 'on')], held))).toEqual([]);
+    // The page in another order than the lines held: as many of each as are held are dropped.
+    expect(texts(withoutOverlap([l(1, 'x'), l(2, 'b'), l(2, 'early'), l(2, 'a')], held))).toEqual(['1:x', '2:early']);
     // Lines held past the page's last stamp: nothing written after them can be in the page.
     expect(texts(withoutOverlap([l(1, 'x'), l(2, 'early'), l(2, 'a')], [l(2, 'a'), l(3, 'c')]))).toEqual(['1:x', '2:early']);
   });

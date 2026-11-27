@@ -313,18 +313,37 @@ export const mayBeEarlier = (raw: RawLogLine[], tail: number) => !!raw[0]?.earli
 
 const identity = (l: LogLine) => `${l.at}\u0000${l.stream ?? ''}\u0000${l.text}`;
 
+/** Where the last whole `run` starts in `seq`, or -1: Knuth–Morris–Pratt, linear in both. */
+function lastFound(run: number[], seq: number[]): number {
+  const border = new Array<number>(run.length).fill(0);
+  for (let i = 1, k = 0; i < run.length; i++) {
+    while (k > 0 && run[i] !== run[k]) k = border[k - 1];
+    if (run[i] === run[k]) k++;
+    border[i] = k;
+  }
+  let last = -1;
+  for (let i = 0, k = 0; i < seq.length; i++) {
+    while (k > 0 && seq[i] !== run[k]) k = border[k - 1];
+    if (seq[i] === run[k]) k++;
+    if (k === run.length) {
+      last = i + 1 - run.length;
+      k = border[k - 1];
+    }
+  }
+  return last;
+}
+
 /**
  * An earlier page without the lines it repeats. It was asked for up to the end of what the oldest
  * held line's stamp could stand for (`pageUntil`: its millisecond, or its whole second where podman
  * stamps to the second), which podman sends whole (`podman::logs_path`), so its lines stamped from
- * there on are lines held, and those of that stamp written before the oldest held. Lines can share
- * a stamp, and read alike in it (a repeated message), so the held lines in that stretch are counted
- * by their time, stream and text, and as many of each are dropped from the page's newest end.
- * When every line held is of that stretch (podman 5 stamps to the second, and a busy guest writes
- * more in one than a fetch holds), the guest may have written on in it after they were fetched:
- * those lines come after the newest held, and are left out with it. (After the last line alike
- * to it: should the guest have written that same line again since, what it wrote in between
- * still comes before the lines held.)
+ * there on are the held lines of that stretch, those of it written before them, and, when every
+ * line held is of it (podman 5 stamps to the second, and a busy guest writes more in one than a
+ * fetch holds), what the guest wrote after them. The held lines of the stretch are one run in the
+ * log, so the page is cut where it has that run: lines can share a stamp and read alike (a repeated
+ * message), and only the run as a whole places them. Should the page have it twice, the cut is
+ * before the later: a line shown twice rather than lines never shown. A page in another order has
+ * as many of each line held (by time, stream and text) dropped from its newest end.
  * Linear: a guest can write as many lines to one stamp as it likes.
  */
 export function withoutOverlap(page: LogLine[], held: LogLine[]): LogLine[] {
@@ -334,21 +353,27 @@ export function withoutOverlap(page: LogLine[], held: LogLine[]): LogLine[] {
   let to = from;
   while (start > 0 && page[start - 1].at != null && page[start - 1].at! >= from) to = Math.max(to, page[--start].at!);
   if (start === page.length) return page;
+  let run = 0;
+  while (run < held.length && held[run].at != null && held[run].at! <= to) run++;
+  const ids = new Map<string, number>();
+  const id = (l: LogLine) => {
+    const k = identity(l);
+    let n = ids.get(k);
+    if (n == null) ids.set(k, (n = ids.size));
+    return n;
+  };
+  const found = lastFound(held.slice(0, run).map(id), page.slice(start).map(id));
+  if (found >= 0) return page.slice(0, start + found);
+  // The page from its first line on is of that stretch, and hasn't the whole run: it was cut within
+  // it, or is all after it. Either way nothing in it was written before the lines held.
+  if (start === 0) return [];
   const counts = new Map<string, number>();
-  let counted = 0;
-  for (const l of held) {
-    if (l.at == null || l.at > to) break;
+  for (const l of held.slice(0, run)) {
     const k = identity(l);
     counts.set(k, (counts.get(k) ?? 0) + 1);
-    counted++;
-  }
-  let end = page.length;
-  if (counted === held.length) {
-    const newest = identity(held[held.length - 1]);
-    while (end > start && identity(page[end - 1]) !== newest) end--;
   }
   const kept: LogLine[] = [];
-  for (let i = end - 1; i >= start; i--) {
+  for (let i = page.length - 1; i >= start; i--) {
     const k = identity(page[i]);
     const c = counts.get(k);
     if (c) counts.set(k, c - 1);
