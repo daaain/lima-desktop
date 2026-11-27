@@ -1165,12 +1165,13 @@ async fn logs_until_with(pod: &Libpod, driver: &str, name: &str) -> Result<Strin
     let script = format!(
         "set -e\npodman rm -f {name} >/dev/null 2>&1 || true\n\
              podman run -d --log-driver {driver} --name {name} {image} \
-             sh -c 'i=1; while [ $i -le {LOG_LINES} ]; do echo line$i; i=$((i+1)); done; sleep 3600' \
-             | tail -c 64\n",
+             sh -c 'i=1; while [ $i -le {LOG_LINES} ]; do echo line$i; i=$((i+1)); done; sleep 3600'\n",
         image = image()
     );
     let out = shell(P5, &script, Duration::from_secs(120)).await;
-    let Some(id) = out.ok.then(|| out.stdout.trim().to_string()).filter(|id| !id.is_empty()) else {
+    // `podman run -d` ends with the container's id on a line of its own.
+    let id = out.stdout.lines().map(str::trim).rfind(|l| !l.is_empty()).unwrap_or_default().to_string();
+    let Some(id) = out.ok.then_some(id).filter(|id| id.len() == 64) else {
         return Err(format!("{driver}: couldn't start {name}: {}", out.evidence().join(" | ")));
     };
     let all = poll(Duration::from_secs(20), Duration::from_millis(500), || {
@@ -1179,7 +1180,8 @@ async fn logs_until_with(pod: &Libpod, driver: &str, name: &str) -> Result<Strin
     })
     .await;
     let Some(all) = all else {
-        return Err(format!("{driver}: fewer than {LOG_LINES} lines after 20 s"));
+        let now = pod.logs(&id, 10_000, None, None).await.map(|l| format!("{} lines", l.len()));
+        return Err(format!("{driver}: fewer than {LOG_LINES} lines after 20 s ({now:?})"));
     };
     let stamped: Vec<(i64, &str)> = all.iter().filter_map(|l| Some((line_ms(&l.line)?, l.line.as_str()))).collect();
     if stamped.len() != all.len() {
