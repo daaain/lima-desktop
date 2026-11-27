@@ -191,7 +191,7 @@
     <p class="note num">
       {fetchedSentence({
         n: lines.length, tail: fetched.tail, over: fetched.over && theLast(fetched.over), tooMuch: fetched.tooMuch,
-        paged: pages.n ? { from: lines[0]?.at ?? null, more: pages.more, full: pages.full } : undefined,
+        paged: pages.n ? { from: lines[0]?.at ?? null, more: pages.more, full: pages.full, stuck: pages.more && !pages.added } : undefined,
       })}
       {#if earlier}<button class="more" onclick={fetchEarlier} disabled={paging}>Fetch earlier</button>{/if}
       {#if more}<button class="more" onclick={() => (tail = more!)}>Fetch up to {more.toLocaleString('en-GB')}</button>{/if}

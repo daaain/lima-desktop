@@ -369,8 +369,10 @@ export interface Held {
    * fewer lines than were asked for). */
   tooMuch?: boolean;
   /** Set once earlier lines were fetched: the oldest held line's time, whether there may be more
-   * before it, and whether the view holds as much as it will. */
-  paged?: { from: number | null; more: boolean; full: boolean };
+   * before it, whether the view holds as much as it will, and whether the last page brought
+   * nothing new (`stuck`: more lines in one millisecond than a fetch holds, so none can reach past
+   * them). */
+  paged?: { from: number | null; more: boolean; full: boolean; stuck?: boolean };
   /** For saying the day only where it isn't today. */
   now?: number;
 }
@@ -394,6 +396,7 @@ export function fetchedSentence({ n, tail, over, tooMuch = false, paged, now = D
   if (paged) {
     const reach = paged.from != null ? `, from ${reachSaid(paged.from, now)} to now` : '';
     if (paged.full) return `The newest ${lines_(n)}${of}${reach}; that's as much as the view holds at once.`;
+    if (paged.stuck) return `The newest ${lines_(n)}${of}${reach}; earlier ones share a moment with these and can't be fetched apart.`;
     if (paged.more) return `The newest ${lines_(n)}${of}${reach}; there may be more.`;
     return `All ${lines_(n)}${of}${reach}.`;
   }

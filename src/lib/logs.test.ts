@@ -279,6 +279,9 @@ describe('sentences', () => {
     expect(paged({ more: false })).toBe('All 1,496 lines, from 14:05 to now.');
     expect(paged({ more: false }, 'the last hour')).toBe('All 1,496 lines of the last hour, from 14:05 to now.');
     expect(paged({ full: true })).toBe("The newest 1,496 lines, from 14:05 to now; that's as much as the view holds at once.");
+    // A page that brought nothing new (more lines in one millisecond than a fetch holds): there
+    // may be earlier ones, but no Fetch earlier can reach them, so the note doesn't offer it.
+    expect(paged({ stuck: true })).toBe("The newest 1,496 lines, from 14:05 to now; earlier ones share a moment with these and can't be fetched apart.");
     expect(paged({ from: new Date(2026, 10, 9, 23, 50).getTime() })).toBe('The newest 1,496 lines, from 9 Nov 23:50 to now; there may be more.');
     // What was fetched last says nothing of what's held.
     expect(said(1496, 500, null, { tooMuch: true, paged: { from, more: false, full: false }, now })).toBe('All 1,496 lines, from 14:05 to now.');
