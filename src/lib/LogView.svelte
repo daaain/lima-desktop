@@ -47,6 +47,8 @@
   let logBox = $state<HTMLElement>();
   let search = $state<HTMLInputElement>();
   let dialog = $state<HTMLDialogElement>();
+  // The Full window button: drawn afresh as the window closes (below), so focus is put back on it.
+  let opener = $state<HTMLButtonElement>();
 
   const logInOrder = inOrder();
   $effect(() => {
@@ -126,6 +128,9 @@
     for (const el of logBox.querySelectorAll<HTMLElement>('.ln')) if (el.offsetTop + el.offsetHeight > top) return el.dataset.n!;
     return null;
   }
+  // The viewer is drawn once, in the detail or in the window, so its search and log box are one:
+  // the Full window button goes as the window opens. Closing, the dialog gives focus back to that
+  // button, gone, so the one drawn afresh takes it.
   async function move(to: boolean) {
     const n = topLine();
     full = to;
@@ -133,7 +138,7 @@
     if (to) {
       dialog?.showModal();
       search?.focus();
-    }
+    } else opener?.focus();
     if (!logBox) return;
     const el = n != null ? logBox.querySelector<HTMLElement>(`.ln[data-n="${n}"]`) : null;
     logBox.scrollTop = el ? el.offsetTop : logBox.scrollHeight;
@@ -183,7 +188,7 @@
     {#if full}
       <button class="icon" onclick={() => dialog?.close()} aria-label="Close the full window" title="Back to the detail (Esc)">✕</button>
     {:else}
-      <button class="icon" onclick={() => move(true)} aria-label="Full window" title="Read the log in a full window">⤢</button>
+      <button class="icon" onclick={() => move(true)} aria-label="Full window" title="Read the log in a full window" bind:this={opener}>⤢</button>
     {/if}
   </div>
   {#if error}<p class="error">{error}</p>{/if}

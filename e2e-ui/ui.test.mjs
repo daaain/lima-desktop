@@ -2647,3 +2647,58 @@ test('Refresh and Measure on Images and Volumes keep focus while they work', asy
   assert.deepEqual(errors, []);
   await close();
 });
+
+test("Closing a container's detail, an image's layers or a volume's files gives focus back to its line", async () => {
+  const { page, errors, close } = await open('/containers');
+  // Each line opens its detail with Enter, says which it controls, and takes focus back from its ✕.
+  const opensAndCloses = async (name) => {
+    const line = page.locator('.line', { has: page.locator('.name', { hasText: name }) }).first();
+    await line.focus();
+    await page.keyboard.press('Enter');
+    await page.waitForFunction((el) => el.getAttribute('aria-expanded') === 'true', await line.elementHandle());
+    const detail = page.locator(`[id="${await line.getAttribute('aria-controls')}"]`);
+    await detail.waitFor();
+    assert.ok(await detail.evaluate((el) => el.matches('section.detail')), 'it controls its detail');
+    await detail.getByRole('button', { name: 'Close', exact: true }).focus();
+    await page.keyboard.press('Enter');
+    await page.waitForFunction(() => document.querySelectorAll('section.detail').length === 0);
+    assert.ok(await line.evaluate((el) => el === document.activeElement), `focus is back on ${name}'s line`);
+    assert.equal(await line.getAttribute('aria-expanded'), 'false');
+  };
+  await opensAndCloses(/^frontend/);
+  await page.goto(`${base}/vm/harbor`);
+  await opensAndCloses(/^harbor-devbox/);
+  await page.goto(`${base}/images`);
+  await opensAndCloses('atlas_frontend');
+  await page.goto(`${base}/volumes`);
+  await opensAndCloses(/^atlas_pgdata$/);
+  assert.deepEqual(errors, []);
+  await close();
+});
+
+test('The full-window log gives focus back to its Full window button as it closes, by Escape or its own button', async () => {
+  const { page, errors, close } = await open('/containers');
+  const line = page.locator('.line', { has: page.locator('.name', { hasText: /^frontend/ }) }).first();
+  await line.focus();
+  await page.keyboard.press('Enter');
+  const detail = page.locator('section.detail');
+  await detail.getByRole('button', { name: 'logs' }).focus();
+  await page.keyboard.press('Enter');
+  await detail.locator('.ln').first().waitFor();
+  const win = page.getByRole('dialog', { name: /frontend-1's log$/ });
+  for (const how of ['Escape', 'its button']) {
+    await detail.getByRole('button', { name: 'Full window' }).focus();
+    await page.keyboard.press('Enter');
+    await win.waitFor();
+    assert.equal(await focused(page), 'Search the log');
+    if (how === 'Escape') await page.keyboard.press('Escape');
+    else {
+      await win.getByRole('button', { name: 'Close the full window' }).focus();
+      await page.keyboard.press('Enter');
+    }
+    await win.waitFor({ state: 'hidden' });
+    await focusComesTo(page, 'Full window');
+  }
+  assert.deepEqual(errors, []);
+  await close();
+});

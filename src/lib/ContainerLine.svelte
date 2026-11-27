@@ -16,7 +16,7 @@
   import MemoryShare from './MemoryShare.svelte';
   import Sketch from './Sketch.svelte';
 
-  let { vm, c, history, vmHistory, vmCpus, vmMemory, second, now, selected = false, onselect, onerror }: {
+  let { vm, c, history, vmHistory, vmCpus, vmMemory, second, now, selected = false, controls, onselect, onerror }: {
     vm: string; c: ContainerLive;
     /** The range of this container, and of its VM (history.svelte.ts). */
     history: Series | undefined; vmHistory: Series | undefined;
@@ -24,7 +24,10 @@
     /** What the line under the name says: the image, or what it's doing (pids and traffic). */
     second: 'image' | 'activity';
     now: number | undefined;
-    selected?: boolean; onselect: () => void; onerror: (message: string | null) => void;
+    selected?: boolean;
+    /** The id of the detail it opens, named while that's open. */
+    controls: string;
+    onselect: () => void; onerror: (message: string | null) => void;
   } = $props();
 
   const l = $derived(c.latest);
@@ -33,7 +36,7 @@
   const oom = $derived(l.oom_kills ?? 0);
 </script>
 
-<div class="line num" class:off={!running} role="button" tabindex="0" aria-expanded={selected} onclick={onselect}
+<div class="line num" class:off={!running} role="button" tabindex="0" aria-expanded={selected} aria-controls={selected ? controls : undefined} onclick={onselect}
   onkeydown={(e) => { if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); onselect(); } }}>
   <div class="who">
     <span class="name serif" title={visible(c.name)}><bdi>{visible(c.composeService ?? c.name)}</bdi>{#if oom > 0}<span class="badge alert" title="Processes killed for running out of memory since it started">{oom} OOM</span>{/if}</span>

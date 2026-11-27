@@ -5,6 +5,7 @@
   import { api, type ContainerLive, type OomEvent, type Series, type VmStall } from '$lib/api';
   import { bytes } from '$lib/format';
   import { distinctKeys } from '$lib/keys';
+  import { detailId } from '$lib/opener';
   import { containersPart, containersSentence, cpuTip, gauges, memoryTip, vmHeadline } from '$lib/almanac';
   import { History } from '$lib/history.svelte';
   import type { Hint } from '$lib/rightsize';
@@ -182,7 +183,7 @@
     if (!open.includes(id)) open = [...open, id];
     const project = vm?.containers.find((c) => c.id === id)?.composeProject;
     if (project && folds.has(name, project)) folds.toggle(name, project);
-    tick().then(() => document.getElementById(`detail-${id}`)?.scrollIntoView({ block: 'center', behavior: 'smooth' }));
+    tick().then(() => document.getElementById(detailId(id))?.scrollIntoView({ block: 'center', behavior: 'smooth' }));
   }
 
   async function loadDf() {
@@ -313,10 +314,10 @@
         {#each rows as c, n (keys[n])}
           <div class="row" animate:glide>
             <ContainerLine vm={name} {c} history={history.get(lineHistory(name, c))} vmHistory={history.get(vm.entity)} vmCpus={i.cpus} vmMemory={i.memory} second="activity" now={live.snapshot?.updated}
-              selected={open.includes(c.id)} onselect={() => toggle(c.id)} onerror={(e) => (actionError = e)} />
+              selected={open.includes(c.id)} controls={detailId(keys[n])} onselect={() => toggle(c.id)} onerror={(e) => (actionError = e)} />
             {#if open.includes(c.id)}
-              <div id={`detail-${c.id}`} transition:unfold>
-                <ContainerDetail vm={name} {c} {from} {to} over={range.key} vmMemory={i.memory} oomMarkers={oomCurrent ? oomMarkers(oom, c.id) : []} onclose={() => toggle(c.id)} />
+              <div transition:unfold>
+                <ContainerDetail id={detailId(keys[n])} vm={name} {c} {from} {to} over={range.key} vmMemory={i.memory} oomMarkers={oomCurrent ? oomMarkers(oom, c.id) : []} onclose={() => toggle(c.id)} />
               </div>
             {/if}
           </div>

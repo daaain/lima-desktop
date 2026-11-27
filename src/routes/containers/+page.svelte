@@ -22,6 +22,7 @@
   import OrderPicker from '$lib/OrderPicker.svelte';
   import SortHead from '$lib/SortHead.svelte';
   import { glide, unfold } from '$lib/motion';
+  import { detailId } from '$lib/opener';
   import { Ordering } from '$lib/ordering.svelte';
   import { folds, vmFolds } from '$lib/folds.svelte';
   import { listsLines } from '$lib/folds';
@@ -133,12 +134,13 @@
     {@const keys = distinctKeys(rows, (r) => keyOf(r.vm, r.c.id))}
     {#each rows as { vm, c }, i (keys[i])}
       {@const key = keyOf(vm, c.id)}
+      {@const detail = detailId(keys[i])}
       <div animate:glide>
         <ContainerLine {vm} {c} history={history.get(lineHistory(vm, c))} vmHistory={history.get(g.live?.entity)} vmCpus={g.live?.instance.cpus ?? 1} vmMemory={g.live?.instance.memory ?? 0} second="image"
-          now={live.snapshot?.updated} selected={key in open} onselect={() => toggle(key)} onerror={(e) => (actionError = e)} />
+          now={live.snapshot?.updated} selected={key in open} controls={detail} onselect={() => toggle(key)} onerror={(e) => (actionError = e)} />
         {#if open[key] != null}
           <div transition:unfold>
-            <ContainerDetail {vm} {c} from={span.from} to={span.to} over={range.key} vmMemory={g.live?.instance.memory ?? 0} onclose={() => close(key)} />
+            <ContainerDetail id={detail} {vm} {c} from={span.from} to={span.to} over={range.key} vmMemory={g.live?.instance.memory ?? 0} onclose={() => close(key)} />
           </div>
         {/if}
       </div>

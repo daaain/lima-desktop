@@ -7,13 +7,16 @@
   import { portLinks, portsElsewhere } from './containers';
   import { onTabKey } from './tabKeys';
   import { live } from './live.svelte';
+  import { closeToOpener } from './opener';
   import { openUrl } from '@tauri-apps/plugin-opener';
   import type { RangeKey } from './ranges';
   import Bar from './Bar.svelte';
   import Chart from './Chart.svelte';
   import LogView from './LogView.svelte';
 
-  let { vm, c, from, to, over, vmMemory, oomMarkers = [], onclose }: {
+  let { id: detail, vm, c, from, to, over, vmMemory, oomMarkers = [], onclose }: {
+    /** Its id, which its line's `aria-controls` names (opener.ts). */
+    id: string;
     vm: string; c: ContainerLive; from: number; to: number;
     /** The range [from, to] is, for its sentence to say. */
     over: RangeKey;
@@ -59,7 +62,7 @@
   });
 </script>
 
-<section class="wash detail">
+<section class="wash detail" id={detail}>
   <div class="head">
     <div class="title">
       <h3 class="serif"><bdi>{name}</bdi></h3>
@@ -71,7 +74,7 @@
           class:active={tab === t} onclick={() => (tab = t)} onkeydown={(e) => onTabKey(e, TABS, tab, (k) => (tab = k))}>{t}</button>
       {/each}
     </div>
-    <button onclick={onclose} aria-label="Close">✕</button>
+    <button onclick={() => closeToOpener(detail, onclose)} aria-label="Close">✕</button>
   </div>
   {#if ports.length}
     <div class="ports num">

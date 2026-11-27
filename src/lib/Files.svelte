@@ -9,8 +9,11 @@
   import Guarded from './Guarded.svelte';
   import { distinctKeys } from './keys';
   import { visible } from './visible';
+  import { closeToOpener } from './opener';
 
-  let { vm, source, label, onclose, inset = false }: {
+  let { id, vm, source, label, onclose, inset = false }: {
+    /** Its id, which its line's `aria-controls` names (opener.ts); given with `onclose`. */
+    id?: string;
     vm: string; source: FileSource;
     /** The folder's name, at the head of the path. */
     label: string;
@@ -75,7 +78,7 @@
   });
 </script>
 
-<section class="detail" class:wash={!inset} class:inset>
+<section class="detail" class:wash={!inset} class:inset {id}>
   <div class="head">
     <nav class="path serif" aria-label="Where in the folder">
       <button class="crumb" onclick={() => open('')} disabled={!crumbs.length && !peek}><bdi>{visible(label)}</bdi></button>
@@ -92,7 +95,7 @@
     <span class="spacer"></span>
     {#if busy}<span class="muted">…</span>{/if}
     {#if peek}<button onclick={() => open(crumbs.slice(0, -1).map((c) => c.part).join('/'))}>Back to the folder</button>{/if}
-    {#if onclose}<button onclick={onclose} aria-label="Close">✕</button>{/if}
+    {#if onclose}<button onclick={() => (id ? closeToOpener(id, onclose) : onclose())} aria-label="Close">✕</button>{/if}
   </div>
   {#if error}<p class="error">{error}</p>{/if}
 

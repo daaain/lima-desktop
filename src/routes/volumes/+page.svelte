@@ -28,6 +28,7 @@
   import { sortBy } from '$lib/order';
   import { Ordering } from '$lib/ordering.svelte';
   import { glide, unfold } from '$lib/motion';
+  import { detailId } from '$lib/opener';
 
   const scope = $derived(podmanScope(live.snapshot));
   // Kept and followed app-wide from the start (podmanLists): the view opens on what's known.
@@ -196,8 +197,9 @@
               {@const u = usageOf(row)}
               {@const disk = g.live ? gauges(g.live).disk.size : undefined}
               {@const key = `${row.vm}/${row.v.name}`}
+              {@const detail = detailId(`${row.vm}/${lineKeys[i]}`)}
               <div animate:glide>
-                <ItemLine selected={!!open[key]} onselect={() => toggle(key)} title={visible(row.v.name)}
+                <ItemLine selected={!!open[key]} controls={detail} onselect={() => toggle(key)} title={visible(row.v.name)}
                   second={`created ${age(row.created)}${row.v.driver !== 'local' ? ` · ${row.v.driver} driver` : ''}`}
                   secondTitle={`In the VM at ${row.v.mountpoint}; created ${new Date(row.v.createdAt).toLocaleString('en-GB')}`}
                   size={u?.size} {scale} sizeLabel={u ? diskShare(u.size, disk) : 'not measured'}
@@ -209,7 +211,7 @@
                 </ItemLine>
                 {#if open[key]}
                   <div transition:unfold>
-                    <Files vm={row.vm} source={{ kind: 'volume', name: row.v.name }} label={row.v.name} onclose={() => toggle(key)} />
+                    <Files id={detail} vm={row.vm} source={{ kind: 'volume', name: row.v.name }} label={row.v.name} onclose={() => toggle(key)} />
                   </div>
                 {/if}
               </div>

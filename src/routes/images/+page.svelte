@@ -28,6 +28,7 @@
   import { sortBy } from '$lib/order';
   import { Ordering } from '$lib/ordering.svelte';
   import { glide, unfold } from '$lib/motion';
+  import { detailId } from '$lib/opener';
 
   const scope = $derived(podmanScope(live.snapshot));
   // Kept and followed app-wide from the start (podmanLists): the view opens on what's known.
@@ -215,8 +216,9 @@
               {@const otherTags = row.tagged ? (h?.image.tags ?? []).filter((t) => t !== row.name) : []}
               {@const [from, short] = splitReference(row.name)}
               {@const key = `${row.vm}/${row.reference}`}
+              {@const detail = detailId(`${row.vm}/${lineKeys[i]}`)}
               <div animate:glide>
-                <ItemLine selected={!!open[key]} onselect={() => toggle(key)} title={row.tagged ? visible(row.name) : `untagged image ${row.id}`}
+                <ItemLine selected={!!open[key]} controls={detail} onselect={() => toggle(key)} title={row.tagged ? visible(row.name) : `untagged image ${row.id}`}
                   second={`${shortId(row.id)} · ${row.created ? `built ${age(row.created)}` : 'no build date'}`}
                   secondTitle={row.created ? `Built ${new Date(row.created * 1000).toLocaleString('en-GB')}` : "The image doesn't record when it was built"}
                   size={row.size} frees={r && otherTags.length ? 0 : r?.frees} {scale} sizeLabel={freesLabel(r, row.size, otherTags.length)}
@@ -229,7 +231,7 @@
                 </ItemLine>
                 {#if open[key]}
                   <div transition:unfold>
-                    <ImageLayers vm={row.vm} id={row.id} title={row.tagged ? visible(row.name) : `untagged ${shortId(row.id)}`} onclose={() => toggle(key)} />
+                    <ImageLayers {detail} vm={row.vm} id={row.id} title={row.tagged ? visible(row.name) : `untagged ${shortId(row.id)}`} onclose={() => toggle(key)} />
                   </div>
                 {/if}
               </div>
