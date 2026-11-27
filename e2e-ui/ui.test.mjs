@@ -2702,3 +2702,45 @@ test('The full-window log gives focus back to its Full window button as it close
   assert.deepEqual(errors, []);
   await close();
 });
+
+test("Each step through a folder's files puts focus on what it opened: the first entry, else what the view says", async () => {
+  const { page, errors, close } = await open('/volumes');
+  const line = page.locator('.line', { has: page.locator('.name', { hasText: /^atlas_pgdata$/ }) }).first();
+  await line.focus();
+  await page.keyboard.press('Enter');
+  const files = page.locator('section.detail');
+  await files.getByRole('button', { name: 'base/' }).waitFor();
+  // Opening leaves focus on the line.
+  assert.ok(await line.evaluate((el) => el === document.activeElement), 'focus stays on the line as it opens');
+  const step = async (button) => {
+    await button.focus();
+    await page.keyboard.press('Enter');
+  };
+  // Into a folder: its first entry, and Tab goes on down the list.
+  await step(files.getByRole('button', { name: 'base/' }));
+  await focusComesTo(page, '1/');
+  await page.keyboard.press('Tab');
+  assert.equal(await focused(page), '16384/');
+  // A file that isn't text: what it is, said.
+  await step(files.getByRole('button', { name: 'pg_filenode.map' }));
+  await focusComesTo(page, 'A binary file of 524 B. It isn\'t text, so there\'s nothing to show here.');
+  // Back to the folder: its first entry again.
+  await step(files.getByRole('button', { name: 'Back to the folder' }));
+  await focusComesTo(page, '1/');
+  // An empty one says so.
+  await step(files.getByRole('button', { name: '16384/' }));
+  await focusComesTo(page, 'Empty.');
+  // Up by the path; then a text file: its text, to read and scroll.
+  await step(files.locator('nav.path').getByRole('button', { name: 'atlas_pgdata' }));
+  await focusComesTo(page, 'base/');
+  await step(files.getByRole('button', { name: 'postgresql.conf' }));
+  await page.waitForFunction(() => document.activeElement?.tagName === 'PRE');
+  assert.match(await focused(page), /^# PostgreSQL configuration file/);
+  // A link to a folder lists it.
+  await step(files.getByRole('button', { name: 'Back to the folder' }));
+  await step(files.getByRole('button', { name: /^current/ }));
+  await focusComesTo(page, '1/');
+  assert.match(await files.locator('nav.path').innerText(), /atlas_pgdata\s*\/\s*current/);
+  assert.deepEqual(errors, []);
+  await close();
+});
