@@ -15,6 +15,8 @@ The audit for [#28](https://github.com/daaain/lima-desktop/issues/28), the start
 
 ### 1. Rows are buttons with buttons inside (major, maybe blocker under VoiceOver)
 
+**Fixed:** a line is no longer a button. Its left side (the name, and the image or what it is under it) is a real `<button aria-expanded aria-controls>`, wide and tall to click; the whole line still opens its detail for a pointer, and its actions sit beside the button, not in it.
+
 `ContainerLine.svelte:34` and `ItemLine.svelte:40` are `role=button` divs that hold Stop/Restart/Remove buttons, bars and charts. A button's children are presentational, so the line's name is all of its text run together (300+ characters, ending "Stop Restart"), the bars' card text is lost inside it, and VoiceOver may not reach the inner buttons as buttons. **Fixed:** each action is named for what it acts on after its own word ("Stop harbor"), and a line has `aria-controls` while its detail is open.
 
 This bears on the chart question: if a row opens into its detail, the opener should be a real `<button aria-expanded aria-controls>` (the name, as `ProjectHead` does), and the row a plain container around it.
@@ -72,7 +74,7 @@ Passing: every line, fill and dashed full-scale line against its ground; text th
 ## Proposed order of work
 
 1. **Small, independent fixes** (**done**, but for the focus cases still open under 2): the `aria-description` bug; focus kept or returned (disabled-while-working → `aria-disabled` or keep focus; close → back to the opener; Files steps); detail tabs' selected state; popover tabs' arrow keys; OOM rows reachable; scroll boxes focusable; searches labelled; action buttons name their target.
-2. **Rows as disclosures:** the line's opener a real button, actions outside it. Unblocks the chart decision below.
+2. **Rows as disclosures** (**done**): the line's opener a real button, actions outside it. Unblocks the chart decision below.
 3. **Tooltips on `:focus-visible`,** anchored to the element, Escape to dismiss; disabled reasons said where a keyboard reaches them.
 4. **Charts:** summaries in the label on lines and headings; the keyboard convention (focusable, arrows between columns, Home/End, card shown and read through a polite live region) where the full chart is: the VM page and a container's detail (uPlot), and Sketch/MemoryShare wherever they have no detail behind them (project heading).
 5. **Hover-linked highlights:** capacity blocks and popover rows ↔ bands get a focus equivalent.
