@@ -2494,3 +2494,32 @@ test('Each list\'s search is labelled for what it searches, not only by its plac
     await close();
   }
 });
+
+// ---- Keyboard: focus kept and returned ----
+
+test('Each action button is named for what it acts on, its visible word first', async () => {
+  const { page, errors, close } = await open('/containers');
+  // 17 containers have a Stop: each says which.
+  await page.getByRole('button', { name: 'Stop harbor-devbox', exact: true }).waitFor();
+  assert.equal(await page.getByRole('button', { name: 'Stop', exact: true }).count(), 0);
+  await page.getByRole('button', { name: 'Restart harbor-devbox', exact: true }).waitFor();
+  await page.getByRole('button', { name: 'Start atlas-devbox', exact: true }).waitFor();
+  await page.getByRole('button', { name: 'Remove atlas-devbox', exact: true }).waitFor();
+  await page.goto(`${base}/`);
+  await page.getByRole('button', { name: 'Stop harbor', exact: true }).waitFor();
+  await page.getByRole('button', { name: 'Restart harbor', exact: true }).waitFor();
+  await page.getByRole('button', { name: 'Delete harbor', exact: true }).waitFor();
+  await page.getByRole('button', { name: 'Start foundry', exact: true }).waitFor();
+  // While it works, the name says so, as the button does.
+  await page.getByRole('button', { name: 'Stop harbor', exact: true }).focus();
+  await page.keyboard.press('Enter');
+  await page.getByRole('button', { name: 'Stopping… harbor', exact: true }).waitFor();
+  await page.goto(`${base}/volumes`);
+  await page.getByRole('button', { name: 'Remove atlas_pgdata', exact: true }).waitFor();
+  await page.goto(`${base}/images`);
+  await page.getByText('atlas_frontend').first().waitFor();
+  assert.equal(await page.getByRole('button', { name: 'Remove', exact: true }).count(), 0);
+  await page.getByRole('button', { name: /^Remove localhost\/atlas_frontend/ }).first().waitFor();
+  assert.deepEqual(errors, []);
+  await close();
+});

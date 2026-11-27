@@ -37,22 +37,20 @@
   }
 </script>
 
+<!-- Each button named for its VM too, its own word first, as a list of VMs has many a Stop. -->
+{#snippet act(action: VmAction, word: string, working: string, disabled: boolean, title: string | undefined, danger = false)}
+  {@const said = busy === action ? working : word}
+  <button class:danger {disabled} {title} aria-label={`${said} ${inst.name}`} onclick={() => run(action)}>{said}</button>
+{/snippet}
+
 <div class="actions">
   {#if !running}
-    <button disabled={!!busy || !stopped || locked(inst, 'start')} title={why('start')} onclick={() => run('start')}>
-      {busy === 'start' ? 'Starting…' : 'Start'}
-    </button>
+    {@render act('start', 'Start', 'Starting…', !!busy || !stopped || locked(inst, 'start'), why('start'))}
   {:else}
-    <button disabled={!!busy || locked(inst, 'stop')} title={why('stop')} onclick={() => run('stop')}>
-      {busy === 'stop' ? 'Stopping…' : 'Stop'}
-    </button>
-    <button disabled={!!busy || locked(inst, 'stop') || locked(inst, 'start')} title={why('stop') ?? why('start')} onclick={() => run('restart')}>
-      {busy === 'restart' ? 'Restarting…' : 'Restart'}
-    </button>
+    {@render act('stop', 'Stop', 'Stopping…', !!busy || locked(inst, 'stop'), why('stop'))}
+    {@render act('restart', 'Restart', 'Restarting…', !!busy || locked(inst, 'stop') || locked(inst, 'start'), why('stop') ?? why('start'))}
   {/if}
-  <button class="danger" disabled={!!busy || running || locked(inst, 'delete')} title={running ? 'Stop it first' : why('delete')} onclick={() => run('delete')}>
-    {busy === 'delete' ? 'Deleting…' : 'Delete'}
-  </button>
+  {@render act('delete', 'Delete', 'Deleting…', !!busy || running || locked(inst, 'delete'), running ? 'Stop it first' : why('delete'), true)}
 </div>
 {#if error && inlineError}<p class="error">{error}</p>{/if}
 

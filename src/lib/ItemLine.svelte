@@ -9,7 +9,7 @@
 
   let { name, title, second, secondTitle, size, frees, scale, sizeLabel, sizeTitle, used, usedText, usedTitle, removable, removeTitle, onremove, selected = false, onselect }: {
     name: Snippet;
-    /** The whole name, for the tooltip of one cut short. */
+    /** The whole name: the tooltip of one cut short, and what its Remove button names. */
     title: string;
     second: string; secondTitle?: string;
     /** Bytes; undefined until measured. */
@@ -60,9 +60,10 @@
     {#if used != null}<span class="dot" class:off={!used}></span>{/if}
     <span class:muted={!used}>{usedText}</span>
   </div>
+  <!-- Remove is named for its line too: a list has many. -->
   <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
   <span class="acts" onclick={(e) => e.stopPropagation()}>
-    <button class="danger" disabled={!removable} title={removeTitle} onclick={onremove}>Remove</button>
+    <button class="danger" disabled={!removable} title={removeTitle} aria-label={`Remove ${title}`} onclick={onremove}>Remove</button>
   </span>
 </div>
 
