@@ -9,10 +9,10 @@ What Lima Desktop works with, what it has been run against, and what differs bet
 | **Your computer** | macOS 13 or newer (as the release notes say: Lima's `vz` needs 13), Apple silicon and Intel, one universal `.dmg`. The bundle sets no `minimumSystemVersion`, so macOS itself only checks Tauri's build default, which is lower: that's a build setting, not what's supported.<br>Linux on x86_64: the released `.deb` and AppImage need glibc 2.39 or newer (they're built on Ubuntu 24.04) and WebKitGTK 4.1, so Ubuntu 24.04+, Debian 13+, Fedora 40+; built from source, WebKitGTK 4.1 is enough (Ubuntu 22.04+, Debian 12+, Fedora 39+) | macOS 27 on Apple silicon; Ubuntu 26.04 in CI |
 | **Lima** | 2.x (`limactl` on your `PATH`, or where Homebrew puts it) | 2.1.3 and 2.3.0 with `vz` on Apple silicon; 2.3.0 with QEMU in CI (`LIMA_VERSION` in `.github/workflows/ci.yml`) |
 | **VM type** | `vz` on macOS, `qemu` on Linux | both |
-| **Podman in the VM** | 5.0 or newer. An older one is named and refused ("podman 4.3.1 in this VM is too old"), not half-read | 5.8.9 and 6.2.0; 4.3.1 refused, as the e2e checks |
-| **The guest** | any Lima guest whose podman socket is forwarded to the instance's `sock/podman.sock` (as Lima's podman template does), with a POSIX `sh` for the probe. cgroup v2 for each container's own memory, peak and OOM kills, and for what runs the VM besides its containers: without it those are left out, never shown as zero | Fedora 44 and 45 (Lima's podman template); Debian 12 (podman 4, refused) |
+| **Podman in the VM** | 5.0 or newer. An older one is named and refused ("podman 4.3.1 in this VM is too old"), not half-read | 5.4.2 (Debian 13), 5.8.9 and 6.2.0 (Fedora); 4.3.1 refused, as the e2e checks |
+| **The guest** | any Lima guest whose podman socket is forwarded to the instance's `sock/podman.sock` (as Lima's podman template does), with a POSIX `sh` for the probe. cgroup v2 for each container's own memory, peak and OOM kills, and for what runs the VM besides its containers: without it those are left out, never shown as zero | Fedora 44 and 45 (Lima's podman template); Debian 13 (podman 5.4); Debian 12 (podman 4, refused) |
 
-`just e2e` runs all of this against real VMs: one from Lima's `template:podman`, whichever Fedora and podman the installed Lima's template brings, and one with podman 4 to be refused. CI runs it on every PR with the pinned Lima, so bumping `LIMA_VERSION` moves the guest with it.
+`just e2e` runs all of this against real VMs: one from Lima's `template:podman`, whichever Fedora and podman the installed Lima's template brings; Debian 13 with its own podman 5.4, the oldest 5.x a stable distribution ships; and Debian 12 with podman 4, to be refused. CI runs it on every PR with the pinned Lima, one job per guest, so bumping `LIMA_VERSION` moves the template's guest with it.
 
 ## Lima
 
@@ -27,7 +27,8 @@ What Lima Desktop works with, what it has been run against, and what differs bet
 ## Podman
 
 - **4.x is refused.** Its stats and container list have different shapes; the app says so rather than show half of it.
-- **5.x** is the API the app speaks: every call goes to `/v5.0.0/libpod/…`, which later versions still answer.
+- **5.x** is the API the app speaks: every call goes to `/v5.0.0/libpod/…`, which later versions still answer. Checked on 5.4.2 (Debian 13), the oldest 5.x a stable distribution ships, and 5.8.9.
+- **Log stamps:** 5.0 to 5.7 stamp each line of a container's log to the second; 5.8 and later to the nanosecond. Fetch earlier asks up to the end of what the oldest line's stamp could stand for, its whole second on the older ones, so pages join without a gap or a repeat: the e2e checks it on 5.4.2 and 6.2.0, under k8s-file and journald.
 - **6.x** answers every read the app makes, and start, stop and restart, with the same fields (checked on 6.2.0), apart from `PerCPU` in container stats, which the app doesn't read. Removing a container, image or volume, and the two prunes, weren't tried on 6.x. It removes slirp4netns, which doesn't affect the app.
 - **Ports and what they cost.** A plain rootless `podman run` gets a pasta network of its own, and that pasta holds its published ports. On a bridge network, which is what compose makes for each project, each container that publishes a port gets a `rootlessport` pair, about 28 MiB, counted in what runs the VM ("Podman and your services" on the memory card). Podman 6's experimental `rootless_port_forwarder = "pasta"` lets the network's one pasta hold every port instead, so that part of the bar shrinks by those pairs; with it, published ports are bound on IPv4 only. Stop every container before changing it: running containers keep the forwarder they started with, so changing it under them leaves their ports held (a new container on one fails with `address already in use`) until they all stop.
 
@@ -42,3 +43,7 @@ What Lima Desktop works with, what it has been run against, and what differs bet
 | notes |  | no auditd running by default; SELinux enforcing with no denials |
 
 On both, the probe finds each container's cgroup, podman's own processes under `user@<uid>.service` and the VM's system services under `system.slice`, so the memory bar's breakdown reads the same.
+
+## Debian 13 (the e2e's podman 5.4 guest)
+
+`src-tauri/tests/e2e/debian13.yaml`: Lima's Debian 13 image with `apt install podman`, 5.4.2, on kernel 6.12. cgroup v2, with memory, CPU, IO and pids delegated to the user, so each container has its own cgroup, limit and peak, and an OOM kill names its container; the journal is kept on disk. Installing podman in a running guest brings the user's D-Bus (`dbus-user-session`) only for their next login: until then podman can't ask systemd for its containers' cgroups and falls back to cgroupfs, with a warning on every command. The e2e's template starts the bus itself; a guest of your own gets it on restart.

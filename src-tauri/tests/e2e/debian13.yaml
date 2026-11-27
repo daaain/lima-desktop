@@ -1,0 +1,59 @@
+# Lima Desktop's e2e (`just e2e`): Debian 13 with its own podman, 5.4, rootless, its API socket
+# forwarded the way Lima's own `template:podman` does — the oldest podman 5 in a stable
+# distribution, so the app's podman 5 paths run against a real 5.x engine (it stamps log lines to
+# the second; 5.8 and later to the nanosecond). Works with vz (macOS) and QEMU (Linux) alike.
+
+minimumLimaVersion: 2.0.0
+
+base:
+- template:_images/debian-13
+
+containerd:
+  system: false
+  user: false
+
+provision:
+- mode: system
+  script: |
+    #!/bin/bash
+    set -eux -o pipefail
+    command -v podman >/dev/null 2>&1 && exit 0
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update
+    # With its recommends, as `apt install podman` would: pasta, nftables for netavark,
+    # aardvark-dns, catatonit for `--init`, dbus-user-session.
+    apt-get install -y podman
+- mode: user
+  script: |
+    #!/bin/bash
+    set -eux -o pipefail
+    # The user's bus came with dbus-user-session, after their systemd started: without it podman
+    # can't ask systemd for its containers' cgroups and falls back to cgroupfs, as it wouldn't once
+    # the VM had restarted.
+    systemctl --user daemon-reload
+    systemctl --user start dbus.socket
+    systemctl --user enable --now podman.socket
+
+probes:
+- script: |
+    #!/bin/bash
+    set -eux -o pipefail
+    if ! timeout 30s bash -c "until command -v podman >/dev/null 2>&1; do sleep 3; done"; then
+      echo >&2 "podman is not installed yet"
+      exit 1
+    fi
+  hint: See "/var/log/cloud-init-output.log" in the guest
+
+portForwards:
+- guestSocket: "/run/user/{{.UID}}/podman/podman.sock"
+  hostSocket: "{{.Dir}}/sock/podman.sock"
+# Nothing else: Debian 13's resolver listens for LLMNR on 5355, which CI's runner holds already,
+# and Lima's start once failed reading the status it wrote about that forward. The e2e needs only
+# the socket.
+- guestIP: "0.0.0.0"
+  guestPortRange: [1, 65535]
+  proto: any
+  ignore: true
+- guestPortRange: [1, 65535]
+  proto: any
+  ignore: true
