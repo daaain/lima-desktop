@@ -39,6 +39,7 @@ A container's name is chosen by whoever ran it, so treat it as untrusted too. As
 
 - Use the bounded readers: `bounded::capped_output` and `bounded::read_tail` for a child's output, `collect_capped` for a libpod body, the probe's line and block caps. Never `read_to_end`, `read_to_string`, `wait_with_output`, `.collect()` or `lines()` without a cap on anything a guest sends.
 - Choose the limit from the largest honest answer, and say so in a comment (e.g. 64 MiB for libpod lists, 8 MiB and 16 KiB a line for logs, 1 KiB a line and 4096 lines a block for the probe). Past it, keep what's most useful (a log's newest lines, stderr's last line), say it was cut, and kill the child.
+- What the UI gathers from several reads has a limit of its own: the log view, paging back a fetch at a time, holds at most 100,000 lines and 32 MiB of text (`MAX_HELD_LINES`, `MAX_HELD_CHARS` in `lib/logs.ts`), letting the oldest go and saying so. Paging back asks podman for every line before a moment (`tail=all`, as one driver takes its tail first), so podman reads more than is kept; the backend still keeps only the newest 8 MiB, and the request's timeout ends it.
 - Every one-shot guest read (a libpod request, the journal, the file browser) also has a timeout. The probe's stream is long-lived by design: the stall detector (`stall.rs`) watches it instead, and a VM silent past its threshold is said to have stopped responding.
 
 ### Numbers from a guest

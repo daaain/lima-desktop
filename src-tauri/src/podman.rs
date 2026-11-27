@@ -64,6 +64,8 @@ pub enum PodmanError {
     Unsupported(String),
     #[error("podman's answer was over {} MiB, more than Lima Desktop reads at once", .0 >> 20)]
     TooLarge(usize),
+    #[error("{0} ms after 1970 is no time podman can be asked about")]
+    BadTime(i64),
 }
 
 // A test body can't fail.
@@ -817,6 +819,33 @@ fn stamp_len(b: &[u8]) -> usize {
     }
 }
 
+/// A logs request's path. With `until`, it asks for every line before it (`tail=all`) and
+/// [`LogTail`] keeps the newest `tail`: the k8s-file driver takes its tail from the end of the file
+/// before it looks at `until`, so `tail=500&until=…` would give only those of the file's newest 500
+/// before `until`, often none (journald's filters first, so either works there). Podman reads the
+/// log up to `until` for it, within the request's timeout, but no more is kept than the newest lines.
+///
+/// libpod v5 reads `until` as RFC 3339 first (`util.ParseInputTime`), so it's said to the
+/// nanosecond, where a Unix float would round. The drivers disagree at the boundary (journald keeps
+/// a line at exactly `until`, to the microsecond; k8s-file only those before it, to the
+/// nanosecond), so it's the start of the next millisecond: every line in `until`'s millisecond
+/// comes back under either, and the UI drops those it already holds.
+fn logs_path(id: &str, tail: u32, since: Option<i64>, until: Option<i64>) -> Result<String, PodmanError> {
+    let since = since.map(|s| format!("&since={s}")).unwrap_or_default();
+    let (tail, until) = match until {
+        None => (tail.to_string(), String::new()),
+        Some(ms) => {
+            let end =
+                ms.checked_add(1).and_then(chrono::DateTime::from_timestamp_millis).ok_or(PodmanError::BadTime(ms))?;
+            ("all".into(), format!("&until={}", end.to_rfc3339_opts(chrono::SecondsFormat::Nanos, true)))
+        }
+    };
+    Ok(format!(
+        "/containers/{}/logs?stdout=true&stderr=true&timestamps=true&tail={tail}{since}{until}",
+        encode_component(id)
+    ))
+}
+
 fn encode_component(s: &str) -> String {
     s.bytes()
         .map(|b| match b {
@@ -989,14 +1018,17 @@ impl Libpod {
     }
 
     /// The last `tail` lines, each starting with the RFC 3339 time podman recorded it at and a
-    /// space; with `since` (Unix seconds), only those written since then. Read as it comes, and
+    /// space; with `since` (Unix seconds), only those written since then; with `until` (Unix ms),
+    /// only those written up to the end of that millisecond ([`logs_path`]). Read as it comes, and
     /// only the newest `MAX_LOG_BYTES` of it kept ([`LogTail`]).
-    pub async fn logs(&self, id: &str, tail: u32, since: Option<i64>) -> Result<Vec<LogLine>, PodmanError> {
-        let since = since.map(|s| format!("&since={s}")).unwrap_or_default();
-        let path = format!(
-            "/containers/{}/logs?stdout=true&stderr=true&timestamps=true&tail={tail}{since}",
-            encode_component(id)
-        );
+    pub async fn logs(
+        &self,
+        id: &str,
+        tail: u32,
+        since: Option<i64>,
+        until: Option<i64>,
+    ) -> Result<Vec<LogLine>, PodmanError> {
+        let path = logs_path(id, tail, since, until)?;
         self.exchange(Method::GET, &path, |mut body| async move {
             let mut lines = LogTail::new(tail as usize, MAX_LOG_BYTES);
             while let Some(frame) = body.frame().await {
@@ -1624,6 +1656,28 @@ mod tests {
         assert!(lines[0].earlier_dropped);
         // Within both, nothing is said.
         assert!(!tail_of(&log, 1000, usize::MAX, 100)[0].earlier_dropped);
+    }
+
+    #[test]
+    fn a_logs_query_asks_for_the_newest_lines_or_those_up_to_a_moment() {
+        let base = "/containers/ab%2Fc/logs?stdout=true&stderr=true&timestamps=true";
+        assert_eq!(logs_path("ab/c", 500, None, None).unwrap(), format!("{base}&tail=500"));
+        assert_eq!(
+            logs_path("ab/c", 500, Some(1_794_823_200), None).unwrap(),
+            format!("{base}&tail=500&since=1794823200")
+        );
+        // Up to a moment: every line (k8s-file takes the tail before `until`, so the newest lines
+        // before it are kept here), up to the end of its millisecond, said to the nanosecond.
+        assert_eq!(
+            logs_path("ab/c", 500, None, Some(1_794_823_200_123)).unwrap(),
+            format!("{base}&tail=all&until=2026-11-16T10:00:00.124000000Z")
+        );
+        assert_eq!(
+            logs_path("ab/c", 500, Some(1_794_823_000), Some(1_794_823_200_999)).unwrap(),
+            format!("{base}&tail=all&since=1794823000&until=2026-11-16T10:00:01.000000000Z")
+        );
+        // A moment no calendar holds is refused, not sent as something else.
+        assert!(logs_path("ab/c", 500, None, Some(i64::MAX)).is_err());
     }
 
     #[test]

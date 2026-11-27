@@ -379,6 +379,11 @@ export type VmAction = 'start' | 'stop' | 'restart' | 'delete';
 export interface RawLogLine {
   stream: 'stdout' | 'stderr' | null;
   line: string;
+  /** It was longer than the backend keeps a line (16 KiB): its start, ending with "…". */
+  cut?: boolean;
+  /** On the first line only: older lines were left out, to keep the answer within its size (8 MiB)
+   * or the count asked for, so this isn't where the log (or the time asked from) begins. */
+  earlierDropped?: boolean;
 }
 
 export type ContainerAction = 'start' | 'stop' | 'restart' | 'remove';
@@ -405,9 +410,12 @@ export const api = {
     invoke<void>('vm_resize', { name, resize }),
   containerAction: (vm: string, id: string, action: ContainerAction) =>
     invoke<void>('container_action', { vm, id, action }),
-  /** A container's newest `tail` lines (at most 20,000), only those since `since` (Unix ms) if given. */
-  containerLogs: (vm: string, id: string, tail = 500, since: number | null = null) =>
-    invoke<RawLogLine[]>('container_logs', { vm, id, tail, since }),
+  /** A container's newest `tail` lines (at most 20,000), only those since `since` and up to the end
+   * of the millisecond `until` (both Unix ms) if given: `until` pages back (`pageUntil` sets it to
+   * the end of what the oldest held line's stamp could stand for), and sends that millisecond whole,
+   * lines already held included. */
+  containerLogs: (vm: string, id: string, tail = 500, since: number | null = null, until: number | null = null) =>
+    invoke<RawLogLine[]>('container_logs', { vm, id, tail, since, until }),
   containerInspect: (vm: string, id: string) => invoke<unknown>('container_inspect', { vm, id }),
   systemDf: (vm: string) => invoke<Record<string, unknown>>('system_df', { vm }),
   images: (vm: string) => invoke<Image[]>('images', { vm }),

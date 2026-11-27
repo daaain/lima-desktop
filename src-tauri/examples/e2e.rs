@@ -49,6 +49,9 @@ const NETWORK: &str = "ld-e2e-net";
 const WEB: &str = "ld-e2e-web";
 const CLIENT: &str = "ld-e2e-client";
 const OOM_CT: &str = "ld-e2e-oom";
+/// Writes `LOG_LINES` numbered lines at once, under each log driver, for paging back by `until`.
+const LOGGER: &str = "ld-e2e-logger";
+const LOG_LINES: usize = 300;
 const OOM_LIMIT: i64 = 32 << 20;
 const COMPOSE_PROJECT: &str = "ld-e2e";
 /// Docker Compose's hash of a service's config, as it labels each container: any value the image
@@ -1123,6 +1126,105 @@ impl Report {
     }
 }
 
+/// The Unix ms of a log line's timestamp, as `timestamps=true` puts it at the line's start.
+fn line_ms(line: &str) -> Option<i64> {
+    let stamp = line.split_once(' ')?.0;
+    Some(chrono::DateTime::parse_from_rfc3339(stamp).ok()?.timestamp_millis())
+}
+
+/// How many ms past its own a line's stamp could stand for, as the UI's `pageUntil` reckons it:
+/// 999 for one to the second (podman 5), 99 or 9 for one or two digits of fraction, else none.
+fn stamp_span(line: &str) -> i64 {
+    let stamp = line.split_once(' ').map_or(line, |(s, _)| s);
+    let digits = stamp.split_once('.').map_or(0, |(_, f)| f.bytes().take_while(u8::is_ascii_digit).count());
+    [999, 99, 9].get(digits).copied().unwrap_or(0)
+}
+
+/// Paging back a log with `until`, under each log driver podman has here: the lines up to a moment
+/// are every line written up to the end of its stamp and none after, which is what the log
+/// view's Fetch earlier counts on to join pages without a gap or a repeat. journald and k8s-file
+/// disagree on a line at exactly `until`, and k8s-file applies `tail` before `until`.
+async fn check_logs_until(ctx: &mut Ctx) -> Outcome {
+    let Some(sock) = ctx.vm(P5).and_then(|i| i.podman_socket.clone()) else {
+        return skip(format!("logs until: {P5} isn't up"));
+    };
+    let pod = Libpod::new(&sock);
+    let (mut checked, mut problems) = (Vec::new(), Vec::new());
+    for driver in ["k8s-file", "journald"] {
+        let name = format!("{LOGGER}-{driver}");
+        let outcome = logs_until_with(&pod, driver, &name).await;
+        // Gone once read, so a VM kept (`--keep`) isn't left with it idling for an hour.
+        shell(P5, &format!("podman rm -f -t 0 {name} >/dev/null 2>&1 || true"), Duration::from_secs(60)).await;
+        match outcome {
+            Ok(said) => checked.push(said),
+            Err(why) => problems.push(why),
+        }
+    }
+    if problems.is_empty() {
+        pass(format!("logs until: {}", checked.join(", ")))
+    } else {
+        fail("logs until: a page back isn't the lines up to its moment", problems)
+    }
+}
+
+/// One driver's part of `check_logs_until`: what it found, or what was wrong.
+async fn logs_until_with(pod: &Libpod, driver: &str, name: &str) -> Result<String, String> {
+    // Bursts of 30 a fifth of a second apart: lines that share a stamp (conmon stamps each read, not
+    // each line) and lines that don't, then idle so the log stays as written.
+    let script = format!(
+        "set -e\npodman rm -f {name} >/dev/null 2>&1 || true\n\
+             podman run -d --log-driver {driver} --name {name} {image} \
+             sh -c 'i=1; while [ $i -le {LOG_LINES} ]; do echo line$i; \
+             [ $((i % 30)) -eq 0 ] && sleep 0.2; i=$((i+1)); done; sleep 3600'\n",
+        image = image()
+    );
+    let out = shell(P5, &script, Duration::from_secs(120)).await;
+    // `podman run -d` ends with the container's id on a line of its own.
+    let id = out.stdout.lines().map(str::trim).rfind(|l| !l.is_empty()).unwrap_or_default().to_string();
+    let Some(id) = out.ok.then_some(id).filter(|id| id.len() == 64) else {
+        return Err(format!("{driver}: couldn't start {name}: {}", out.evidence().join(" | ")));
+    };
+    let all = poll(Duration::from_secs(20), Duration::from_millis(500), || {
+        let (pod, id) = (pod.clone(), id.clone());
+        async move { pod.logs(&id, 10_000, None, None).await.ok().filter(|l| l.len() >= LOG_LINES) }
+    })
+    .await;
+    let Some(all) = all else {
+        let now = pod.logs(&id, 10_000, None, None).await.map(|l| format!("{} lines", l.len()));
+        return Err(format!("{driver}: fewer than {LOG_LINES} lines after 20 s ({now:?})"));
+    };
+    let stamped: Vec<(i64, &str)> = all.iter().filter_map(|l| Some((line_ms(&l.line)?, l.line.as_str()))).collect();
+    if stamped.len() != all.len() {
+        return Err(format!("{driver}: a line without a timestamp: {:?}", all.first().map(|l| &l.line)));
+    }
+    // The moment: the middle line's stamp; every line stamped in it is wanted, none after.
+    let pivot = stamped[LOG_LINES / 2].0;
+    // Asked up to the end of what its stamp could stand for, as the UI asks: under podman 5 that's
+    // the whole second, every line stamped with it included.
+    let until = pivot + stamp_span(stamped[LOG_LINES / 2].1);
+    let want: Vec<&str> = stamped.iter().filter(|(ms, _)| *ms <= until).map(|(_, l)| *l).collect();
+    let page =
+        pod.logs(&id, 10_000, None, Some(until)).await.map_err(|e| format!("{driver}: logs(until) failed: {e}"))?;
+    let got: Vec<&str> = page.iter().map(|l| l.line.as_str()).collect();
+    if got != want {
+        let first_diff = got.iter().zip(&want).position(|(a, b)| a != b).unwrap_or(got.len().min(want.len()));
+        return Err(format!(
+            "{driver}: until {until} gave {} lines, wanted {} (first difference at {first_diff}: {:?} vs {:?})",
+            got.len(),
+            want.len(),
+            got.get(first_diff),
+            want.get(first_diff)
+        ));
+    }
+    // And a tail within it: the newest lines up to the moment, not the file's newest.
+    let tail = pod.logs(&id, 10, None, Some(until)).await.map(|p| p.into_iter().map(|l| l.line).collect::<Vec<_>>());
+    if tail.as_deref().ok() != Some(&want[want.len() - 10..].iter().map(|l| l.to_string()).collect::<Vec<_>>()) {
+        return Err(format!("{driver}: tail 10 until {until} isn't the 10 lines before it: {tail:?}"));
+    }
+    let shared = stamped.iter().filter(|(ms, _)| *ms == pivot).count();
+    Ok(format!("{driver} {} of {} ({shared} on its stamp)", want.len(), all.len()))
+}
+
 async fn run_all(report: &mut Report, keep: bool) {
     let mut ctx = Ctx::default();
     if report.check(check_create(&mut ctx)).await == Status::Fail && ctx.up.is_empty() {
@@ -1132,6 +1234,7 @@ async fn run_all(report: &mut Report, keep: bool) {
     report.check(check_long_socket(&mut ctx)).await;
     report.check(check_podman5(&mut ctx)).await;
     report.check(check_stats(&mut ctx)).await;
+    report.check(check_logs_until(&mut ctx)).await;
     report.check(check_probe(&mut ctx, P5)).await;
     report.check(check_probe(&mut ctx, P4)).await;
     report.check(check_oom(&mut ctx)).await;
@@ -1305,6 +1408,16 @@ fn main() -> std::process::ExitCode {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_stamp_s_span_is_what_its_precision_leaves_open() {
+        // As the UI's pageUntil: podman 5 stamps to the second, podman 6 to the nanosecond.
+        assert_eq!(stamp_span("2026-11-27T00:10:01Z line1"), 999);
+        assert_eq!(stamp_span("2026-11-27T00:10:01.5Z line1"), 99);
+        assert_eq!(stamp_span("2026-11-27T00:10:01.25Z line1"), 9);
+        assert_eq!(stamp_span("2026-11-27T00:10:01.123456789Z line1"), 0);
+        assert_eq!(line_ms("2026-11-27T00:10:01Z x").map(|ms| ms % 1000), Some(0));
+    }
 
     #[test]
     fn the_home_defaults_beside_the_users_own_and_can_be_overridden() {

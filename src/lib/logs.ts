@@ -16,13 +16,22 @@ export type Stream = 'stdout' | 'stderr';
 export interface LogLine {
   /** Unix ms; null for a line without a time (an older backend, or a line podman didn't stamp). */
   at: number | null;
+  /** How many ms after `at` it could have been written, where its stamp is coarser than a ms: 999
+   * for one to the second, as podman 5 stamps them (`pageUntil`). */
+  span?: number;
   text: string;
   /** Null for a TTY container's, whose output is one stream. */
   stream: Stream | null;
   level: Level | null;
   /** Set on the first line of each day: "Tuesday 10 November". */
   day?: string;
+  /** The backend cut it at 16 KiB (`podman::MAX_LOG_LINE`): its "…" is the backend's, not the container's. */
+  cut?: true;
 }
+
+/** The longest line the backend keeps (`podman::MAX_LOG_LINE`), as the cut marker says it. */
+export const CUT_SAID = 'cut at 16 KiB';
+export const CUT_TIP = 'The line went on past 16 KiB, so only its start was kept; the … is where it was cut.';
 
 const STAMP = /^(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?(?:Z|[+-]\d\d:\d\d)) (.*)$/s;
 // What a terminal acts on rather than shows (ECMA-48), with ESC or its one-character C1 form: a
@@ -41,12 +50,26 @@ const CONTROLS = /[\x00-\x08\x0b-\x0c\x0e-\x1f\x7f-\x9f]/g;
 export const plainText = (line: string) =>
   bidiVisible(line.replace(ESCAPES, '').replace(/[\r\n]+$/, '').replace(/[\r\n]+/g, ' ').replace(CONTROLS, ''));
 
+// At most how many ms a stamp could stand for past its own, by how many digits its fraction has:
+// none (to the second, as podman 5 writes them), one or two; to the ms or finer, none. At most: a
+// stamp to the nanosecond whose trailing zeros were trimmed (`.5Z`) reads as coarser than it is,
+// which only asks a page past lines already held, and `withoutOverlap` drops those.
+const SPAN = [999, 99, 9];
+
+/**
+ * The time to fetch an earlier page up to: the end of what the oldest held line's stamp could stand
+ * for. podman 5 stamps lines to the second, so asking only up to the stamp itself would leave out
+ * that second's lines written before the oldest held, and no later page would reach them. What the
+ * page repeats of lines held, `withoutOverlap` drops.
+ */
+export const pageUntil = (l: LogLine): number | null => (l.at == null ? null : l.at + (l.span ?? 0));
+
 const dayOf = (at: number) => new Date(at).toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' });
 
 export function logLines(raw: RawLogLine[]): LogLine[] {
   let lastDay = '';
   let lastLevel: Level | null = null;
-  return raw.map(({ line, stream }) => {
+  return raw.map(({ line, stream, cut }) => {
     const clean = plainText(line);
     const m = STAMP.exec(clean);
     const at = m ? Date.parse(m[1]) : NaN;
@@ -54,11 +77,13 @@ export function logLines(raw: RawLogLine[]): LogLine[] {
     // A stack trace's lines say no level of their own: they're the line above's.
     const level = levelOf(text) ?? (CONTINUES.test(text) ? lastLevel : null);
     lastLevel = level;
-    if (!m || Number.isNaN(at)) return { at: null, text, stream, level };
+    const flags = cut ? { cut: true as const } : {};
+    if (!m || Number.isNaN(at)) return { at: null, text, stream, level, ...flags };
     const day = dayOf(at);
     const first = day !== lastDay;
     lastDay = day;
-    return { at, text, stream, level, ...(first ? { day } : {}) };
+    const span = SPAN[/\.(\d+)/.exec(m[1])?.[1].length ?? 0] ?? 0;
+    return { at, text, stream, level, ...(span ? { span } : {}), ...(first ? { day } : {}), ...flags };
   });
 }
 
@@ -270,19 +295,170 @@ export const LEVELS: { key: Level | 'none'; label: string }[] = [
   { key: 'none', label: 'no level' },
 ];
 
+// --- Paging back --------------------------------------------------------------------------------
+
+/**
+ * The most a log view holds, however far back it's paged: lines, and characters of text (a line
+ * counted as its text and 48, as the backend counts its bytes, so a log of empty lines is bounded
+ * too). Five of the longest fetches by count, or four of the backend's 8 MiB answers; search and
+ * the filters run over all of it at each keystroke, and only 2,000 of it is ever drawn.
+ */
+export const MAX_HELD_LINES = 100_000;
+export const MAX_HELD_CHARS = 32 << 20;
+const lineCost = (l: LogLine) => l.text.length + 48;
+
+/** Whether there may be lines before a fetch's oldest: the backend left some out, or it sent as
+ * many as were asked for. */
+export const mayBeEarlier = (raw: RawLogLine[], tail: number) => !!raw[0]?.earlierDropped || (raw.length > 0 && raw.length >= tail);
+
+const identity = (l: LogLine) => `${l.at}\u0000${l.stream ?? ''}\u0000${l.text}`;
+
+/** Where the last whole `run` starts in `seq`, or -1: Knuth–Morris–Pratt, linear in both. */
+function lastFound(run: number[], seq: number[]): number {
+  const border = new Array<number>(run.length).fill(0);
+  for (let i = 1, k = 0; i < run.length; i++) {
+    while (k > 0 && run[i] !== run[k]) k = border[k - 1];
+    if (run[i] === run[k]) k++;
+    border[i] = k;
+  }
+  let last = -1;
+  for (let i = 0, k = 0; i < seq.length; i++) {
+    while (k > 0 && seq[i] !== run[k]) k = border[k - 1];
+    if (seq[i] === run[k]) k++;
+    if (k === run.length) {
+      last = i + 1 - run.length;
+      k = border[k - 1];
+    }
+  }
+  return last;
+}
+
+/**
+ * An earlier page without the lines it repeats. It was asked for up to the end of what the oldest
+ * held line's stamp could stand for (`pageUntil`: its millisecond, or its whole second where podman
+ * stamps to the second), which podman sends whole (`podman::logs_path`), so its lines stamped from
+ * there on are the held lines of that stretch, those of it written before them, and, when every
+ * line held is of it (podman 5 stamps to the second, and a busy guest writes more in one than a
+ * fetch holds), what the guest wrote after them. The held lines of the stretch are one run in the
+ * log, so the page is cut where it has that run: lines can share a stamp and read alike (a repeated
+ * message), and only the run as a whole places them. Should the page have it twice, the cut is
+ * before the later: a line shown twice rather than lines never shown. A page in another order has
+ * as many of each line held (by time, stream and text) dropped from its newest end.
+ * Linear: a guest can write as many lines to one stamp as it likes.
+ */
+export function withoutOverlap(page: LogLine[], held: LogLine[]): LogLine[] {
+  const from = held[0]?.at;
+  if (from == null) return page;
+  let start = page.length;
+  let to = from;
+  while (start > 0 && page[start - 1].at != null && page[start - 1].at! >= from) to = Math.max(to, page[--start].at!);
+  if (start === page.length) return page;
+  let run = 0;
+  while (run < held.length && held[run].at != null && held[run].at! <= to) run++;
+  const ids = new Map<string, number>();
+  const id = (l: LogLine) => {
+    const k = identity(l);
+    let n = ids.get(k);
+    if (n == null) ids.set(k, (n = ids.size));
+    return n;
+  };
+  const found = lastFound(held.slice(0, run).map(id), page.slice(start).map(id));
+  if (found >= 0) return page.slice(0, start + found);
+  // The page from its first line on is of that stretch, and hasn't the whole run: it was cut within
+  // it, or is all after it. Either way nothing in it was written before the lines held.
+  if (start === 0) return [];
+  const counts = new Map<string, number>();
+  for (const l of held.slice(0, run)) {
+    const k = identity(l);
+    counts.set(k, (counts.get(k) ?? 0) + 1);
+  }
+  const kept: LogLine[] = [];
+  for (let i = page.length - 1; i >= start; i--) {
+    const k = identity(page[i]);
+    const c = counts.get(k);
+    if (c) counts.set(k, c - 1);
+    else kept.push(page[i]);
+  }
+  return page.slice(0, start).concat(kept.reverse());
+}
+
+/**
+ * An earlier page put before the lines held: what it repeats dropped, the level of a stack trace
+ * the join cut through carried on to its lines held, and past the view's limits its oldest lines
+ * let go (`full`). `added` is how many of its lines are now held, before the lines held already.
+ */
+export function joinEarlier(
+  held: LogLine[], page: LogLine[], limit: { lines: number; chars: number } = { lines: MAX_HELD_LINES, chars: MAX_HELD_CHARS },
+): { lines: LogLine[]; added: number; full: boolean } {
+  let fresh = withoutOverlap(page, held);
+  let chars = 0;
+  for (const l of held) chars += lineCost(l);
+  let keep = 0;
+  while (keep < fresh.length && held.length + keep < limit.lines && chars + lineCost(fresh[fresh.length - 1 - keep]) <= limit.chars) {
+    chars += lineCost(fresh[fresh.length - 1 - keep]);
+    keep++;
+  }
+  const full = keep < fresh.length;
+  fresh = fresh.slice(fresh.length - keep);
+  // A stack trace's lines take the level of the line above (`logLines`), which for the first lines
+  // held was on this page.
+  const level = fresh.length ? fresh[fresh.length - 1].level : null;
+  const after = held.slice();
+  for (let i = 0; level && i < after.length && after[i].level == null && CONTINUES.test(after[i].text); i++) after[i] = { ...after[i], level };
+  return { lines: fresh.concat(after), added: fresh.length, full };
+}
+
 // --- Sentences ----------------------------------------------------------------------------------
 
 const count = (n: number) => n.toLocaleString('en-GB');
 const lines_ = (n: number) => `${count(n)} ${n === 1 ? 'line' : 'lines'}`;
 
+/** What the log view holds, for its note. */
+export interface Held {
+  /** How many lines. */
+  n: number;
+  /** How many a fetch asked for. */
+  tail: number;
+  /** The window as a sentence says it ("the last hour"), if any. */
+  over: string | null;
+  /** The backend left older lines out to keep its answer within its size (`earlierDropped` on
+   * fewer lines than were asked for). */
+  tooMuch?: boolean;
+  /** Set once earlier lines were fetched: the oldest held line's time, whether there may be more
+   * before it, whether the view holds as much as it will, and whether the last page brought
+   * nothing new (`stuck`: more lines on one stamp, a millisecond or podman 5's whole second, than
+   * a fetch holds, so none can reach past them). */
+  paged?: { from: number | null; more: boolean; full: boolean; stuck?: boolean };
+  /** For saying the day only where it isn't today. */
+  now?: number;
+}
+
+/** Where the lines held start: "14:05" today, "9 Nov 23:50" another day. */
+function reachSaid(from: number, now: number): string {
+  const time = new Date(from).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+  const day = (t: number) => new Date(t).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
+  return day(from) === day(now) ? time : `${day(from)} ${time}`;
+}
+
 /**
- * What was fetched: "The last 500 lines." when podman may have more, "All 340 lines of the last
- * hour." when it hasn't. `over` is the window as a sentence says it ("the last hour"), if any.
+ * What was fetched: "The newest 500 lines; there may be more." when podman may have more, "All
+ * 340 lines of the last hour." when it hasn't, and never "All" when the backend left some out.
+ * Paged back, what's held and how far back it reaches: "The newest 1,496 lines, from 14:05 to now;
+ * there may be more."
  */
-export function fetchedSentence(n: number, tail: number, over: string | null): string {
+export function fetchedSentence({ n, tail, over, tooMuch = false, paged, now = Date.now() }: Held): string {
   if (n === 0) return over ? `Nothing logged in ${over}.` : 'Nothing logged.';
   const of = over ? ` of ${over}` : '';
-  if (n >= tail) return `The newest ${lines_(n)}${of}; there may be more.`;
+  if (paged) {
+    const reach = paged.from != null ? `, from ${reachSaid(paged.from, now)} to now` : '';
+    if (paged.full) return `The newest ${lines_(n)}${of}${reach}; that's as much as the view holds at once.`;
+    if (paged.stuck) return `The newest ${lines_(n)}${of}${reach}; earlier ones share a moment with these and can't be fetched apart.`;
+    if (paged.more) return `The newest ${lines_(n)}${of}${reach}; there may be more.`;
+    return `All ${lines_(n)}${of}${reach}.`;
+  }
+  const newest = n === 1 ? `The newest line${of}` : `The newest ${lines_(n)}${of}`;
+  if (tooMuch) return `${newest}; earlier ones were too much to fetch at once.`;
+  if (n >= tail) return `${newest}; there may be more.`;
   return n === 1 ? `The one line${of}.` : `All ${lines_(n)}${of}.`;
 }
 
