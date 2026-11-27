@@ -24,9 +24,8 @@
 <!-- Each button named for its container too, its own word first: a list has many a Stop. Two
      buttons whose words follow the container (Stop and Restart, or Start and Remove), so the focus
      stays on one as the container stops or starts. While one works both stay Tab stops, marked
-     unavailable and ignoring presses: disabled, the one pressed would drop the keyboard's focus. -->
-{#snippet press(action: ContainerAction, word: string, danger: boolean)}
-  <button class:danger aria-disabled={busy ? true : undefined} aria-label={`${word} ${name}`} onclick={() => !busy && act(action)}>{word}</button>
-{/snippet}
-{@render press(running ? 'stop' : 'start', running ? 'Stop' : 'Start', false)}
-{@render press(running ? 'restart' : 'remove', running ? 'Restart' : 'Remove', !running)}
+     unavailable and ignoring presses: disabled, the one pressed would drop the keyboard's focus.
+     Written out, not as a snippet given its words: WebKit's page grew by tens of MB per 1000 polls
+     with the snippet (e2e-ui/leak.mjs on /containers), and doesn't without. -->
+<button aria-disabled={busy ? true : undefined} aria-label={`${running ? 'Stop' : 'Start'} ${name}`} onclick={() => !busy && act(running ? 'stop' : 'start')}>{running ? 'Stop' : 'Start'}</button>
+<button class:danger={!running} aria-disabled={busy ? true : undefined} aria-label={`${running ? 'Restart' : 'Remove'} ${name}`} onclick={() => !busy && act(running ? 'restart' : 'remove')}>{running ? 'Restart' : 'Remove'}</button>
