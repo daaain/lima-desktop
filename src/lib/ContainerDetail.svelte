@@ -65,7 +65,8 @@
 <section class="wash detail" id={detail}>
   <div class="head">
     <div class="title">
-      <h3 class="serif"><bdi>{name}</bdi></h3>
+      <!-- A place to put the focus on (from an OOM kill, `vm/[name]`), not a Tab stop. -->
+      <h3 class="serif" tabindex="-1"><bdi>{name}</bdi></h3>
       <span class="muted image"><bdi>{image}</bdi></span>
     </div>
     <div class="tabs" role="tablist" aria-label="Container">
@@ -141,6 +142,7 @@
   .detail, .panel { display: grid; gap: 0.75rem; }
   /* The tabs stay on the name's line: a long name or image wraps within the title instead. */
   .head { display: flex; align-items: baseline; gap: 0.5rem; }
+  h3:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   .title { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; align-items: baseline; column-gap: 0.5rem; }
   .title > * { overflow-wrap: anywhere; }
   .head > button { flex: none; }
