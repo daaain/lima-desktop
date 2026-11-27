@@ -49,6 +49,9 @@ const NETWORK: &str = "ld-e2e-net";
 const WEB: &str = "ld-e2e-web";
 const CLIENT: &str = "ld-e2e-client";
 const OOM_CT: &str = "ld-e2e-oom";
+/// Writes `LOG_LINES` numbered lines at once, under each log driver, for paging back by `until`.
+const LOGGER: &str = "ld-e2e-logger";
+const LOG_LINES: usize = 300;
 const OOM_LIMIT: i64 = 32 << 20;
 const COMPOSE_PROJECT: &str = "ld-e2e";
 /// Docker Compose's hash of a service's config, as it labels each container: any value the image
@@ -1123,6 +1126,90 @@ impl Report {
     }
 }
 
+/// The Unix ms of a log line's timestamp, as `timestamps=true` puts it at the line's start.
+fn line_ms(line: &str) -> Option<i64> {
+    let stamp = line.split_once(' ')?.0;
+    Some(chrono::DateTime::parse_from_rfc3339(stamp).ok()?.timestamp_millis())
+}
+
+/// Paging back a log with `until`, under each log driver podman has here: the lines up to a moment
+/// are every line written up to the end of its millisecond and none after, which is what the log
+/// view's Fetch earlier counts on to join pages without a gap or a repeat. journald and k8s-file
+/// disagree on a line at exactly `until`, and k8s-file applies `tail` before `until`.
+async fn check_logs_until(ctx: &mut Ctx) -> Outcome {
+    let Some(sock) = ctx.vm(P5).and_then(|i| i.podman_socket.clone()) else {
+        return skip(format!("logs until: {P5} isn't up"));
+    };
+    let pod = Libpod::new(&sock);
+    let (mut checked, mut problems) = (Vec::new(), Vec::new());
+    for driver in ["k8s-file", "journald"] {
+        let name = format!("{LOGGER}-{driver}");
+        // A burst, so many lines share a millisecond, then idle so the log stays as written.
+        let script = format!(
+            "set -e\npodman rm -f {name} >/dev/null 2>&1 || true\n\
+             podman run -d --log-driver {driver} --name {name} {image} \
+             sh -c 'i=1; while [ $i -le {LOG_LINES} ]; do echo line$i; i=$((i+1)); done; sleep 3600' \
+             | tail -c 64\n",
+            image = image()
+        );
+        let out = shell(P5, &script, Duration::from_secs(120)).await;
+        let Some(id) = out.ok.then(|| out.stdout.trim().to_string()).filter(|id| !id.is_empty()) else {
+            problems.push(format!("{driver}: couldn't start {name}: {}", out.evidence().join(" | ")));
+            continue;
+        };
+        let all = poll(Duration::from_secs(20), Duration::from_millis(500), || {
+            let (pod, id) = (pod.clone(), id.clone());
+            async move { pod.logs(&id, 10_000, None, None).await.ok().filter(|l| l.len() >= LOG_LINES) }
+        })
+        .await;
+        let Some(all) = all else {
+            problems.push(format!("{driver}: fewer than {LOG_LINES} lines after 20 s"));
+            continue;
+        };
+        let stamped: Vec<(i64, &str)> = all.iter().filter_map(|l| Some((line_ms(&l.line)?, l.line.as_str()))).collect();
+        if stamped.len() != all.len() {
+            problems.push(format!("{driver}: a line without a timestamp: {:?}", all.first().map(|l| &l.line)));
+            continue;
+        }
+        // The moment: the middle line's millisecond; every line in it is wanted, none after.
+        let pivot = stamped[LOG_LINES / 2].0;
+        let want: Vec<&str> = stamped.iter().filter(|(ms, _)| *ms <= pivot).map(|(_, l)| *l).collect();
+        let page = match pod.logs(&id, 10_000, None, Some(pivot)).await {
+            Ok(p) => p,
+            Err(e) => {
+                problems.push(format!("{driver}: logs(until) failed: {e}"));
+                continue;
+            }
+        };
+        let got: Vec<&str> = page.iter().map(|l| l.line.as_str()).collect();
+        if got != want {
+            let first_diff = got.iter().zip(&want).position(|(a, b)| a != b).unwrap_or(got.len().min(want.len()));
+            problems.push(format!(
+                "{driver}: until {pivot} gave {} lines, wanted {} (first difference at {first_diff}: {:?} vs {:?})",
+                got.len(),
+                want.len(),
+                got.get(first_diff),
+                want.get(first_diff)
+            ));
+            continue;
+        }
+        // And a tail within it: the newest lines up to the moment, not the file's newest.
+        let tail =
+            pod.logs(&id, 10, None, Some(pivot)).await.map(|p| p.into_iter().map(|l| l.line).collect::<Vec<_>>());
+        if tail.as_deref().ok() != Some(&want[want.len() - 10..].iter().map(|l| l.to_string()).collect::<Vec<_>>()) {
+            problems.push(format!("{driver}: tail 10 until {pivot} isn't the 10 lines before it: {tail:?}"));
+            continue;
+        }
+        let shared = stamped.iter().filter(|(ms, _)| *ms == pivot).count();
+        checked.push(format!("{driver} {} of {} ({shared} in its ms)", want.len(), all.len()));
+    }
+    if problems.is_empty() {
+        pass(format!("logs until: {}", checked.join(", ")))
+    } else {
+        fail("logs until: a page back isn't the lines up to its moment", problems)
+    }
+}
+
 async fn run_all(report: &mut Report, keep: bool) {
     let mut ctx = Ctx::default();
     if report.check(check_create(&mut ctx)).await == Status::Fail && ctx.up.is_empty() {
@@ -1132,6 +1219,7 @@ async fn run_all(report: &mut Report, keep: bool) {
     report.check(check_long_socket(&mut ctx)).await;
     report.check(check_podman5(&mut ctx)).await;
     report.check(check_stats(&mut ctx)).await;
+    report.check(check_logs_until(&mut ctx)).await;
     report.check(check_probe(&mut ctx, P5)).await;
     report.check(check_probe(&mut ctx, P4)).await;
     report.check(check_oom(&mut ctx)).await;
