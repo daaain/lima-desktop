@@ -16,11 +16,13 @@
     return found?.hasAttribute(OWN_TIP) ? null : found;
   }
 
-  /** What names an element: its `aria-label`, else the text of the elements its `aria-labelledby` lists. */
+  /** What names an element: the text of the elements its `aria-labelledby` lists, as a screen reader
+   * says it (each run of spaces and line breaks one space), else its `aria-label`. */
   function labelOf(el: Element): string | null {
     const ids = el.getAttribute('aria-labelledby');
     if (ids == null) return el.getAttribute('aria-label');
-    return ids.split(/\s+/).map((id) => document.getElementById(id)?.textContent?.trim() ?? '').join(' ');
+    const text = ids.split(/\s+/).map((id) => document.getElementById(id)?.textContent ?? '').join(' ');
+    return text.replace(/\s+/g, ' ').trim();
   }
 
   function textOf(el: HTMLElement | SVGElement): string {

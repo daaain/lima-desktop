@@ -2421,8 +2421,9 @@ test('A labelled element keeps its tooltip as its description once the pointer h
   assert.equal(await ranges.getAttribute('aria-description'), said);
   // Labelled by another element: a tooltip that says the same isn't said again, one that says more is.
   await page.evaluate(() => document.body.insertAdjacentHTML('beforeend',
-    '<p style="position:fixed;bottom:0"><span id="t-name">harbor</span><button id="t-same" aria-labelledby="t-name" title="harbor">a</button><button id="t-more" aria-labelledby="t-name" title="harbor, running">b</button></p>'));
-  for (const [id, described] of [['t-same', null], ['t-more', 'harbor, running']]) {
+    '<p style="position:fixed;bottom:0"><span id="t-name">harbor</span><span id="t-long">harbor\n   running</span><button id="t-same" aria-labelledby="t-name" title="harbor">a</button><button id="t-more" aria-labelledby="t-name" title="harbor, running">b</button><button id="t-wrapped" aria-labelledby="t-long" title="harbor running">c</button></p>'));
+  // The label's text as a screen reader says it, its spaces and line breaks one space.
+  for (const [id, described] of [['t-same', null], ['t-more', 'harbor, running'], ['t-wrapped', null]]) {
     await page.locator(`#${id}`).hover();
     await page.locator('[role=tooltip]').waitFor({ timeout: 1000 });
     assert.equal(await page.locator(`#${id}`).getAttribute('aria-description'), described, id);
