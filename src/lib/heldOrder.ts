@@ -12,24 +12,26 @@ export function heldOrder<T, W>(now: readonly T[], was: readonly W[], key: (t: T
 }
 
 /**
- * What a list was ordered by as the focus came into it, for `heldOrder`, while the focus is still
- * there. Asked each time the order is worked out (every poll, and as the focus moves) whether the
- * focus is inside, as looked at then (`focusWithin.ts`): a control taken out of the page with the
- * focus says nothing in WebKit, so only looking tells that the keyboard has gone.
+ * A list's order as shown while the focus is in it: held, by `hold`, in the order last shown, so
+ * what arrived while it held keeps the place it was first shown in too. Asked each time the order
+ * is worked out (every poll, and as the focus moves) whether the focus is inside, as looked at then
+ * (`focusWithin.ts`): a control taken out of the page with the focus says nothing in WebKit, so
+ * only looking tells that the keyboard has gone.
  *
  * With the app in the background the focus is still where it was, and the list stays held: let go,
  * it would re-sort, and a line moved takes the focus with it, so the keyboard would come back to
  * nothing.
  *
- * Asked from inside a `$derived`, it keeps what it holds in a plain field, not `$state`, which a
+ * Asked from inside a `$derived`, it keeps what it showed in a plain field, not `$state`, which a
  * derived may not write to (`state_unsafe_mutation`).
  */
 export class Held<T> {
-  #was: T | null = null;
+  #shown: T | null = null;
 
-  /** While `inside`, the `now` it first came with; else nothing, forgotten. */
-  was(now: T, inside: boolean): T | null {
-    this.#was = inside ? (this.#was ?? now) : null;
-    return this.#was;
+  /** `now`, or while `inside`, `now` held in the order last shown; remembered while inside. */
+  shown(now: T, inside: boolean, hold: (now: T, was: T) => T): T {
+    const shown = inside && this.#shown ? hold(now, this.#shown) : now;
+    this.#shown = inside ? shown : null;
+    return shown;
   }
 }

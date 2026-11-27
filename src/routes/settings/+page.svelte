@@ -21,8 +21,11 @@
     { key: 'disk', label: 'Disk' },
   ];
   // Each worked out from the menu bar's settings as they are when it's saved, after any choice before it.
-  const menuBar = (change: Partial<MenuBar> | ((m: MenuBar) => Partial<MenuBar>)) =>
-    save((s) => ({ menuBar: { ...s.menuBar, ...(typeof change === 'function' ? change(s.menuBar) : change) } }));
+  const menuBar = (change: Partial<MenuBar> | ((m: MenuBar) => Partial<MenuBar> | null)) =>
+    save((s) => {
+      const c = typeof change === 'function' ? change(s.menuBar) : change;
+      return c && { menuBar: { ...s.menuBar, ...c } };
+    });
   const menuItem = (key: ItemKey, change: Partial<MenuBarItem>) => menuBar((m) => ({ [key]: { ...m[key], ...change } }));
   // When each item warns: memory and CPU past a percent in use, the disk with less than so many GB
   // free; or never.
@@ -55,14 +58,17 @@
   // save, which would take the keyboard's focus with it.
   let saved = Promise.resolve();
   /** Saves `change` after any choice before it (given as a function, worked out from the settings as
-   * they are then); each setting then takes effect where it shows. */
-  function save(change: Partial<Settings> | ((s: Settings) => Partial<Settings>)): Promise<void> {
+   * they are then, and nothing to save where it gives null: a choice of what's already chosen is
+   * told apart then, not as it's made, when a choice before it may still be on its way); each
+   * setting then takes effect where it shows. */
+  function save(change: Partial<Settings> | ((s: Settings) => Partial<Settings> | null)): Promise<void> {
     return (saved = saved.then(() => store(change)));
   }
-  async function store(asked: Partial<Settings> | ((s: Settings) => Partial<Settings>)) {
+  async function store(asked: Partial<Settings> | ((s: Settings) => Partial<Settings> | null)) {
     if (!settings) return;
     error = null;
     const change = typeof asked === 'function' ? asked(settings) : asked;
+    if (!change) return;
     try {
       settings = await api.setSettings({ ...settings, ...change });
       if (change.intervalSecs != null) live.poke();
@@ -83,7 +89,7 @@
     <div class="choices" role="group" aria-label="Measure each running VM every">
       {#each INTERVALS as s}
         <button class="choice num" class:active={settings.intervalSecs === s} aria-pressed={settings.intervalSecs === s}
-          onclick={() => settings!.intervalSecs !== s && save({ intervalSecs: s })}>{s} s</button>
+          onclick={() => save((now) => (now.intervalSecs === s ? null : { intervalSecs: s }))}>{s} s</button>
       {/each}
     </div>
     <p class="note">
@@ -99,7 +105,7 @@
     <div class="choices" role="group" aria-label="Theme">
       {#each THEMES as t}
         <button class="choice" class:active={settings.theme === t} aria-pressed={settings.theme === t}
-          onclick={() => settings!.theme !== t && save({ theme: t })}>{THEME_LABELS[t]}</button>
+          onclick={() => save((now) => (now.theme === t ? null : { theme: t }))}>{THEME_LABELS[t]}</button>
       {/each}
     </div>
     <p class="note">System is light or dark as this computer is, and follows it when it changes.</p>
@@ -116,7 +122,7 @@
             <div class="choices" role="group" aria-label="{item.label} drawn in the menu bar as">
               {#each DRAWINGS as d}
                 <button class="choice small" class:active={chosen.drawing === d} aria-pressed={chosen.drawing === d}
-                  onclick={() => chosen.drawing !== d && menuItem(item.key, { drawing: d })}>{DRAWING_LABELS[d]}</button>
+                  onclick={() => menuBar((m) => (m[item.key].drawing === d ? null : { [item.key]: { ...m[item.key], drawing: d } }))}>{DRAWING_LABELS[d]}</button>
               {/each}
             </div>
             {#if !drawingsOnly}

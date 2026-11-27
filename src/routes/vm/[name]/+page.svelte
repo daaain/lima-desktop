@@ -178,12 +178,20 @@
   function toggle(id: string) {
     open = open.includes(id) ? open.filter((o) => o !== id) : [...open, id];
   }
-  /** From an OOM kill: open its container's detail (if it isn't, unfolding its project) and bring it into view. */
+  /**
+   * From an OOM kill: open its container's detail (if it isn't, unfolding its project) and bring it
+   * into view, the focus with it, on its heading: left in the table, the next Tab would go on there
+   * and take the page back up.
+   */
   function show(id: string) {
     if (!open.includes(id)) open = [...open, id];
     const project = vm?.containers.find((c) => c.id === id)?.composeProject;
     if (project && folds.has(name, project)) folds.toggle(name, project);
-    tick().then(() => document.getElementById(detailId(id))?.scrollIntoView({ block: 'center', behavior: 'smooth' }));
+    tick().then(() => {
+      const detail = document.getElementById(detailId(id));
+      detail?.querySelector<HTMLElement>('h3')?.focus({ preventScroll: true });
+      detail?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    });
   }
 
   async function loadDf() {

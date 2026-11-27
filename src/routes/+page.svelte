@@ -35,8 +35,7 @@
   const held = new Held<VmLive[]>();
   const running = $derived.by(() => {
     void focusMoved;
-    const was = held.was(sorted, focusWithin(fleet, 'article.row.vm'));
-    return was ? heldOrder(sorted, was, (v) => v.instance.name) : sorted;
+    return held.shown(sorted, focusWithin(fleet, 'article.row.vm'), (now, was) => heldOrder(now, was, (v) => v.instance.name));
   });
   const others = $derived(sortStopped(vms.filter((v) => v.instance.status !== 'Running'), ordering.current));
   const heads = $derived<{ key: VmSort; text: string }[]>([

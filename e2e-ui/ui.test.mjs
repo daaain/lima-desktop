@@ -2481,13 +2481,17 @@ test("A container's detail's tabs say which is chosen, and the arrow keys choose
   await close();
 });
 
-test("An OOM kill's container is a button, so the keyboard opens its detail too", async () => {
+test("An OOM kill's container is a button, so the keyboard opens its detail too, and goes on there", async () => {
   const { page, errors, close } = await open('/vm/harbor');
   const app = page.locator('#oom').getByRole('button', { name: 'app', exact: true });
   await app.focus();
   await page.keyboard.press('Enter');
   await page.locator('[id^="detail-"]').waitFor();
-  assert.equal(await focused(page), 'app', 'focus stays on it');
+  // The detail is further down the page, brought into view: the focus goes with it, to its heading,
+  // so Tab goes on into the detail, not back in the table.
+  await page.waitForFunction(() => document.activeElement?.matches('section.detail h3'));
+  await page.keyboard.press('Tab');
+  assert.ok(await page.evaluate(() => !!document.activeElement?.closest('section.detail')), 'Tab goes on in the detail');
   // A removed container has no detail to open, so it isn't a button.
   assert.equal(await page.locator('#oom tbody tr:not(.clickable) button').count(), 0);
   assert.deepEqual(errors, []);
@@ -2648,6 +2652,17 @@ test('A Settings control keeps focus as what it chose is saved, and choices made
   await page.keyboard.press('Space');
   await page.waitForTimeout(400);
   assert.equal(await focused(page), 'Keep recording, in the menu bar');
+  // Another theme, then the saved one again before the first is saved: the last choice is what's stored.
+  const theme = (await settingsCome(page, () => true)).theme;
+  const other = theme === 'light' ? 'Dark' : 'Light';
+  const label = { system: 'System', light: 'Light', dark: 'Dark' }[theme];
+  await page.getByRole('group', { name: 'Theme' }).evaluate((g, [a, b]) => {
+    const press = (name) => [...g.querySelectorAll('button')].find((x) => x.textContent.trim() === name).click();
+    press(a);
+    press(b);
+  }, [other, label]);
+  await page.waitForTimeout(600);
+  assert.equal((await settingsCome(page, () => true)).theme, theme);
   // Two at once, the second sent before the first is saved: neither is lost to the other.
   const boxes = page.locator('input[type=checkbox]');
   const was = await boxes.evaluateAll((bs) => bs.map((b) => b.checked));
