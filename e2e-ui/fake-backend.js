@@ -700,7 +700,13 @@
     guest_files: (args) => later(guestFiles(args)),
     guest_file: (args) => later(guestFile(args)),
     container_logs: ({ id, tail, since, until }) => containerLogs(id, tail, since, until),
-    container_inspect: ({ id }) => ({ Id: id, State: { Status: 'running' } }),
+    // As long as a real one, a few hundred lines, so the view has to scroll.
+    container_inspect: ({ id }) => ({
+      Id: id,
+      State: { Status: 'running', Running: true, Pid: 4242, ExitCode: 0 },
+      Config: { Env: Array.from({ length: 60 }, (_, i) => `SETTING_${i}=value-${i}`), Cmd: ['node', 'server.js'], WorkingDir: '/app' },
+      Mounts: Array.from({ length: 6 }, (_, i) => ({ Type: 'volume', Name: `data-${i}`, Destination: `/data/${i}`, RW: true })),
+    }),
     // A newer version only when a test sets __fakeUpdate ({ version, url }), so the gallery's
     // pictures don't carry the notice; none with the check off, as updates.rs. Each asking is in
     // __fakeCalls, so a test can wait for an answer that shows nothing.

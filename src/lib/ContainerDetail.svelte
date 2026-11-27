@@ -127,7 +127,9 @@
     {:else if tab === 'logs'}
       <LogView vm={where} {id} {name} {image} />
     {:else}
-      <pre>{inspect || '…'}</pre>
+      <!-- Focusable, as WebKit doesn't let the keyboard scroll a box that isn't (axe's scrollable-region-focusable). -->
+      <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+      <pre tabindex="0" role="region" aria-label="Inspect output">{inspect || '…'}</pre>
     {/if}
   </div>
 </section>

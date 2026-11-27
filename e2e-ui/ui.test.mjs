@@ -2468,3 +2468,18 @@ test("An OOM kill's container is a button, so the keyboard opens its detail too"
   assert.deepEqual(errors, []);
   await close();
 });
+
+test("A container's inspect output is a named region the keyboard reaches and scrolls, as WebKit won't on its own", async () => {
+  const { page, errors, close } = await open('/containers', { height: 900 });
+  await page.locator('.line', { has: page.locator('.name', { hasText: /^frontend/ }) }).first().click();
+  const detail = page.locator('section.detail');
+  await detail.getByRole('tab', { name: 'inspect' }).click();
+  const region = detail.getByRole('region', { name: 'Inspect output' });
+  await page.waitForFunction(() => document.querySelector('section.detail pre')?.textContent.length > 10);
+  assert.equal(await region.getAttribute('tabindex'), '0');
+  await region.focus();
+  await page.keyboard.press('End');
+  await page.waitForFunction(() => document.querySelector('section.detail pre').scrollTop > 0);
+  assert.deepEqual(errors, []);
+  await close();
+});
