@@ -35,14 +35,17 @@
   const oom = $derived(l.oom_kills ?? 0);
 </script>
 
-<div class="line num" class:off={!running} role="button" tabindex="0" aria-expanded={selected} aria-controls={selected ? controls : undefined} onclick={onselect}
-  onkeydown={(e) => { if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); onselect(); } }}>
-  <div class="who">
+<!-- The whole line opens its detail for a pointer; its left side (the name and what's under it) is
+     the button a keyboard or a screen reader uses, wide and tall to click, and a click there reaches
+     the line as any other. Its actions are beside it, not in it. -->
+<!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+<div class="line num" class:off={!running} onclick={onselect}>
+  <button class="who" aria-expanded={selected} aria-controls={selected ? controls : undefined}>
     <span class="name serif" title={visible(c.name)}><bdi>{visible(c.composeService ?? c.name)}</bdi>{#if oom > 0}<span class="badge alert" title="Processes killed for running out of memory since it started">{oom} OOM</span>{/if}</span>
     <span class="second" title={visible(second === 'image' ? c.image : c.name)}>
       {#if second === 'image' || !running}<bdi>{visible(c.image)}</bdi>{:else}{l.pids ?? '–'} pids · net {rate(l.net_rx_bps)} in, {rate(l.net_tx_bps)} out{/if}
     </span>
-  </div>
+  </button>
   {#if running}
     <div class="drawn">
       <MemoryShare me={band(history, 'mem')} vm={band(vmHistory, 'mem_used')} ts={history?.ts ?? vmHistory?.ts} {vmMemory} hot={memory.hot} />
@@ -78,8 +81,9 @@
   /* Hover only: an open line's detail below says it's open, and a wash on the line itself would
      run its content to the edge of the colour, the line having no side padding. */
   .line:hover { background: var(--wash); }
-  .line:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-  .who { display: grid; gap: 0.1rem; min-width: 0; }
+  /* The name and what's under it as they were, a button only in what it does. */
+  .who { all: unset; display: grid; gap: 0.1rem; min-width: 0; cursor: pointer; }
+  .who:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   .name { font-size: 1.25rem; font-weight: 600; line-height: 1.2; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .name .badge { font-family: var(--sans); font-weight: 400; margin-left: 0.5rem; vertical-align: 0.15em; }
   .second { font-size: 0.82rem; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

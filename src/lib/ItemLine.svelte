@@ -29,20 +29,24 @@
     /** Whether its detail is open; `onselect` opens and closes it, `controls` is its id. */
     selected?: boolean; controls?: string; onselect?: () => void;
   } = $props();
-  const keys = (e: KeyboardEvent) => {
-    // The line's own keys only: Enter on its Remove button is that button's.
-    if (onselect && e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); onselect(); }
-  };
 </script>
 
-<!-- A button when it opens something (`role` is set with `onselect`). -->
-<!-- svelte-ignore a11y_no_static_element_interactions, a11y_no_noninteractive_tabindex -->
-<div class="line num" class:openable={onselect} role={onselect ? 'button' : undefined} tabindex={onselect ? 0 : undefined}
-  aria-expanded={onselect ? selected : undefined} aria-controls={selected ? controls : undefined} onclick={onselect} onkeydown={keys}>
-  <div class="who">
-    <span class="name serif" {title}>{@render name()}</span>
-    <span class="second" title={secondTitle}>{second}</span>
-  </div>
+<!-- Given `onselect`, the whole line opens its detail for a pointer; its left side (the name and what
+     it is) is the button a keyboard or a screen reader uses, wide and tall to click, and a click there
+     reaches the line as any other. Its Remove is beside it, not in it. -->
+<!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+<div class="line num" class:openable={onselect} onclick={onselect}>
+  {#if onselect}
+    <button class="who" aria-expanded={selected} aria-controls={selected ? controls : undefined}>
+      <span class="name serif" {title}>{@render name()}</span>
+      <span class="second" title={secondTitle}>{second}</span>
+    </button>
+  {:else}
+    <div class="who">
+      <span class="name serif" {title}>{@render name()}</span>
+      <span class="second" title={secondTitle}>{second}</span>
+    </div>
+  {/if}
   {#if size != null}
     <div class="drawn">
       <Bar pct={share(frees ?? size, scale)} behind={frees != null ? share(size, scale) : undefined} plain
@@ -74,8 +78,10 @@
   }
   .openable { cursor: pointer; }
   .openable:hover { background: var(--wash); }
-  .openable:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-  .who { display: grid; gap: 0.1rem; min-width: 0; }
+  /* The name and what it is as they were, a button only in what it does. */
+  .who { all: unset; display: grid; gap: 0.1rem; min-width: 0; }
+  button.who { cursor: pointer; }
+  button.who:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   .name { font-size: 1.25rem; font-weight: 600; line-height: 1.2; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .name :global(.from) { color: var(--muted); font-weight: 400; }
   .second { font-size: 0.82rem; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

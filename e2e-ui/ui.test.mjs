@@ -1683,7 +1683,7 @@ test("An image's layers open under its line, config steps folded away, each laye
   // The image's detail (a layer's files are a detail inside it).
   const detail = page.locator('section.detail').first();
   await detail.locator('ol.steps li').first().waitFor();
-  assert.equal(await line.getAttribute('aria-expanded'), 'true');
+  assert.equal(await line.locator('button.who').getAttribute('aria-expanded'), 'true');
   // Four layers in Dockerfile order, the base first; the three config steps only when asked for,
   // their wrapper taken off.
   const steps = detail.locator('ol.steps li');
@@ -2466,7 +2466,7 @@ test("The popover's tabs are one Tab stop, chosen with the arrow keys, Home and 
 test("A container's detail's tabs say which is chosen, and the arrow keys choose another", async () => {
   const { page, errors, close } = await open('/containers', { height: 1400 });
   const line = page.locator('.line', { has: page.locator('.name', { hasText: /^frontend/ }) }).first();
-  await line.focus();
+  await line.locator('button.who').focus();
   await page.keyboard.press('Enter');
   const detail = page.locator('section.detail');
   await detail.waitFor();
@@ -2686,9 +2686,9 @@ test('Refresh and Measure on Images and Volumes keep focus while they work', asy
 
 test("Closing a container's detail, an image's layers or a volume's files gives focus back to its line", async () => {
   const { page, errors, close } = await open('/containers');
-  // Each line opens its detail with Enter, says which it controls, and takes focus back from its ✕.
+  // Each line's button opens its detail with Enter, says which it controls, and takes focus back from its ✕.
   const opensAndCloses = async (name) => {
-    const line = page.locator('.line', { has: page.locator('.name', { hasText: name }) }).first();
+    const line = page.locator('.line', { has: page.locator('.name', { hasText: name }) }).first().locator('button.who');
     await line.focus();
     await page.keyboard.press('Enter');
     await page.waitForFunction((el) => el.getAttribute('aria-expanded') === 'true', await line.elementHandle());
@@ -2715,7 +2715,7 @@ test("Closing a container's detail, an image's layers or a volume's files gives 
 test('The full-window log gives focus back to its Full window button as it closes, by Escape or its own button', async () => {
   const { page, errors, close } = await open('/containers');
   const line = page.locator('.line', { has: page.locator('.name', { hasText: /^frontend/ }) }).first();
-  await line.focus();
+  await line.locator('button.who').focus();
   await page.keyboard.press('Enter');
   const detail = page.locator('section.detail');
   await detail.getByRole('tab', { name: 'logs' }).focus();
@@ -2742,12 +2742,12 @@ test('The full-window log gives focus back to its Full window button as it close
 test("Each step through a folder's files puts focus on what it opened: the first entry, else what the view says", async () => {
   const { page, errors, close } = await open('/volumes');
   const line = page.locator('.line', { has: page.locator('.name', { hasText: /^atlas_pgdata$/ }) }).first();
-  await line.focus();
+  await line.locator('button.who').focus();
   await page.keyboard.press('Enter');
   const files = page.locator('section.detail');
   await files.getByRole('button', { name: 'base/' }).waitFor();
-  // Opening leaves focus on the line.
-  assert.ok(await line.evaluate((el) => el === document.activeElement), 'focus stays on the line as it opens');
+  // Opening leaves focus on the line's button.
+  assert.ok(await line.locator('button.who').evaluate((el) => el === document.activeElement), "focus stays on the line's button as it opens");
   const step = async (button) => {
     await button.focus();
     await page.keyboard.press('Enter');
@@ -2855,6 +2855,41 @@ test("A step through a folder's files overtaken by another leaves the focus wher
   // base/'s answer, overtaken, isn't shown, and doesn't move the focus either.
   await page.waitForTimeout(700);
   assert.equal(await focused(page), 'pg_wal/');
+  assert.deepEqual(errors, []);
+  await close();
+});
+
+// ---- Rows as disclosures (#28) ----
+
+test("A line opens from a button that is its whole left side, named by what's there, its actions beside it, not in it", async () => {
+  const { page, errors, close } = await open('/containers', { height: 1400 });
+  const line = page.locator('.line', { has: page.locator('.name', { hasText: /^frontend/ }) }).first();
+  const opener = line.getByRole('button', { name: /^frontend .*atlas_frontend/ });
+  assert.equal(await opener.getAttribute('aria-expanded'), 'false');
+  // The line is no button of its own, and no Tab stop: the name and image are.
+  assert.equal(await line.getAttribute('role'), null);
+  assert.equal(await line.getAttribute('tabindex'), null);
+  assert.equal(await opener.locator('button').count(), 0, 'no button inside it');
+  // As wide as the column of names, and as tall as the name and image in it.
+  const [o, n, s] = await Promise.all([opener.boundingBox(), line.locator('.name').boundingBox(), line.locator('.second').boundingBox()]);
+  assert.ok(o.y <= n.y && o.y + o.height >= s.y + s.height, 'it holds the name and the image');
+  await opener.focus();
+  await page.keyboard.press('Enter');
+  await page.locator('section.detail').waitFor();
+  assert.equal(await opener.getAttribute('aria-expanded'), 'true');
+  assert.equal(await opener.getAttribute('aria-controls'), await page.locator('section.detail').getAttribute('id'));
+  await page.keyboard.press('Space');
+  await page.waitForFunction((el) => el.getAttribute('aria-expanded') === 'false', await opener.elementHandle());
+  // A click anywhere on the line still opens it, as before.
+  await line.locator('.said').first().click();
+  await page.locator('section.detail').waitFor();
+  // An image's line likewise, its name and what it is the button.
+  await page.goto(`${base}/images`);
+  const image = page.locator('.line', { has: page.locator('.name', { hasText: 'atlas_frontend' }) }).first();
+  const imageOpener = image.locator('button[aria-expanded]');
+  assert.equal(await imageOpener.count(), 1);
+  assert.equal(await image.getAttribute('role'), null);
+  assert.ok((await imageOpener.innerText()).includes((await image.locator('.second').innerText()).trim()));
   assert.deepEqual(errors, []);
   await close();
 });
