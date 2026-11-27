@@ -80,8 +80,7 @@
   const held = new Held<ContainerGroup[]>();
   const groups = $derived.by(() => {
     void focusMoved;
-    const was = held.was(sorted, focusWithin(list));
-    return (was ? holdGroups(sorted, was) : sorted).map((g) => ({ ...g, live: live.vm(g.vm) }));
+    return held.shown(sorted, focusWithin(list), holdGroups).map((g) => ({ ...g, live: live.vm(g.vm) }));
   });
   const heads = $derived<{ key: ContainerSort; text: string; span?: number }[]>([
     { key: 'name', text: `${countWord(groups.length)} ${groups.length === 1 ? 'VM' : 'VMs'}` },

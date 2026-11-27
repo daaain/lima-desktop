@@ -23,13 +23,25 @@ describe('heldOrder', () => {
 });
 
 describe('Held', () => {
-  it('keeps what it first came with while inside, and lets go as soon as it is told the focus has gone', () => {
+  const hold = (now: string[], was: string[]) => heldOrder(now, was, key);
+
+  it('shows the order as it comes until the focus is inside, then holds the order last shown', () => {
     const held = new Held<string[]>();
-    expect(held.was(['a', 'b'], false)).toBeNull();
-    expect(held.was(['a', 'b'], true)).toEqual(['a', 'b']);
-    expect(held.was(['b', 'a'], true)).toEqual(['a', 'b']);
-    expect(held.was(['b', 'a'], false)).toBeNull();
-    // Back in, it holds afresh: what it held before is gone.
-    expect(held.was(['b', 'a'], true)).toEqual(['b', 'a']);
+    expect(held.shown(['a', 'b'], false, hold)).toEqual(['a', 'b']);
+    expect(held.shown(['a', 'b'], true, hold)).toEqual(['a', 'b']);
+    expect(held.shown(['b', 'a'], true, hold)).toEqual(['a', 'b']);
+    // Let go, then back in: it holds afresh, from what it's given then.
+    expect(held.shown(['b', 'a'], false, hold)).toEqual(['b', 'a']);
+    expect(held.shown(['a', 'b'], true, hold)).toEqual(['a', 'b']);
+    expect(held.shown(['b', 'a'], true, hold)).toEqual(['a', 'b']);
+  });
+
+  it('keeps what came while it held where it was first shown, poll after poll', () => {
+    const held = new Held<string[]>();
+    held.shown(['a'], true, hold);
+    // b and c arrive: after a, as they came.
+    expect(held.shown(['b', 'a', 'c'], true, hold)).toEqual(['a', 'b', 'c']);
+    // The next poll orders them the other way: shown as they were.
+    expect(held.shown(['c', 'a', 'b'], true, hold)).toEqual(['a', 'b', 'c']);
   });
 });
