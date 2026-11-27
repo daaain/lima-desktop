@@ -1,15 +1,18 @@
 //! Lima Desktop end to end, against a REAL Lima on this host (`just e2e`; directly:
-//! `cargo run -q --example e2e -- [--keep] [--log-dir <dir>]`).
+//! `cargo run -q --example e2e -- [--keep] [--guest <name>]… [--log-dir <dir>]`).
 //!
 //! Replays put the real parsers through recorded data; this drives the crate's own modules — as
 //! the app does — against live VMs: the lifecycle verbs, `limactl edit` resize, the probe and the
 //! journal reader over Lima's ssh, the podman socket forward (and the short link for a long path),
-//! a real OOM kill, the podman ≥ 5 gate, and the collector end to end.
+//! a real OOM kill, the podman ≥ 5 gate, and the collector end to end. Every podman check runs on
+//! each guest whose podman the app supports: Lima's podman template's (Fedora, its newest podman)
+//! and Debian 13's (5.4, the oldest 5.x a stable distribution ships).
 //!
 //! Isolation: everything happens under its own `LIMA_HOME` (`$LD_E2E_HOME`, else
 //! `~/.lima-desktop-e2e`), set before anything runs `limactl`; it refuses to run against `~/.lima`
-//! or a home holding instances that aren't its own (`ld-e2e-*`). Its two VMs are deleted at the
-//! end, on failure and on Ctrl-C, unless `--keep`. Only Lima's image cache is shared.
+//! or a home holding instances that aren't its own (`ld-e2e-*`). Its VMs (all three, or those
+//! `--guest` picks) are deleted at the end, on failure and on Ctrl-C, unless `--keep`. Only Lima's
+//! image cache is shared.
 //!
 //! Output is made to be pasted: one line per check, a few indented lines of evidence under a
 //! failure, a summary. Everything else (limactl's output, whole errors) goes to the log file.
@@ -33,11 +36,23 @@ use lima_desktop_lib::probe::{self, Block};
 use lima_desktop_lib::store::{ABSENT, Store};
 
 const PREFIX: &str = "ld-e2e-";
-/// podman 5: Lima's own podman template (Fedora).
-const P5: &str = "ld-e2e-p5";
-/// podman 4: Debian 12 (tests/e2e/podman4.yaml), which the app must show but refuse.
-const P4: &str = "ld-e2e-p4";
-const VMS: [&str; 2] = [P5, P4];
+/// Lima's own podman template: Fedora, with whichever podman it brings (6.x since Lima 2.3).
+const FEDORA: &str = "ld-e2e-fedora";
+/// Debian 13 (tests/e2e/debian13.yaml) and its podman 5.4, the oldest 5.x a stable distribution
+/// ships: it stamps log lines to the second.
+const DEB13: &str = "ld-e2e-deb13";
+/// Debian 12 (tests/e2e/debian12.yaml) and its podman 4.3, which the app must show but refuse.
+const DEB12: &str = "ld-e2e-deb12";
+/// Every guest, in the order they're created and checked. Their names end up in Lima's socket
+/// paths, so they're kept short (see `MAX_HOME_LEN`).
+const GUESTS: [&str; 3] = [FEDORA, DEB13, DEB12];
+/// The guests whose podman the app supports: every podman check runs on each.
+const SUPPORTED: [&str; 2] = [FEDORA, DEB13];
+/// The guest whose podman the app must refuse.
+const REFUSED: &str = DEB12;
+/// Lima's lifecycle (stop, resize, start, restart) is checked on this guest only: it tests Lima,
+/// not the engine.
+const LIFECYCLE: &str = FEDORA;
 const HOME_ENV: &str = "LD_E2E_HOME";
 const DEFAULT_HOME: &str = ".lima-desktop-e2e";
 /// Lima keeps sockets under LIMA_HOME (ssh's control socket with a 17-character suffix) and
@@ -58,8 +73,9 @@ const COMPOSE_PROJECT: &str = "ld-e2e";
 /// doesn't carry.
 const COMPOSE_CONFIG_HASH: &str = "5d0c8e2a41b7f9e3c6a1d4b8e7f2a9c3b6d1e4f7a2c5b8e1d4f7a0c3b6e9d2f5";
 const GIB: u64 = 1 << 30;
-/// Where the template for the podman 4 VM is (the source tree, so it works from any cwd).
-const PODMAN4_TEMPLATE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/e2e/podman4.yaml");
+/// Where the Debian guests' templates are (the source tree, so it works from any cwd).
+const DEBIAN13_TEMPLATE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/e2e/debian13.yaml");
+const DEBIAN12_TEMPLATE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/e2e/debian12.yaml");
 /// The width a check's text is padded to before its duration.
 const COLUMN: usize = 64;
 /// Evidence under a failed check: at most this many lines, each at most this long.
@@ -122,7 +138,39 @@ fn vm_type(os: &str) -> Option<&'static str> {
 
 /// The template each VM is made from.
 fn template(vm: &str) -> &'static str {
-    if vm == P4 { PODMAN4_TEMPLATE } else { "template:podman" }
+    match vm {
+        DEB13 => DEBIAN13_TEMPLATE,
+        DEB12 => DEBIAN12_TEMPLATE,
+        _ => "template:podman",
+    }
+}
+
+/// A guest as the checks name it: with its podman's version, once it's known.
+fn with_podman(vm: &str, version: Option<&str>) -> String {
+    match version {
+        Some(v) => format!("{vm} (podman {v})"),
+        None => vm.to_string(),
+    }
+}
+
+/// How precise a log's stamps are, from the longest fraction among its lines (a nanosecond stamp
+/// loses its trailing zeros, so one line alone can look coarser than it is).
+fn precision(lines: &[String]) -> String {
+    let digits = lines
+        .iter()
+        .map(|l| {
+            let stamp = l.split_once(' ').map_or(l.as_str(), |(s, _)| s);
+            stamp.split_once('.').map_or(0, |(_, f)| f.bytes().take_while(u8::is_ascii_digit).count())
+        })
+        .max()
+        .unwrap_or(0);
+    match digits {
+        0 => "to the second".into(),
+        3 => "to the ms".into(),
+        6 => "to the µs".into(),
+        9 => "to the ns".into(),
+        n => format!("to {n} digits of a second"),
+    }
 }
 
 /// `limactl create`'s arguments for an e2e VM: small (2 CPUs, 2 GiB, 10 GiB), nothing of the
@@ -397,18 +445,34 @@ fn image() -> String {
 // ---- the checks -----------------------------------------------------------------------------
 
 /// What the checks learn and pass on.
-#[derive(Default)]
 struct Ctx {
+    /// The guests this run is about (`--guest`, else all), in `GUESTS` order.
+    selected: Vec<&'static str>,
     /// The VMs that came up, with their podman version.
     up: HashMap<&'static str, (Instance, String)>,
-    /// Container name → id in the podman 5 VM.
-    containers: HashMap<&'static str, String>,
-    oom_since: i64,
+    /// (VM, container name) → id, in the supported guests.
+    containers: HashMap<(&'static str, &'static str), String>,
+    /// When each supported guest's OOM check began.
+    oom_since: HashMap<&'static str, i64>,
 }
 
 impl Ctx {
+    fn new(selected: Vec<&'static str>) -> Self {
+        Ctx { selected, up: HashMap::new(), containers: HashMap::new(), oom_since: HashMap::new() }
+    }
+
     fn vm(&self, name: &str) -> Option<&Instance> {
         self.up.get(name).map(|(i, _)| i)
+    }
+
+    /// `vm` with its podman's version, as the checks' lines name it.
+    fn who(&self, vm: &str) -> String {
+        with_podman(vm, self.up.get(vm).map(|(_, v)| v.as_str()))
+    }
+
+    /// The selected guests whose podman the app supports.
+    fn supported(&self) -> Vec<&'static str> {
+        self.selected.iter().copied().filter(|vm| SUPPORTED.contains(vm)).collect()
     }
 }
 
@@ -471,24 +535,19 @@ async fn check_create(ctx: &mut Ctx) -> Outcome {
     // two at once race on it ("…/_config/user already exists"). Creating is quick; starting isn't.
     let mut evidence = Vec::new();
     let mut created = Vec::new();
-    for vm in VMS {
+    for &vm in &ctx.selected {
         match create(vm).await {
             Ok(()) => created.push(vm),
             Err(e) => evidence.extend(e),
         }
     }
-    let up = |vm: &'static str| {
-        let made = created.contains(&vm);
-        async move { if made { Some(bring_up(vm).await) } else { None } }
-    };
-    let (p5, p4) = tokio::join!(up(P5), up(P4));
+    let started = futures_join(created.iter().map(|&vm| bring_up(vm)).collect()).await;
     let mut made = Vec::new();
-    for (vm, r) in [(P5, p5), (P4, p4)] {
+    for (vm, r) in created.into_iter().zip(started) {
         match r {
-            None => {}
-            Some(Err(e)) => evidence.extend(e),
-            Some(Ok((inst, version))) => {
-                made.push(format!("{vm} (podman {version})"));
+            Err(e) => evidence.extend(e),
+            Ok((inst, version)) => {
+                made.push(with_podman(vm, Some(&version)));
                 ctx.up.insert(vm, (inst, version));
             }
         }
@@ -512,7 +571,7 @@ async fn check_list(ctx: &mut Ctx) -> Outcome {
         return fail("list: sees instances that aren't the e2e's", vec![foreign.join(", ")]);
     }
     let mut problems = Vec::new();
-    for vm in VMS {
+    for &vm in &ctx.selected {
         match list.iter().find(|i| i.name == vm) {
             None => problems.push(format!("{vm}: not listed")),
             Some(i) if !i.running() => problems.push(format!("{vm}: {}", i.status)),
@@ -528,17 +587,18 @@ async fn check_list(ctx: &mut Ctx) -> Outcome {
         }
     }
     if problems.is_empty() {
-        pass(format!("list: {} running, both with a podman socket", VMS.len()))
+        pass(format!("list: {} running, each with a podman socket", ctx.selected.join(", ")))
     } else {
-        fail("list: not both running with a podman socket", problems)
+        fail("list: not every guest running with a podman socket", problems)
     }
 }
 
-/// A path to the podman 5 VM's socket longer than `sun_path` takes: the client must reach it
-/// through its short link. Made of a long-named symlink to the socket's directory.
-async fn check_long_socket(ctx: &mut Ctx) -> Outcome {
-    let Some(sock) = ctx.vm(P5).and_then(|i| i.podman_socket.clone()) else {
-        return skip(format!("socket long path: {P5} isn't up"));
+/// A path to a VM's podman socket longer than `sun_path` takes: the client must reach it through
+/// its short link. Made of a long-named symlink to the socket's directory. Any guest will do: it's
+/// the client that's checked.
+async fn check_long_socket(ctx: &mut Ctx, vm: &'static str) -> Outcome {
+    let Some(sock) = ctx.vm(vm).and_then(|i| i.podman_socket.clone()) else {
+        return skip(format!("socket long path: {vm} isn't up"));
     };
     let sock = PathBuf::from(sock);
     let dir = std::env::temp_dir().join(format!("{PREFIX}{}", "long-socket-path-".repeat(5)));
@@ -551,13 +611,13 @@ async fn check_long_socket(ctx: &mut Ctx) -> Outcome {
     let answer = Libpod::new(&long).version().await;
     let _ = std::fs::remove_file(&dir);
     match answer {
-        Ok(_) if len > 104 => pass(format!("socket: a {len}-byte path reached through a short link")),
+        Ok(_) if len > 104 => pass(format!("socket: a {len}-byte path to {vm}'s reached through a short link")),
         Ok(_) => fail(format!("socket long path: only {len} bytes, not over the limit"), vec![]),
         Err(e) => fail(format!("socket: a {len}-byte path didn't connect"), vec![e.to_string()]),
     }
 }
 
-/// The containers the podman 5 VM runs: a tiny TCP server and a client asking it once a second,
+/// The containers each supported guest runs: a tiny TCP server and a client asking it once a second,
 /// on one podman network — interface traffic without needing the internet once the image is
 /// pulled — labelled as Docker Compose labels the containers it creates, a config hash included:
 /// without it, a project label could have come from the image, and the app believes none.
@@ -584,36 +644,38 @@ podman inspect -f '{{{{.Name}}}} {{{{.Id}}}}' {WEB} {CLIENT}
     )
 }
 
-async fn check_podman5(ctx: &mut Ctx) -> Outcome {
-    let Some(sock) = ctx.vm(P5).and_then(|i| i.podman_socket.clone()) else {
-        return skip(format!("podman 5: {P5} isn't up"));
+/// A supported guest's podman: let through by the gate, and its containers listed as started.
+async fn check_podman(ctx: &mut Ctx, vm: &'static str) -> Outcome {
+    let who = ctx.who(vm);
+    let Some(sock) = ctx.vm(vm).and_then(|i| i.podman_socket.clone()) else {
+        return skip(format!("podman {who}: it isn't up"));
     };
     let pod = Libpod::new(&sock);
     if let Err(e) = pod.ensure_supported().await {
-        return fail("podman 5: ensure_supported refused it", vec![e.to_string()]);
+        return fail(format!("podman {who}: ensure_supported refused it"), vec![e.to_string()]);
     }
-    let out = shell(P5, &containers_script(&image()), Duration::from_secs(300)).await;
+    let out = shell(vm, &containers_script(&image()), Duration::from_secs(300)).await;
     if !out.ok {
-        return fail("podman 5: couldn't start the test containers", out.evidence());
+        return fail(format!("podman {who}: couldn't start the test containers"), out.evidence());
     }
     for line in out.stdout.lines() {
         if let Some((name, id)) = line.split_once(' ') {
             for want in [WEB, CLIENT] {
                 if name.trim_start_matches('/') == want {
-                    ctx.containers.insert(want, id.trim().to_string());
+                    ctx.containers.insert((vm, want), id.trim().to_string());
                 }
             }
         }
     }
     let mut list = match pod.containers().await {
         Ok(l) => l,
-        Err(e) => return fail("podman 5: containers() failed", vec![e.to_string()]),
+        Err(e) => return fail(format!("podman {who}: containers() failed"), vec![e.to_string()]),
     };
     // As the collector does: a project is believed once the container's image, found by its id in
     // the images list, shows the config hash didn't come from it.
     match pod.image_hashes().await {
         Ok(images) => podman::trust_compose(&mut list, &images),
-        Err(e) => return fail("podman 5: image_hashes() failed", vec![e.to_string()]),
+        Err(e) => return fail(format!("podman {who}: image_hashes() failed"), vec![e.to_string()]),
     }
     let now = now_ms() / 1000;
     let mut problems = Vec::new();
@@ -622,7 +684,7 @@ async fn check_podman5(ctx: &mut Ctx) -> Outcome {
             problems.push(format!("{want}: not listed"));
             continue;
         };
-        if ctx.containers.get(want) != Some(&c.id) {
+        if ctx.containers.get(&(vm, want)) != Some(&c.id) {
             problems.push(format!("{want}: id {} isn't podman's own", c.id));
         }
         if c.state != "running" {
@@ -640,25 +702,27 @@ async fn check_podman5(ctx: &mut Ctx) -> Outcome {
         }
     }
     if !problems.is_empty() {
-        return fail("podman 5: containers() isn't what was started", problems);
+        return fail(format!("podman {who}: containers() isn't what was started"), problems);
     }
     let web = list.iter().find(|c| c.name == WEB).expect("checked");
     pass(format!(
-        "podman 5: 2 containers listed, compose {COMPOSE_PROJECT}/{}, started {} s ago",
+        "podman {who}: supported, 2 containers listed, compose {COMPOSE_PROJECT}/{}, started {} s ago",
         web.compose_service.as_deref().unwrap_or("?"),
         now - web.started_at.unwrap_or(now)
     ))
 }
 
-async fn check_stats(ctx: &mut Ctx) -> Outcome {
-    let (Some(sock), Some(id)) = (ctx.vm(P5).and_then(|i| i.podman_socket.clone()), ctx.containers.get(CLIENT)) else {
-        return skip("stats: no test containers");
+async fn check_stats(ctx: &mut Ctx, vm: &'static str) -> Outcome {
+    let who = ctx.who(vm);
+    let (Some(sock), Some(id)) = (ctx.vm(vm).and_then(|i| i.podman_socket.clone()), ctx.containers.get(&(vm, CLIENT)))
+    else {
+        return skip(format!("stats {who}: no test containers"));
     };
     let pod = Libpod::new(&sock);
     let read = |pod: Libpod, id: String| async move { pod.stats().await.ok()?.into_iter().find(|s| s.id == id) };
     let Some(first) = read(pod.clone(), id.clone()).await else {
         let why = pod.stats().await.err().map_or("no row for it".into(), |e| e.to_string());
-        return fail(format!("stats: nothing for {CLIENT}"), vec![why]);
+        return fail(format!("stats {who}: nothing for {CLIENT}"), vec![why]);
     };
     let t0 = Instant::now();
     let later = poll(Duration::from_secs(20), Duration::from_secs(1), || {
@@ -671,25 +735,28 @@ async fn check_stats(ctx: &mut Ctx) -> Outcome {
     .await;
     match (first.net_in, later) {
         (Some(a), Some(b)) => pass(format!(
-            "stats {CLIENT}: net_in {} → {} in {} s, mem {}, {} pids",
+            "stats {who}: {CLIENT} net_in {} → {} in {} s, mem {}, {} pids",
             bytes(a as i64),
             bytes(b.net_in.unwrap_or(0) as i64),
             t0.elapsed().as_secs(),
             bytes(b.mem_usage as i64),
             b.pids
         )),
-        (None, _) => fail(format!("stats: {CLIENT} has no network reading (net_in None)"), vec![format!("{first:?}")]),
-        (Some(a), None) => fail(format!("stats: {CLIENT} net_in stuck at {a} B for 20 s"), vec![]),
+        (None, _) => {
+            fail(format!("stats {who}: {CLIENT} has no network reading (net_in None)"), vec![format!("{first:?}")])
+        }
+        (Some(a), None) => fail(format!("stats {who}: {CLIENT} net_in stuck at {a} B for 20 s"), vec![]),
     }
 }
 
 async fn check_probe(ctx: &mut Ctx, vm: &'static str) -> Outcome {
+    let who = ctx.who(vm);
     let Some(inst) = ctx.vm(vm).cloned() else {
-        return skip(format!("probe {vm}: it isn't up"));
+        return skip(format!("probe {who}: it isn't up"));
     };
     let blocks = match probe_blocks(&inst, 3, Duration::from_secs(40)).await {
         Ok(b) => b,
-        Err(e) => return fail(format!("probe {vm}: over Lima's ssh"), e),
+        Err(e) => return fail(format!("probe {who}: over Lima's ssh"), e),
     };
     let row = probe::vm_row(Some(&blocks[1]), &blocks[2], inst.cpus);
     let last = &blocks[2];
@@ -717,8 +784,8 @@ async fn check_probe(ctx: &mut Ctx, vm: &'static str) -> Outcome {
         format!("no PSI ({why})")
     };
     let mut cgroups = String::new();
-    if vm == P5 {
-        let ids: Vec<&String> = [WEB, CLIENT].iter().filter_map(|c| ctx.containers.get(c)).collect();
+    if SUPPORTED.contains(&vm) {
+        let ids: Vec<&String> = [WEB, CLIENT].iter().filter_map(|&c| ctx.containers.get(&(vm, c))).collect();
         let seen = ids.iter().filter(|id| last.cgroups.contains_key(id.as_str())).count();
         let read = |f: fn(&probe::Cgroup) -> Option<u64>| {
             ids.iter().filter_map(|id| last.cgroups.get(id.as_str())).filter_map(f).max()
@@ -737,31 +804,32 @@ async fn check_probe(ctx: &mut Ctx, vm: &'static str) -> Outcome {
         }
     }
     if !problems.is_empty() {
-        return fail(format!("probe {vm}: 3 blocks, but"), problems);
+        return fail(format!("probe {who}: 3 blocks, but"), problems);
     }
     pass(format!(
-        "probe {vm}: 3 blocks, mem {}, {:.2} cores, {psi}{cgroups}",
+        "probe {who}: 3 blocks, mem {}, {:.2} cores, {psi}{cgroups}",
         bytes(mem_total.unwrap_or(0)),
         row[0] as f64 / 1000.0
     ))
 }
 
-async fn check_oom(ctx: &mut Ctx) -> Outcome {
-    let Some(inst) = ctx.vm(P5).cloned() else {
-        return skip(format!("oom: {P5} isn't up"));
+async fn check_oom(ctx: &mut Ctx, vm: &'static str) -> Outcome {
+    let who = ctx.who(vm);
+    let Some(inst) = ctx.vm(vm).cloned() else {
+        return skip(format!("oom {who}: it isn't up"));
     };
     let since = now_ms() - 5_000;
-    ctx.oom_since = since;
+    ctx.oom_since.insert(vm, since);
     let script = format!(
         "set -e\npodman rm -f {OOM_CT} >/dev/null 2>&1 || true\n\
          podman run -d --name {OOM_CT} -m {OOM_LIMIT}b --memory-swap {OOM_LIMIT}b {} sh -c 'tail /dev/zero'\n\
          podman wait {OOM_CT}\n",
         image()
     );
-    let out = shell(P5, &script, Duration::from_secs(120)).await;
+    let out = shell(vm, &script, Duration::from_secs(120)).await;
     let lines: Vec<&str> = out.stdout.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
     let (Some(id), Some(exit)) = (lines.first(), lines.get(1)) else {
-        return fail("oom: couldn't run the container", out.evidence());
+        return fail(format!("oom {who}: couldn't run the container"), out.evidence());
     };
     let id = id.to_string();
     let t0 = Instant::now();
@@ -769,10 +837,10 @@ async fn check_oom(ctx: &mut Ctx) -> Outcome {
     let found = poll(Duration::from_secs(30), Duration::from_secs(3), || {
         let (inst, id, last_err) = (inst.clone(), id.clone(), last_err.clone());
         async move {
-            match journal::read_oom_lines(&inst.ssh_config_file, P5, since).await {
+            match journal::read_oom_lines(&inst.ssh_config_file, vm, since).await {
                 Ok(entries) => {
                     log(format!("journal: {} entries", entries.len()));
-                    oom::kernel_events(P5, &entries)
+                    oom::kernel_events(vm, &entries)
                         .into_iter()
                         .find(|e| e.container_id.as_deref() == Some(id.as_str()))
                 }
@@ -788,22 +856,22 @@ async fn check_oom(ctx: &mut Ctx) -> Outcome {
     let Some(e) = found else {
         let why =
             if last_err.is_empty() { "the journal was readable".to_string() } else { format!("journal: {last_err}") };
-        return fail(format!("oom: no kill of {OOM_CT} in the journal after 30 s (it exited {exit})"), vec![why]);
+        return fail(format!("oom {who}: no kill of {OOM_CT} in the journal after 30 s (it exited {exit})"), vec![why]);
     };
     log(format!("oom event: {e:?}"));
     let own = e.constraint.as_deref() == Some(CONSTRAINT_MEMCG) && e.container_id.is_some();
     if !own || e.mem_limit != Some(OOM_LIMIT) {
         return fail(
-            "oom: the kill isn't classed as the container's own limit",
+            format!("oom {who}: the kill isn't classed as the container's own limit"),
             vec![format!("constraint {:?}, limit {:?}, container {:?}", e.constraint, e.mem_limit, e.container_id)],
         );
     }
     log(format!("oom: in the journal after {} s", t0.elapsed().as_secs()));
     pass(format!(
-        "oom: {} killed at {OOM_CT}'s own {} limit ({CONSTRAINT_MEMCG}), journal read {}",
+        "oom {who}: {} killed at {OOM_CT}'s own {} limit ({CONSTRAINT_MEMCG}), journal read {}",
         e.process.as_deref().unwrap_or("?"),
         bytes(OOM_LIMIT),
-        journal_access(P5).await
+        journal_access(vm).await
     ))
 }
 
@@ -847,22 +915,23 @@ async fn check_collector(ctx: &mut Ctx) -> Vec<Outcome> {
     };
     let collector = Collector::new(store, Retention::default());
     collector.start();
-    let p4_version = ctx.up.get(P4).map(|(_, v)| v.clone());
-    let p4_expected = p4_version.as_ref().map(|v| PodmanError::TooOld(v.clone()).to_string());
-    // Settled: p5 has containers with rates, p4 has VM metrics and its podman error.
+    let up: Vec<&'static str> = ctx.selected.iter().copied().filter(|vm| ctx.up.contains_key(vm)).collect();
+    // Settled: a supported guest has containers with rates; the refused one has VM metrics and its
+    // podman error.
     let settled = poll(Duration::from_secs(40), Duration::from_secs(1), || {
         let snap = collector.snapshot();
-        let p5_ok = snap.vms.iter().any(|v| {
-            v.instance.name == P5
-                && v.podman_error.is_none()
-                && v.latest.contains_key("cpu_mc")
-                && v.containers.iter().any(|c| c.latest.contains_key("net_rx_bps"))
+        let ok = up.iter().all(|&vm| {
+            snap.vms.iter().any(|v| {
+                v.instance.name == vm
+                    && v.latest.contains_key("cpu_mc")
+                    && if SUPPORTED.contains(&vm) {
+                        v.podman_error.is_none() && v.containers.iter().any(|c| c.latest.contains_key("net_rx_bps"))
+                    } else {
+                        v.podman_error.is_some()
+                    }
+            })
         });
-        let p4_ok = snap
-            .vms
-            .iter()
-            .any(|v| v.instance.name == P4 && v.latest.contains_key("cpu_mc") && v.podman_error.is_some());
-        async move { (p5_ok && p4_ok).then_some(()) }
+        async move { ok.then_some(()) }
     })
     .await;
     if settled.is_none() {
@@ -870,7 +939,14 @@ async fn check_collector(ctx: &mut Ctx) -> Vec<Outcome> {
     }
     let snap = collector.snapshot();
     log(format!("collector snapshot: {}", serde_json::to_string(&snap).unwrap_or_default()));
-    let oom = collector.store().oom_events(Some(P5), ctx.oom_since, now_ms(), 10).unwrap_or_default();
+    let ooms: HashMap<&str, Vec<_>> = ctx
+        .supported()
+        .into_iter()
+        .map(|vm| {
+            let since = ctx.oom_since.get(vm).copied().unwrap_or(0);
+            (vm, collector.store().oom_events(Some(vm), since, now_ms(), 10).unwrap_or_default())
+        })
+        .collect();
     drop(rt);
 
     let mut out = Vec::new();
@@ -878,75 +954,79 @@ async fn check_collector(ctx: &mut Ctx) -> Vec<Outcome> {
     if names.iter().any(|n| !n.starts_with(PREFIX)) {
         out.push(fail("collector: sees instances that aren't the e2e's", vec![names.join(", ")]));
     }
-    let vm = |n: &str| snap.vms.iter().find(|v| v.instance.name == n);
-    out.push(match vm(P5) {
-        None => fail(format!("collector {P5}: not in the snapshot"), vec![names.join(", ")]),
-        Some(v) => {
-            let mut problems = Vec::new();
-            if let Some(e) = &v.podman_error {
-                problems.push(format!("podman error: {e}"));
-            }
-            if let Some(e) = &v.probe_error {
-                problems.push(format!("probe error: {e}"));
-            }
-            let ours =
-                v.containers.iter().filter(|c| c.container.compose_project.as_deref() == Some(COMPOSE_PROJECT)).count();
-            if ours < 2 {
-                problems.push(format!("{ours} of the test containers"));
-            }
-            let rx = v.containers.iter().filter_map(|c| c.latest.get("net_rx_bps")).max().copied();
-            if rx.is_none() {
-                problems.push("no container has net_rx_bps".into());
-            }
-            let kernel_oom = oom.iter().find(|r| r.event.source == oom::Source::Kernel);
-            match kernel_oom {
-                Some(r) if r.container_name.as_deref() == Some(OOM_CT) => {}
-                Some(r) => problems.push(format!("OOM kill recorded as {:?}, not {OOM_CT}", r.container_name)),
-                None => problems.push(format!("no kernel OOM event in the store ({} in all)", oom.len())),
-            }
-            if problems.is_empty() {
-                pass(format!(
-                    "collector {P5}: {} containers, net_rx {} B/s, OOM kill stored, no podman error",
-                    v.containers.len(),
-                    rx.unwrap_or(0)
-                ))
+    for &vm in &ctx.selected {
+        let who = ctx.who(vm);
+        let Some(v) = snap.vms.iter().find(|v| v.instance.name == vm) else {
+            out.push(if up.contains(&vm) {
+                fail(format!("collector {who}: not in the snapshot"), vec![names.join(", ")])
             } else {
-                fail(format!("collector {P5}:"), problems)
-            }
+                skip(format!("collector {who}: it isn't up"))
+            });
+            continue;
+        };
+        let mut problems = Vec::new();
+        if let Some(e) = &v.probe_error {
+            problems.push(format!("probe error: {e}"));
         }
-    });
-    out.push(match (vm(P4), p4_expected) {
-        (_, None) => skip(format!("collector {P4}: it isn't up")),
-        (None, _) => fail(format!("collector {P4}: not in the snapshot"), vec![names.join(", ")]),
-        (Some(v), Some(expected)) => {
-            let mut problems = Vec::new();
-            if !v.latest.contains_key("mem_total") || !v.latest.contains_key("cpu_mc") {
-                problems.push(format!("no VM metrics: {:?}", v.latest.keys().collect::<Vec<_>>()));
-            }
-            if v.podman_error.as_deref() != Some(expected.as_str()) {
-                problems.push(format!("podman_error {:?}", v.podman_error));
+        if !v.latest.contains_key("mem_total") || !v.latest.contains_key("cpu_mc") {
+            problems.push(format!("no VM metrics: {:?}", v.latest.keys().collect::<Vec<_>>()));
+        }
+        if vm == REFUSED {
+            let expected = ctx.up.get(vm).map(|(_, version)| PodmanError::TooOld(version.clone()).to_string());
+            if v.podman_error != expected {
+                problems.push(format!("podman_error {:?}, wanted {expected:?}", v.podman_error));
             }
             if !v.containers.is_empty() {
                 problems.push(format!("{} containers listed", v.containers.len()));
             }
-            if problems.is_empty() {
-                pass(format!("collector {P4}: VM metrics, 0 containers, \"{expected}\""))
+            out.push(if problems.is_empty() {
+                pass(format!("collector {who}: VM metrics, 0 containers, \"{}\"", expected.unwrap_or_default()))
             } else {
-                fail(format!("collector {P4}:"), problems)
-            }
+                fail(format!("collector {who}:"), problems)
+            });
+            continue;
         }
-    });
+        if let Some(e) = &v.podman_error {
+            problems.push(format!("podman error: {e}"));
+        }
+        let ours =
+            v.containers.iter().filter(|c| c.container.compose_project.as_deref() == Some(COMPOSE_PROJECT)).count();
+        if ours < 2 {
+            problems.push(format!("{ours} of the test containers"));
+        }
+        let rx = v.containers.iter().filter_map(|c| c.latest.get("net_rx_bps")).max().copied();
+        if rx.is_none() {
+            problems.push("no container has net_rx_bps".into());
+        }
+        let oom = ooms.get(vm).map_or(&[][..], Vec::as_slice);
+        match oom.iter().find(|r| r.event.source == oom::Source::Kernel) {
+            Some(r) if r.container_name.as_deref() == Some(OOM_CT) => {}
+            Some(r) => problems.push(format!("OOM kill recorded as {:?}, not {OOM_CT}", r.container_name)),
+            None => problems.push(format!("no kernel OOM event in the store ({} in all)", oom.len())),
+        }
+        out.push(if problems.is_empty() {
+            pass(format!(
+                "collector {who}: {} containers, net_rx {} B/s, OOM kill stored, no podman error",
+                v.containers.len(),
+                rx.unwrap_or(0)
+            ))
+        } else {
+            fail(format!("collector {who}:"), problems)
+        });
+    }
     out
 }
 
-async fn check_podman4_commands(ctx: &mut Ctx) -> Outcome {
-    let Some(sock) = ctx.vm(P4).and_then(|i| i.podman_socket.clone()) else {
-        return skip(format!("podman 4 commands: {P4} isn't up"));
+/// The commands' podman gate refuses the guest whose podman is too old.
+async fn check_refused_commands(ctx: &mut Ctx) -> Outcome {
+    let who = ctx.who(REFUSED);
+    let Some(sock) = ctx.vm(REFUSED).and_then(|i| i.podman_socket.clone()) else {
+        return skip(format!("commands {who}: it isn't up"));
     };
     match Libpod::new(&sock).ensure_supported().await {
-        Err(PodmanError::TooOld(v)) => pass(format!("podman 4 commands: ensure_supported → TooOld({v})")),
-        Err(e) => fail("podman 4 commands: refused, but not as too old", vec![e.to_string()]),
-        Ok(()) => fail("podman 4 commands: ensure_supported let it through", vec![]),
+        Err(PodmanError::TooOld(v)) => pass(format!("commands {who}: ensure_supported → TooOld({v})")),
+        Err(e) => fail(format!("commands {who}: refused, but not as too old"), vec![e.to_string()]),
+        Ok(()) => fail(format!("commands {who}: ensure_supported let it through"), vec![]),
     }
 }
 
@@ -960,56 +1040,58 @@ async fn status(vm: &str) -> String {
 
 /// The app refuses to resize a running VM itself, before Lima is asked.
 async fn check_resize_running(ctx: &mut Ctx) -> Outcome {
-    let Some(inst) = ctx.vm(P5) else {
-        return skip(format!("resize {P5} while Running: it isn't up"));
+    let Some(inst) = ctx.vm(LIFECYCLE) else {
+        return skip(format!("resize {LIFECYCLE} while Running: it isn't up"));
     };
     let r = Resize { cpus: None, memory: Some(inst.memory + GIB), disk: None };
-    match lima::resize(P5, &r).await {
+    match lima::resize(LIFECYCLE, &r).await {
         Err(lima::LimaError::Refused(why)) if why.contains("stop") => {
-            pass(format!("resize {P5} while Running: refused"))
+            pass(format!("resize {LIFECYCLE} while Running: refused"))
         }
-        Err(e) => fail(format!("resize {P5} while Running: failed, but not refused"), vec![e.to_string()]),
-        Ok(()) => fail(format!("resize {P5} while Running: went ahead"), vec![]),
+        Err(e) => fail(format!("resize {LIFECYCLE} while Running: failed, but not refused"), vec![e.to_string()]),
+        Ok(()) => fail(format!("resize {LIFECYCLE} while Running: went ahead"), vec![]),
     }
 }
 
 async fn check_stop(ctx: &mut Ctx) -> Outcome {
-    if ctx.vm(P5).is_none() {
-        return skip(format!("stop {P5}: it isn't up"));
+    if ctx.vm(LIFECYCLE).is_none() {
+        return skip(format!("stop {LIFECYCLE}: it isn't up"));
     }
-    log(format!("lima::act({P5}, Stop)"));
-    if let Err(e) = lima::act(P5, Action::Stop).await {
-        return fail(format!("stop {P5}: lima::act failed"), vec![e.to_string()]);
+    log(format!("lima::act({LIFECYCLE}, Stop)"));
+    if let Err(e) = lima::act(LIFECYCLE, Action::Stop).await {
+        return fail(format!("stop {LIFECYCLE}: lima::act failed"), vec![e.to_string()]);
     }
-    match status(P5).await.as_str() {
-        "Stopped" => pass(format!("stop {P5} → Stopped")),
-        s => fail(format!("stop {P5}: list says {s}"), vec![]),
+    match status(LIFECYCLE).await.as_str() {
+        "Stopped" => pass(format!("stop {LIFECYCLE} → Stopped")),
+        s => fail(format!("stop {LIFECYCLE}: list says {s}"), vec![]),
     }
 }
 
 async fn check_resize(ctx: &mut Ctx) -> Outcome {
-    if ctx.vm(P5).is_none() {
-        return skip(format!("resize {P5}: it isn't up"));
+    if ctx.vm(LIFECYCLE).is_none() {
+        return skip(format!("resize {LIFECYCLE}: it isn't up"));
     }
-    let before = match lima::get(P5).await {
+    let before = match lima::get(LIFECYCLE).await {
         Ok(i) => i,
-        Err(e) => return fail(format!("resize {P5}: not listed"), vec![e.to_string()]),
+        Err(e) => return fail(format!("resize {LIFECYCLE}: not listed"), vec![e.to_string()]),
     };
     if before.status != "Stopped" {
-        return skip(format!("resize {P5}: it's {}, not Stopped", before.status));
+        return skip(format!("resize {LIFECYCLE}: it's {}, not Stopped", before.status));
     }
     let to = before.memory + GIB;
     let r = Resize { cpus: None, memory: Some(to), disk: None };
-    log(format!("lima::resize({P5}, {r:?})"));
-    if let Err(e) = lima::resize(P5, &r).await {
-        return fail(format!("resize {P5}: lima::resize failed"), vec![e.to_string()]);
+    log(format!("lima::resize({LIFECYCLE}, {r:?})"));
+    if let Err(e) = lima::resize(LIFECYCLE, &r).await {
+        return fail(format!("resize {LIFECYCLE}: lima::resize failed"), vec![e.to_string()]);
     }
-    match lima::get(P5).await {
-        Ok(i) if i.memory == to => {
-            pass(format!("resize {P5} memory {} → {}: list shows it", bytes(before.memory as i64), bytes(to as i64)))
-        }
-        Ok(i) => fail(format!("resize {P5}: list shows {}", bytes(i.memory as i64)), vec![]),
-        Err(e) => fail(format!("resize {P5}: not listed"), vec![e.to_string()]),
+    match lima::get(LIFECYCLE).await {
+        Ok(i) if i.memory == to => pass(format!(
+            "resize {LIFECYCLE} memory {} → {}: list shows it",
+            bytes(before.memory as i64),
+            bytes(to as i64)
+        )),
+        Ok(i) => fail(format!("resize {LIFECYCLE}: list shows {}", bytes(i.memory as i64)), vec![]),
+        Err(e) => fail(format!("resize {LIFECYCLE}: not listed"), vec![e.to_string()]),
     }
 }
 
@@ -1042,30 +1124,30 @@ async fn back_up(vm: &str, verb: &str) -> Outcome {
 }
 
 async fn check_start(ctx: &mut Ctx) -> Outcome {
-    if ctx.vm(P5).is_none() {
-        return skip(format!("start {P5}: it isn't up"));
+    if ctx.vm(LIFECYCLE).is_none() {
+        return skip(format!("start {LIFECYCLE}: it isn't up"));
     }
-    log(format!("lima::act({P5}, Start)"));
-    if let Err(e) = lima::act(P5, Action::Start).await {
-        return fail(format!("start {P5}: lima::act failed"), vec![e.to_string()]);
+    log(format!("lima::act({LIFECYCLE}, Start)"));
+    if let Err(e) = lima::act(LIFECYCLE, Action::Start).await {
+        return fail(format!("start {LIFECYCLE}: lima::act failed"), vec![e.to_string()]);
     }
-    back_up(P5, "start").await
+    back_up(LIFECYCLE, "start").await
 }
 
 async fn check_restart(ctx: &mut Ctx) -> Outcome {
-    if ctx.vm(P5).is_none() {
-        return skip(format!("restart {P5}: it isn't up"));
+    if ctx.vm(LIFECYCLE).is_none() {
+        return skip(format!("restart {LIFECYCLE}: it isn't up"));
     }
-    log(format!("lima::act({P5}, Restart)"));
-    if let Err(e) = lima::act(P5, Action::Restart).await {
-        return fail(format!("restart {P5}: lima::act failed"), vec![e.to_string()]);
+    log(format!("lima::act({LIFECYCLE}, Restart)"));
+    if let Err(e) = lima::act(LIFECYCLE, Action::Restart).await {
+        return fail(format!("restart {LIFECYCLE}: lima::act failed"), vec![e.to_string()]);
     }
-    back_up(P5, "restart").await
+    back_up(LIFECYCLE, "restart").await
 }
 
 /// As the app does it: a running VM is stopped first (the UI offers Delete only on a stopped one).
 async fn check_delete(ctx: &mut Ctx) -> Outcome {
-    let vms: Vec<&'static str> = VMS.into_iter().filter(|v| ctx.up.contains_key(v)).collect();
+    let vms: Vec<&'static str> = ctx.selected.iter().copied().filter(|v| ctx.up.contains_key(v)).collect();
     if vms.is_empty() {
         return skip("delete: no VM came up");
     }
@@ -1133,7 +1215,7 @@ fn line_ms(line: &str) -> Option<i64> {
 }
 
 /// How many ms past its own a line's stamp could stand for, as the UI's `pageUntil` reckons it:
-/// 999 for one to the second (podman 5), 99 or 9 for one or two digits of fraction, else none.
+/// 999 for one to the second (podman 5.0–5.7), 99 or 9 for one or two digits of fraction, else none.
 fn stamp_span(line: &str) -> i64 {
     let stamp = line.split_once(' ').map_or(line, |(s, _)| s);
     let digits = stamp.split_once('.').map_or(0, |(_, f)| f.bytes().take_while(u8::is_ascii_digit).count());
@@ -1144,31 +1226,32 @@ fn stamp_span(line: &str) -> i64 {
 /// are every line written up to the end of its stamp and none after, which is what the log
 /// view's Fetch earlier counts on to join pages without a gap or a repeat. journald and k8s-file
 /// disagree on a line at exactly `until`, and k8s-file applies `tail` before `until`.
-async fn check_logs_until(ctx: &mut Ctx) -> Outcome {
-    let Some(sock) = ctx.vm(P5).and_then(|i| i.podman_socket.clone()) else {
-        return skip(format!("logs until: {P5} isn't up"));
+async fn check_logs_until(ctx: &mut Ctx, vm: &'static str) -> Outcome {
+    let who = ctx.who(vm);
+    let Some(sock) = ctx.vm(vm).and_then(|i| i.podman_socket.clone()) else {
+        return skip(format!("logs until {who}: it isn't up"));
     };
     let pod = Libpod::new(&sock);
     let (mut checked, mut problems) = (Vec::new(), Vec::new());
     for driver in ["k8s-file", "journald"] {
         let name = format!("{LOGGER}-{driver}");
-        let outcome = logs_until_with(&pod, driver, &name).await;
+        let outcome = logs_until_with(&pod, vm, driver, &name).await;
         // Gone once read, so a VM kept (`--keep`) isn't left with it idling for an hour.
-        shell(P5, &format!("podman rm -f -t 0 {name} >/dev/null 2>&1 || true"), Duration::from_secs(60)).await;
+        shell(vm, &format!("podman rm -f -t 0 {name} >/dev/null 2>&1 || true"), Duration::from_secs(60)).await;
         match outcome {
             Ok(said) => checked.push(said),
             Err(why) => problems.push(why),
         }
     }
     if problems.is_empty() {
-        pass(format!("logs until: {}", checked.join(", ")))
+        pass(format!("logs until {who}: {}", checked.join(", ")))
     } else {
-        fail("logs until: a page back isn't the lines up to its moment", problems)
+        fail(format!("logs until {who}: a page back isn't the lines up to its moment"), problems)
     }
 }
 
 /// One driver's part of `check_logs_until`: what it found, or what was wrong.
-async fn logs_until_with(pod: &Libpod, driver: &str, name: &str) -> Result<String, String> {
+async fn logs_until_with(pod: &Libpod, vm: &str, driver: &str, name: &str) -> Result<String, String> {
     // Bursts of 30 a fifth of a second apart: lines that share a stamp (conmon stamps each read, not
     // each line) and lines that don't, then idle so the log stays as written.
     let script = format!(
@@ -1178,7 +1261,7 @@ async fn logs_until_with(pod: &Libpod, driver: &str, name: &str) -> Result<Strin
              [ $((i % 30)) -eq 0 ] && sleep 0.2; i=$((i+1)); done; sleep 3600'\n",
         image = image()
     );
-    let out = shell(P5, &script, Duration::from_secs(120)).await;
+    let out = shell(vm, &script, Duration::from_secs(120)).await;
     // `podman run -d` ends with the container's id on a line of its own.
     let id = out.stdout.lines().map(str::trim).rfind(|l| !l.is_empty()).unwrap_or_default().to_string();
     let Some(id) = out.ok.then_some(id).filter(|id| id.len() == 64) else {
@@ -1199,8 +1282,8 @@ async fn logs_until_with(pod: &Libpod, driver: &str, name: &str) -> Result<Strin
     }
     // The moment: the middle line's stamp; every line stamped in it is wanted, none after.
     let pivot = stamped[LOG_LINES / 2].0;
-    // Asked up to the end of what its stamp could stand for, as the UI asks: under podman 5 that's
-    // the whole second, every line stamped with it included.
+    // Asked up to the end of what its stamp could stand for, as the UI asks: under podman 5.0–5.7
+    // that's the whole second, every line stamped with it included.
     let until = pivot + stamp_span(stamped[LOG_LINES / 2].1);
     let want: Vec<&str> = stamped.iter().filter(|(ms, _)| *ms <= until).map(|(_, l)| *l).collect();
     let page =
@@ -1222,32 +1305,45 @@ async fn logs_until_with(pod: &Libpod, driver: &str, name: &str) -> Result<Strin
         return Err(format!("{driver}: tail 10 until {until} isn't the 10 lines before it: {tail:?}"));
     }
     let shared = stamped.iter().filter(|(ms, _)| *ms == pivot).count();
-    Ok(format!("{driver} {} of {} ({shared} on its stamp)", want.len(), all.len()))
+    let lines: Vec<String> = all.iter().map(|l| l.line.clone()).collect();
+    Ok(format!("{driver} {} of {} ({shared} on its stamp, {})", want.len(), all.len(), precision(&lines)))
 }
 
-async fn run_all(report: &mut Report, keep: bool) {
-    let mut ctx = Ctx::default();
+async fn run_all(report: &mut Report, keep: bool, selected: Vec<&'static str>) {
+    let mut ctx = Ctx::new(selected);
     if report.check(check_create(&mut ctx)).await == Status::Fail && ctx.up.is_empty() {
         return;
     }
     report.check(check_list(&mut ctx)).await;
-    report.check(check_long_socket(&mut ctx)).await;
-    report.check(check_podman5(&mut ctx)).await;
-    report.check(check_stats(&mut ctx)).await;
-    report.check(check_logs_until(&mut ctx)).await;
-    report.check(check_probe(&mut ctx, P5)).await;
-    report.check(check_probe(&mut ctx, P4)).await;
-    report.check(check_oom(&mut ctx)).await;
+    let first = ctx.selected[0];
+    report.check(check_long_socket(&mut ctx, first)).await;
+    for vm in ctx.supported() {
+        report.check(check_podman(&mut ctx, vm)).await;
+        report.check(check_stats(&mut ctx, vm)).await;
+        report.check(check_logs_until(&mut ctx, vm)).await;
+        report.check(check_probe(&mut ctx, vm)).await;
+        report.check(check_oom(&mut ctx, vm)).await;
+    }
+    let refused = ctx.selected.contains(&REFUSED);
+    if refused {
+        report.check(check_probe(&mut ctx, REFUSED)).await;
+    }
     let t0 = Instant::now();
     for (i, o) in check_collector(&mut ctx).await.into_iter().enumerate() {
         report.line(o, if i == 0 { t0.elapsed() } else { Duration::ZERO });
     }
-    report.check(check_podman4_commands(&mut ctx)).await;
-    report.check(check_resize_running(&mut ctx)).await;
-    report.check(check_stop(&mut ctx)).await;
-    report.check(check_resize(&mut ctx)).await;
-    report.check(check_start(&mut ctx)).await;
-    report.check(check_restart(&mut ctx)).await;
+    if refused {
+        report.check(check_refused_commands(&mut ctx)).await;
+    }
+    if ctx.selected.contains(&LIFECYCLE) {
+        report.check(check_resize_running(&mut ctx)).await;
+        report.check(check_stop(&mut ctx)).await;
+        report.check(check_resize(&mut ctx)).await;
+        report.check(check_start(&mut ctx)).await;
+        report.check(check_restart(&mut ctx)).await;
+    } else {
+        report.line(skip(format!("resize, stop, start, restart: on {LIFECYCLE} only, not picked")), Duration::ZERO);
+    }
     if keep {
         report.line(skip("delete: --keep"), Duration::ZERO);
     } else {
@@ -1258,18 +1354,36 @@ async fn run_all(report: &mut Report, keep: bool) {
 struct Args {
     keep: bool,
     log_dir: PathBuf,
+    /// The guests picked with `--guest` (each by its name, or by that without `ld-e2e-`), in
+    /// `GUESTS` order; all of them when none is.
+    guests: Vec<&'static str>,
 }
 
 fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Args, String> {
-    let mut out = Args { keep: false, log_dir: PathBuf::from(".e2e") };
+    let mut out = Args { keep: false, log_dir: PathBuf::from(".e2e"), guests: Vec::new() };
+    let short = |vm: &str| vm.strip_prefix(PREFIX).unwrap_or(vm).to_string();
+    let mut picked = Vec::new();
     let mut args = args.into_iter();
     while let Some(a) = args.next() {
         match a.as_str() {
             "--keep" => out.keep = true,
             "--log-dir" => out.log_dir = args.next().ok_or("--log-dir needs a directory")?.into(),
-            other => return Err(format!("unknown argument {other:?}: usage: e2e [--keep] [--log-dir <dir>]")),
+            "--guest" => {
+                let name = args.next().ok_or("--guest needs a guest's name")?;
+                let Some(vm) = GUESTS.into_iter().find(|vm| *vm == name || short(vm) == name) else {
+                    let names: Vec<String> = GUESTS.iter().map(|vm| short(vm)).collect();
+                    return Err(format!("no guest {name:?}: it's one of {}", names.join(", ")));
+                };
+                picked.push(vm);
+            }
+            other => {
+                return Err(format!(
+                    "unknown argument {other:?}: usage: e2e [--keep] [--guest <name>]… [--log-dir <dir>]"
+                ));
+            }
         }
     }
+    out.guests = GUESTS.into_iter().filter(|vm| picked.is_empty() || picked.contains(vm)).collect();
     Ok(out)
 }
 
@@ -1375,7 +1489,7 @@ fn main() -> std::process::ExitCode {
         let colour = std::io::stdout().is_terminal() && std::env::var_os("NO_COLOR").is_none();
         let mut report = Report { statuses: Vec::new(), colour };
         let interrupted = tokio::select! {
-            () = run_all(&mut report, args.keep) => false,
+            () = run_all(&mut report, args.keep, args.guests.clone()) => false,
             _ = tokio::signal::ctrl_c() => true,
         };
         if interrupted {
@@ -1383,7 +1497,7 @@ fn main() -> std::process::ExitCode {
         }
         if args.keep {
             let left: Vec<String> = lima::list().await.unwrap_or_default().into_iter().map(|i| i.name).collect();
-            if let Some(first) = left.iter().find(|n| *n == P5).or(left.first()) {
+            if let Some(first) = left.iter().find(|n| *n == LIFECYCLE).or(left.first()) {
                 println!(
                     "  kept (--keep): {} · LIMA_HOME={} limactl shell {first}",
                     left.join(", "),
@@ -1411,7 +1525,7 @@ mod tests {
 
     #[test]
     fn a_stamp_s_span_is_what_its_precision_leaves_open() {
-        // As the UI's pageUntil: podman 5 stamps to the second, podman 6 to the nanosecond.
+        // As the UI's pageUntil: podman 5.0–5.7 stamps to the second, 5.8 and later to the nanosecond.
         assert_eq!(stamp_span("2026-11-27T00:10:01Z line1"), 999);
         assert_eq!(stamp_span("2026-11-27T00:10:01.5Z line1"), 99);
         assert_eq!(stamp_span("2026-11-27T00:10:01.25Z line1"), 9);
@@ -1441,9 +1555,9 @@ mod tests {
     fn never_a_home_with_someone_elses_instances() {
         let lima = Path::new("/Users/me/.lima");
         let home = Path::new("/Users/me/.lima-desktop-e2e");
-        assert!(refuse_home(home, lima, &["ld-e2e-p5".into()]).is_ok());
-        let e = refuse_home(home, lima, &["ld-e2e-p5".into(), "work".into()]).unwrap_err();
-        assert!(e.contains("work") && !e.contains("ld-e2e-p5"), "{e}");
+        assert!(refuse_home(home, lima, &[FEDORA.into()]).is_ok());
+        let e = refuse_home(home, lima, &[FEDORA.into(), "work".into()]).unwrap_err();
+        assert!(e.contains("work") && !e.contains(FEDORA), "{e}");
     }
 
     #[test]
@@ -1477,22 +1591,47 @@ mod tests {
 
     #[test]
     fn templates_and_create_arguments() {
-        assert_eq!(template(P5), "template:podman");
-        assert!(Path::new(template(P4)).is_file(), "{}", template(P4));
-        let args = create_args(P4, "linux");
-        assert_eq!(args[..4], ["create", "--tty=false", "--name", P4]);
-        assert!(args.windows(2).any(|w| w == ["--vm-type", "qemu"]));
-        assert!(args.contains(&"--mount-none".to_string()));
-        assert_eq!(args.last().map(String::as_str), Some(PODMAN4_TEMPLATE));
-        assert!(!create_args(P5, "freebsd").contains(&"--vm-type".to_string()));
+        assert_eq!(template(FEDORA), "template:podman");
+        for (vm, file) in [(DEB13, DEBIAN13_TEMPLATE), (DEB12, DEBIAN12_TEMPLATE)] {
+            assert_eq!(template(vm), file);
+            assert!(Path::new(file).is_file(), "{file}");
+            let args = create_args(vm, "linux");
+            assert_eq!(args[..4], ["create", "--tty=false", "--name", vm]);
+            assert!(args.windows(2).any(|w| w == ["--vm-type", "qemu"]));
+            assert!(args.contains(&"--mount-none".to_string()));
+            assert_eq!(args.last().map(String::as_str), Some(file));
+        }
+        assert!(!create_args(FEDORA, "freebsd").contains(&"--vm-type".to_string()));
     }
 
     #[test]
-    fn the_podman4_template_forwards_the_socket_where_lima_rs_looks() {
-        let yaml = std::fs::read_to_string(PODMAN4_TEMPLATE).unwrap();
-        assert!(yaml.contains(r#"guestSocket: "/run/user/{{.UID}}/podman/podman.sock""#));
-        assert!(yaml.contains(r#"hostSocket: "{{.Dir}}/sock/podman.sock""#));
-        assert!(!yaml.contains("vmType"), "the VM type is picked per host");
+    fn the_debian_templates_forward_the_socket_where_lima_rs_looks() {
+        for (file, image) in [(DEBIAN13_TEMPLATE, "debian-13"), (DEBIAN12_TEMPLATE, "debian-12")] {
+            let yaml = std::fs::read_to_string(file).unwrap();
+            assert!(yaml.contains(&format!("- template:_images/{image}\n")), "{file}");
+            assert!(yaml.contains(r#"guestSocket: "/run/user/{{.UID}}/podman/podman.sock""#), "{file}");
+            assert!(yaml.contains(r#"hostSocket: "{{.Dir}}/sock/podman.sock""#), "{file}");
+            assert!(!yaml.contains("vmType"), "{file}: the VM type is picked per host");
+        }
+    }
+
+    #[test]
+    fn every_guest_s_name_leaves_lima_room_for_its_sockets() {
+        // Lima refuses an instance whose longest socket path, `<home>/<name>/ssh.sock.` and 16
+        // digits, reaches `sun_path`'s 104 bytes (macOS; Linux allows 108).
+        for vm in GUESTS {
+            let longest = MAX_HOME_LEN + 1 + vm.len() + 1 + "ssh.sock.1234567890123456".len();
+            assert!(longest < 104, "{vm}: {longest} bytes");
+        }
+    }
+
+    #[test]
+    fn the_guests_each_have_one_part() {
+        assert!(SUPPORTED.iter().all(|vm| GUESTS.contains(vm)));
+        assert!(SUPPORTED.contains(&LIFECYCLE), "Lima's verbs need podman to come back");
+        assert!(GUESTS.contains(&REFUSED) && !SUPPORTED.contains(&REFUSED));
+        assert_eq!(GUESTS.len(), SUPPORTED.len() + 1);
+        assert!(GUESTS.iter().all(|vm| vm.starts_with(PREFIX)));
     }
 
     #[test]
@@ -1552,7 +1691,34 @@ mod tests {
         let a = parse_args(["--keep".to_string(), "--log-dir".into(), "/tmp/l".into()]).unwrap();
         assert!(a.keep);
         assert_eq!(a.log_dir, Path::new("/tmp/l"));
+        assert_eq!(a.guests, GUESTS, "every guest unless some are picked");
         assert!(parse_args(["--nope".to_string()]).is_err());
+    }
+
+    #[test]
+    fn guests_are_picked_by_name_or_short_name_and_run_in_their_own_order() {
+        let picked = |args: &[&str]| parse_args(args.iter().map(|a| a.to_string())).map(|a| a.guests);
+        assert_eq!(picked(&["--guest", "deb13"]).unwrap(), [DEB13]);
+        assert_eq!(picked(&["--guest", DEB13]).unwrap(), [DEB13]);
+        assert_eq!(picked(&["--guest", "deb12", "--guest", "fedora", "--guest", "deb12"]).unwrap(), [FEDORA, DEB12]);
+        let e = picked(&["--guest", "p5"]).unwrap_err();
+        assert!(e.contains("fedora, deb13, deb12"), "{e}");
+        assert!(picked(&["--guest"]).is_err());
+    }
+
+    #[test]
+    fn a_guest_is_named_with_its_podman() {
+        assert_eq!(with_podman(DEB13, Some("5.4.2")), "ld-e2e-deb13 (podman 5.4.2)");
+        assert_eq!(with_podman(DEB13, None), "ld-e2e-deb13");
+    }
+
+    #[test]
+    fn a_log_s_stamps_say_how_precise_they_are() {
+        // podman 5.0–5.7 stamps to the second; later ones to the nanosecond, trailing zeros cut.
+        let lines = |stamps: &[&str]| stamps.iter().map(|s| format!("{s} x")).collect::<Vec<_>>();
+        assert_eq!(precision(&lines(&["2026-11-27T00:10:01Z", "2026-11-27T00:10:02Z"])), "to the second");
+        assert_eq!(precision(&lines(&["2026-11-27T00:10:01.5Z", "2026-11-27T00:10:01.123456789Z"])), "to the ns");
+        assert_eq!(precision(&lines(&["2026-11-27T00:10:01.123Z"])), "to the ms");
     }
 
     #[test]
