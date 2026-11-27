@@ -2455,3 +2455,16 @@ test("A container's detail's tabs say which is chosen, and the arrow keys choose
   assert.deepEqual(errors, []);
   await close();
 });
+
+test("An OOM kill's container is a button, so the keyboard opens its detail too", async () => {
+  const { page, errors, close } = await open('/vm/harbor');
+  const app = page.locator('#oom').getByRole('button', { name: 'app', exact: true });
+  await app.focus();
+  await page.keyboard.press('Enter');
+  await page.locator('[id^="detail-"]').waitFor();
+  assert.equal(await focused(page), 'button: app', 'focus stays on it');
+  // A removed container has no detail to open, so it isn't a button.
+  assert.equal(await page.locator('#oom tbody tr:not(.clickable) button').count(), 0);
+  assert.deepEqual(errors, []);
+  await close();
+});

@@ -262,7 +262,8 @@
                 <td class="when num">{when(row.ts)}</td>
                 <td>
                   {#if who}
-                    <bdi class="cname">{who.name}</bdi>{#if who.context}<bdi class="muted cid">{who.context}</bdi>{/if}
+                    <!-- The row opens the detail for a pointer; its name is the button a keyboard reaches. -->
+                    {#if shown}<button class="open cname" onclick={() => show(shown)}><bdi>{who.name}</bdi></button>{:else}<bdi class="cname">{who.name}</bdi>{/if}{#if who.context}<bdi class="muted cid">{who.context}</bdi>{/if}
                     {#if who.removed}<span class="badge" title="This container no longer exists; its name comes from the history.">removed</span>{/if}
                   {:else if row.kill}
                     <span class="cname">not in a container</span>
@@ -361,6 +362,9 @@
   .column-heads + :global(.compose) > :global(.project), .column-heads + .rows > .row:first-child > :global(.line) { border-top: 0; }
   .narrow-order { display: none; }
   .cname { font-weight: 500; }
+  /* As the name it is, not a button's chrome: the row says it opens. */
+  button.open { all: unset; cursor: pointer; font-weight: 500; }
+  button.open:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   .cid { margin-left: 0.4rem; }
   #oom tbody tr.clickable { cursor: pointer; }
   #oom .when { white-space: nowrap; }
