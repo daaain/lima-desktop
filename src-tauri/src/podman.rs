@@ -660,6 +660,8 @@ pub struct LogTail {
     /// What `lines` costs, as `cost` counts it.
     bytes: usize,
     dropped: bool,
+    /// A line stamped at or after this is left out ([`LogTail::until`]).
+    end: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 fn cost(line: &LogLine) -> usize {
@@ -693,7 +695,16 @@ impl LogTail {
             lines: Default::default(),
             bytes: 0,
             dropped: false,
+            end: None,
         }
+    }
+
+    /// Leaves out every line stamped at or after `end` ([`until_end`]): podman's drivers disagree on
+    /// a line at exactly the `until` asked for (journald keeps it), so it's cut here, the same under
+    /// either. A line whose stamp can't be read is kept.
+    pub fn until(mut self, end: Option<chrono::DateTime<chrono::Utc>>) -> Self {
+        self.end = end;
+        self
     }
 
     /// The log's next bytes, however they're split.
@@ -795,6 +806,9 @@ impl LogTail {
     fn end_line(&mut self, s: usize) {
         let bytes = std::mem::take(&mut self.pending[s]);
         let cut = std::mem::take(&mut self.cut[s]);
+        if self.after_end(&bytes) {
+            return;
+        }
         let stream = (self.framed == Some(true)).then_some([LogStream::Stdout, LogStream::Stderr][s]);
         let line = LogLine { stream, line: line_text(&bytes, cut), cut, earlier_dropped: false };
         self.bytes += cost(&line);
@@ -804,6 +818,12 @@ impl LogTail {
             self.bytes -= cost(&old);
             self.dropped = true;
         }
+    }
+
+    fn after_end(&self, line: &[u8]) -> bool {
+        let Some(end) = self.end else { return false };
+        let stamp = std::str::from_utf8(&line[..stamp_len(line).saturating_sub(1)]).ok();
+        stamp.and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok()).is_some_and(|t| t >= end)
     }
 }
 
@@ -828,15 +848,15 @@ fn stamp_len(b: &[u8]) -> usize {
 /// libpod v5 reads `until` as RFC 3339 first (`util.ParseInputTime`), so it's said to the
 /// nanosecond, where a Unix float would round. The drivers disagree at the boundary (journald keeps
 /// a line at exactly `until`, to the microsecond; k8s-file only those before it, to the
-/// nanosecond), so it's the start of the next millisecond: every line in `until`'s millisecond
-/// comes back under either, and the UI drops those it already holds.
+/// nanosecond), so it's the start of the next millisecond ([`until_end`]): every line in `until`'s
+/// millisecond comes back under either, and a line journald sends at that start is left out as
+/// it's read ([`LogTail::until`]). The UI drops the lines it already holds.
 fn logs_path(id: &str, tail: u32, since: Option<i64>, until: Option<i64>) -> Result<String, PodmanError> {
     let since = since.map(|s| format!("&since={s}")).unwrap_or_default();
     let (tail, until) = match until {
         None => (tail.to_string(), String::new()),
         Some(ms) => {
-            let end =
-                ms.checked_add(1).and_then(chrono::DateTime::from_timestamp_millis).ok_or(PodmanError::BadTime(ms))?;
+            let end = until_end(ms)?;
             ("all".into(), format!("&until={}", end.to_rfc3339_opts(chrono::SecondsFormat::Nanos, true)))
         }
     };
@@ -844,6 +864,11 @@ fn logs_path(id: &str, tail: u32, since: Option<i64>, until: Option<i64>) -> Res
         "/containers/{}/logs?stdout=true&stderr=true&timestamps=true&tail={tail}{since}{until}",
         encode_component(id)
     ))
+}
+
+/// The end of Unix ms `ms`: the start of the next millisecond, which no line in it reaches.
+fn until_end(ms: i64) -> Result<chrono::DateTime<chrono::Utc>, PodmanError> {
+    ms.checked_add(1).and_then(chrono::DateTime::from_timestamp_millis).ok_or(PodmanError::BadTime(ms))
 }
 
 fn encode_component(s: &str) -> String {
@@ -1029,8 +1054,9 @@ impl Libpod {
         until: Option<i64>,
     ) -> Result<Vec<LogLine>, PodmanError> {
         let path = logs_path(id, tail, since, until)?;
+        let end = until.map(until_end).transpose()?;
         self.exchange(Method::GET, &path, |mut body| async move {
-            let mut lines = LogTail::new(tail as usize, MAX_LOG_BYTES);
+            let mut lines = LogTail::new(tail as usize, MAX_LOG_BYTES).until(end);
             while let Some(frame) = body.frame().await {
                 if let Ok(data) = frame?.into_data() {
                     lines.feed(&data);
@@ -1656,6 +1682,31 @@ mod tests {
         assert!(lines[0].earlier_dropped);
         // Within both, nothing is said.
         assert!(!tail_of(&log, 1000, usize::MAX, 100)[0].earlier_dropped);
+    }
+
+    #[test]
+    fn a_log_up_to_a_moment_leaves_out_lines_stamped_after_its_millisecond() {
+        // journald keeps a line at exactly the `until` asked for, the next millisecond's start.
+        let log = [
+            frame(1, b"2026-11-16T10:00:00.123999999Z last of it\n"),
+            frame(1, b"2026-11-16T10:00:00.124000000Z next ms\n"),
+            frame(2, b"2026-11-16T10:00:00.124000001Z after\n"),
+        ]
+        .concat();
+        let end = until_end(1_794_823_200_123).unwrap();
+        let mut t = LogTail::new(2, usize::MAX).until(Some(end));
+        t.feed(&log);
+        let lines = t.finish();
+        assert_eq!(
+            lines.iter().map(|l| l.line.as_str()).collect::<Vec<_>>(),
+            ["2026-11-16T10:00:00.123999999Z last of it"]
+        );
+        // What's left out isn't counted as an earlier line dropped.
+        assert!(!lines[0].earlier_dropped);
+        // A line whose stamp can't be read is kept: dropping it would lose it from every page.
+        let mut t = LogTail::new(10, usize::MAX).until(Some(end));
+        t.feed(b"no stamp\n");
+        assert_eq!(t.finish().len(), 1);
     }
 
     #[test]
