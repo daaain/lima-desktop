@@ -85,10 +85,21 @@ jobs:
           include-hidden-files: true   # .snapshots/ is a dot-dir, skipped by default
           if-no-files-found: ignore
 
+  # One job per guest, side by side: each makes and checks only its own VM (`--guest`).
   e2e:
-    name: e2e on real Lima (QEMU)
+    name: "e2e on real Lima (QEMU): ${{ matrix.label }}"
     runs-on: ubuntu-26.04
     timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - guest: fedora
+            label: Lima's podman template (Fedora)
+          - guest: deb13
+            label: debian 13 / podman 5.4
+          - guest: deb12
+            label: debian 12 / podman 4.3, refused
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -118,11 +129,13 @@ jobs:
           sudo tar -C /usr/local -xzf "$tarball"
           limactl --version
 
+      # Per guest: each job downloads only its own image, and jobs side by side would otherwise
+      # race to save one entry.
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/lima
-          key: lima-images-${{ env.LIMA_VERSION }}-${{ hashFiles('src-tauri/tests/e2e/*.yaml') }}
-          restore-keys: lima-images-${{ env.LIMA_VERSION }}-
+          key: lima-images-${{ env.LIMA_VERSION }}-${{ matrix.guest }}-${{ hashFiles('src-tauri/tests/e2e/*.yaml') }}
+          restore-keys: lima-images-${{ env.LIMA_VERSION }}-${{ matrix.guest }}-
 
       - name: Rust ${{ env.RUST_VERSION }}
         run: |
@@ -142,11 +155,11 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
 
-      - run: just e2e
+      - run: just e2e --guest ${{ matrix.guest }}
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: failure()
         with:
-          name: e2e-log
+          name: e2e-log-${{ matrix.guest }}
           path: .e2e/*.log
           include-hidden-files: true   # .e2e/ is a dot-dir, skipped by default
           if-no-files-found: ignore
