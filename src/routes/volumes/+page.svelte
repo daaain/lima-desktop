@@ -151,7 +151,7 @@
   </div>
 {/if}
 
-<!-- Focus stays on Refresh and Measure as they work. -->
+<!-- Refresh and Measure keep the focus as they work: `aria-disabled` while busy, not disabled. -->
 <div class="toolbar">
   <VmSelect vms={scope.running} value={vmFilter} onchange={(vm) => goto(withParam(page.url, 'vm', vm), { replaceState: true, keepFocus: true, noScroll: true })} />
   <input type="search" placeholder="Search name" aria-label="Search volumes" bind:value={query} />

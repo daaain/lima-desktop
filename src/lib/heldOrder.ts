@@ -14,8 +14,15 @@ export function heldOrder<T, W>(now: readonly T[], was: readonly W[], key: (t: T
 /**
  * What a list was ordered by as the focus came into it, for `heldOrder`, while the focus is still
  * there. Asked each time the order is worked out (every poll, and as the focus moves) whether the
- * focus is inside, as looked at then (`focusWithin`): a control taken out of the page with the
+ * focus is inside, as looked at then (`focusWithin.ts`): a control taken out of the page with the
  * focus says nothing in WebKit, so only looking tells that the keyboard has gone.
+ *
+ * With the app in the background the focus is still where it was, and the list stays held: let go,
+ * it would re-sort, and a line moved takes the focus with it, so the keyboard would come back to
+ * nothing.
+ *
+ * Asked from inside a `$derived`, it keeps what it holds in a plain field, not `$state`, which a
+ * derived may not write to (`state_unsafe_mutation`).
  */
 export class Held<T> {
   #was: T | null = null;
@@ -25,10 +32,4 @@ export class Held<T> {
     this.#was = inside ? (this.#was ?? now) : null;
     return this.#was;
   }
-}
-
-/** Whether the focus is in `node`, and, given `within`, in an element under it that matches it. */
-export function focusWithin(node: Element | undefined | null, within?: string): boolean {
-  const at = document.activeElement;
-  return !!node && !!at && node.contains(at) && (!within || !!at.closest(within));
 }

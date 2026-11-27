@@ -23,7 +23,8 @@
   import SortHead from '$lib/SortHead.svelte';
   import { glide, unfold } from '$lib/motion';
   import { detailId } from '$lib/opener';
-  import { focusWithin, Held } from '$lib/heldOrder';
+  import { focusWithin } from '$lib/focusWithin';
+  import { Held } from '$lib/heldOrder';
   import { Ordering } from '$lib/ordering.svelte';
   import { folds, vmFolds } from '$lib/folds.svelte';
   import { listsLines } from '$lib/folds';

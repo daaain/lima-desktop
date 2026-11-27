@@ -18,7 +18,8 @@
   import SortHead from '$lib/SortHead.svelte';
   import { glide } from '$lib/motion';
   import { Ordering } from '$lib/ordering.svelte';
-  import { focusWithin, Held, heldOrder } from '$lib/heldOrder';
+  import { focusWithin } from '$lib/focusWithin';
+  import { Held, heldOrder } from '$lib/heldOrder';
   import { BY_NAME, sortRunning, sortStopped, VM_COLUMNS, VM_SORTS, type VmSort } from '$lib/vmSort';
 
   const vms = $derived(live.snapshot?.vms ?? []);
