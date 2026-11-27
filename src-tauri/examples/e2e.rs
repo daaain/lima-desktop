@@ -1202,14 +1202,14 @@ async fn logs_until_with(pod: &Libpod, driver: &str, name: &str) -> Result<Strin
     // Asked up to the end of what its stamp could stand for, as the UI asks: under podman 5 that's
     // the whole second, every line stamped with it included.
     let until = pivot + stamp_span(stamped[LOG_LINES / 2].1);
-    let want: Vec<&str> = stamped.iter().filter(|(ms, _)| *ms <= pivot).map(|(_, l)| *l).collect();
+    let want: Vec<&str> = stamped.iter().filter(|(ms, _)| *ms <= until).map(|(_, l)| *l).collect();
     let page =
         pod.logs(&id, 10_000, None, Some(until)).await.map_err(|e| format!("{driver}: logs(until) failed: {e}"))?;
     let got: Vec<&str> = page.iter().map(|l| l.line.as_str()).collect();
     if got != want {
         let first_diff = got.iter().zip(&want).position(|(a, b)| a != b).unwrap_or(got.len().min(want.len()));
         return Err(format!(
-            "{driver}: until {pivot} gave {} lines, wanted {} (first difference at {first_diff}: {:?} vs {:?})",
+            "{driver}: until {until} gave {} lines, wanted {} (first difference at {first_diff}: {:?} vs {:?})",
             got.len(),
             want.len(),
             got.get(first_diff),
@@ -1219,10 +1219,10 @@ async fn logs_until_with(pod: &Libpod, driver: &str, name: &str) -> Result<Strin
     // And a tail within it: the newest lines up to the moment, not the file's newest.
     let tail = pod.logs(&id, 10, None, Some(until)).await.map(|p| p.into_iter().map(|l| l.line).collect::<Vec<_>>());
     if tail.as_deref().ok() != Some(&want[want.len() - 10..].iter().map(|l| l.to_string()).collect::<Vec<_>>()) {
-        return Err(format!("{driver}: tail 10 until {pivot} isn't the 10 lines before it: {tail:?}"));
+        return Err(format!("{driver}: tail 10 until {until} isn't the 10 lines before it: {tail:?}"));
     }
     let shared = stamped.iter().filter(|(ms, _)| *ms == pivot).count();
-    Ok(format!("{driver} {} of {} ({shared} in its ms)", want.len(), all.len()))
+    Ok(format!("{driver} {} of {} ({shared} on its stamp)", want.len(), all.len()))
 }
 
 async fn run_all(report: &mut Report, keep: bool) {
