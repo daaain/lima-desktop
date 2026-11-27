@@ -2483,3 +2483,14 @@ test("A container's inspect output is a named region the keyboard reaches and sc
   assert.deepEqual(errors, []);
   await close();
 });
+
+test('Each list\'s search is labelled for what it searches, not only by its placeholder', async () => {
+  for (const [path, label] of [['/containers', 'Search containers'], ['/images', 'Search images'], ['/volumes', 'Search volumes']]) {
+    const { page, errors, close } = await open(path);
+    const search = page.locator('input[type=search]');
+    await search.waitFor();
+    assert.equal(await search.getAttribute('aria-label'), label, path);
+    assert.deepEqual(errors, []);
+    await close();
+  }
+});

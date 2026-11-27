@@ -106,7 +106,7 @@
     <input type="checkbox" checked={urlFilter.runningOnly} onchange={(e) => setParam('running', e.currentTarget.checked ? '1' : null)} />
     running only
   </label>
-  <input type="search" placeholder="Search name, service, project, image" bind:value={query} />
+  <input type="search" placeholder="Search name, service, project, image" aria-label="Search containers" bind:value={query} />
   <span class="muted num">{rows.length} of {all.length}</span>
 </div>
 

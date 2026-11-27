@@ -152,7 +152,7 @@
 
 <div class="toolbar">
   <VmSelect vms={scope.running} value={vmFilter} onchange={(vm) => goto(withParam(page.url, 'vm', vm), { replaceState: true, keepFocus: true, noScroll: true })} />
-  <input type="search" placeholder="Search name" bind:value={query} />
+  <input type="search" placeholder="Search name" aria-label="Search volumes" bind:value={query} />
   <button onclick={() => volumes.load()} disabled={volumes.loading}>{volumes.loading ? 'Refreshing…' : 'Refresh'}</button>
   <button onclick={() => measured.measure(shown)} disabled={measured.measuring || shown.length === 0} title="Sizes and users from podman's system df: it walks every volume, so it can take a few seconds">
     {measured.measuring ? 'Measuring…' : measuredAt ? 'Measure again' : 'Measure sizes'}

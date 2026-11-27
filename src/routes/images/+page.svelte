@@ -168,7 +168,7 @@
 
 <div class="toolbar">
   <VmSelect vms={scope.running} value={vmFilter} onchange={(vm) => goto(withParam(page.url, 'vm', vm), { replaceState: true, keepFocus: true, noScroll: true })} />
-  <input type="search" placeholder="Search name or id" bind:value={query} />
+  <input type="search" placeholder="Search name or id" aria-label="Search images" bind:value={query} />
   <button onclick={() => images.load()} disabled={images.loading}>{images.loading ? 'Refreshing…' : 'Refresh'}</button>
   <button onclick={() => measured.measure(shown)} disabled={measured.measuring || shown.length === 0} title="What removing each image would free, from podman's system df. It walks every volume too, so it can take a few seconds">
     {measured.measuring ? 'Measuring…' : measuredAt ? 'Measure again' : 'Measure sizes'}
