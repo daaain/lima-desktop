@@ -20,11 +20,11 @@ export function tabFor(key: string, at: number, count: number): number | null {
   }
 }
 
-/** A tablist's `onkeydown`: chooses the tab a key moves to among `keys`, and puts the focus on it. */
+/** A tab's `onkeydown`: chooses the tab a key moves to among `keys`, and puts the focus on it. */
 export function onTabKey<T>(e: KeyboardEvent, keys: readonly T[], current: T, choose: (key: T) => void) {
   const to = tabFor(e.key, keys.indexOf(current), keys.length);
   if (to == null) return;
   e.preventDefault();
   choose(keys[to]);
-  (e.currentTarget as HTMLElement).querySelectorAll<HTMLElement>('[role=tab]')[to]?.focus();
+  (e.currentTarget as HTMLElement).closest('[role=tablist]')?.querySelectorAll<HTMLElement>('[role=tab]')[to]?.focus();
 }

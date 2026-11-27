@@ -190,11 +190,10 @@
 <svelte:document onvisibilitychange={() => (visible = document.visibilityState !== 'hidden')} />
 
 <div class="popover" class:warm={now?.hot} bind:this={root}>
-  <div class="seg" role="tablist" aria-label="Resource"
-    onkeydown={(e) => onTabKey(e, TABS.map((t) => t.key), tab, (k) => (tab = k))}>
+  <div class="seg" role="tablist" aria-label="Resource">
     {#each TABS as t (t.key)}
       <button role="tab" id="tab-{t.key}" aria-selected={tab === t.key} aria-controls="panel" tabindex={tab === t.key ? 0 : -1}
-        onclick={() => (tab = t.key)}>{t.label}</button>
+        onclick={() => (tab = t.key)} onkeydown={(e) => onTabKey(e, TABS.map((t) => t.key), tab, (k) => (tab = k))}>{t.label}</button>
     {/each}
   </div>
 

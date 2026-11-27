@@ -65,10 +65,10 @@
       <h3 class="serif"><bdi>{name}</bdi></h3>
       <span class="muted image"><bdi>{image}</bdi></span>
     </div>
-    <div class="tabs" role="tablist" aria-label="Container" onkeydown={(e) => onTabKey(e, TABS, tab, (t) => (tab = t))}>
+    <div class="tabs" role="tablist" aria-label="Container">
       {#each TABS as t}
         <button role="tab" id="{uid}-{t}" aria-selected={tab === t} aria-controls="{uid}-panel" tabindex={tab === t ? 0 : -1}
-          class:active={tab === t} onclick={() => (tab = t)}>{t}</button>
+          class:active={tab === t} onclick={() => (tab = t)} onkeydown={(e) => onTabKey(e, TABS, tab, (k) => (tab = k))}>{t}</button>
       {/each}
     </div>
     <button onclick={onclose} aria-label="Close">✕</button>
