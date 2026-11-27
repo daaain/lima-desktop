@@ -2523,3 +2523,127 @@ test('Each action button is named for what it acts on, its visible word first', 
   assert.deepEqual(errors, []);
   await close();
 });
+
+// What has focus, by its label, else its text; BODY when nothing has.
+const focused = (page) =>
+  page.evaluate(() => {
+    const el = document.activeElement;
+    return !el || el === document.body ? 'BODY' : el.getAttribute('aria-label') ?? (el.labels?.[0] ?? el).textContent.trim();
+  });
+/** Waits for focus to come to rest on `name`, else fails saying where it is. */
+async function focusComesTo(page, name, timeout = 3000) {
+  const until = Date.now() + timeout;
+  let now;
+  while ((now = await focused(page)) !== name && Date.now() < until) await page.waitForTimeout(50);
+  assert.equal(now, name);
+}
+// The snapshot from now on with `vm` stopped (`change` 'stop'), or one of its containers exited
+// or shrunk to use far less memory (`change` [name, 'exited' | 'shrunk']).
+function changeSnapshot(page, vm, change) {
+  return page.evaluate(([vm, change]) => {
+    const stopped = (v) => ({ instance: { ...v.instance, status: 'Stopped', podmanSocket: undefined }, latest: {}, containers: [] });
+    const changed = {
+      exited: (c) => ({ ...c, state: 'exited', status: 'Exited (0)', latest: {} }),
+      shrunk: (c) => ({ ...c, latest: { ...c.latest, mem: c.latest.mem / 50 } }),
+    };
+    window.__fakeAnswer = (cmd, args, answer) => cmd !== 'snapshot' ? answer : {
+      ...answer,
+      vms: answer.vms.map((v) => {
+        if (v.instance.name !== vm) return v;
+        if (change === 'stop') return stopped(v);
+        const [name, how] = change;
+        return { ...v, containers: v.containers.map((c) => (c.name === name ? changed[how](c) : c)) };
+      }),
+    };
+  }, [vm, change]);
+}
+
+test("A VM's Stop keeps focus while it works, and hands it to Start once the VM has stopped", async () => {
+  // On the overview a stopped VM moves to the list below, its buttons drawn afresh there.
+  const { page, errors, close } = await open('/');
+  await page.getByRole('button', { name: 'Stop harbor', exact: true }).focus();
+  await page.keyboard.press('Enter');
+  await page.getByRole('button', { name: 'Stopping… harbor', exact: true }).waitFor();
+  await focusComesTo(page, 'Stop harbor');
+  await changeSnapshot(page, 'harbor', 'stop');
+  await focusComesTo(page, 'Start harbor');
+  await page.keyboard.press('Tab');
+  assert.equal(await focused(page), 'Delete harbor');
+  // On its own page, the same buttons swap in place.
+  await page.goto(`${base}/vm/lantern`);
+  await page.getByRole('button', { name: 'Stop lantern', exact: true }).focus();
+  await page.keyboard.press('Enter');
+  await page.getByRole('button', { name: 'Stopping… lantern', exact: true }).waitFor();
+  await focusComesTo(page, 'Stop lantern');
+  await changeSnapshot(page, 'lantern', 'stop');
+  await focusComesTo(page, 'Start lantern');
+  // Focus put down by the user (a click on the page itself) stays down as the buttons change again.
+  await page.evaluate(() => document.activeElement.blur());
+  await page.evaluate(() => (window.__fakeAnswer = undefined));
+  await page.getByRole('button', { name: 'Stop lantern', exact: true }).waitFor();
+  assert.equal(await focused(page), 'BODY');
+  assert.deepEqual(errors, []);
+  await close();
+});
+
+test("A container's Stop keeps focus while it works and as its line moves, and hands it to Start once it has stopped", async () => {
+  const { page, errors, close } = await open('/containers');
+  await page.getByRole('button', { name: 'Stop atlas-graph-api-1', exact: true }).focus();
+  await page.keyboard.press('Enter');
+  await focusComesTo(page, 'Stop atlas-graph-api-1');
+  // The largest first: shrunk, its line moves down (taken out and put back) with focus still on its Stop.
+  const at = async () => (await page.locator('.line .name').allInnerTexts()).indexOf('graph-api');
+  const before = await at();
+  await changeSnapshot(page, 'atlas', ['atlas-graph-api-1', 'shrunk']);
+  await page.waitForFunction((before) => [...document.querySelectorAll('.line .name')].map((n) => n.innerText).indexOf('graph-api') > before, before);
+  await focusComesTo(page, 'Stop atlas-graph-api-1');
+  // Stopped, it uses no memory, and moves to the end of its project's lines.
+  await changeSnapshot(page, 'atlas', ['atlas-graph-api-1', 'exited']);
+  await focusComesTo(page, 'Start atlas-graph-api-1');
+  assert.ok((await at()) > before, 'its line moved down');
+  await page.keyboard.press('Tab');
+  assert.equal(await focused(page), 'Remove atlas-graph-api-1');
+  assert.deepEqual(errors, []);
+  await close();
+});
+
+test('A Settings control keeps focus while what it chose is saved', async () => {
+  const { page, errors, close } = await open('/settings');
+  await page.getByRole('heading', { level: 1 }).waitFor();
+  await page.getByRole('group', { name: 'Theme' }).getByRole('button', { name: 'Dark' }).focus();
+  await page.keyboard.press('Enter');
+  await page.locator('button[aria-pressed]:disabled').first().waitFor();
+  await page.waitForFunction(() => !document.querySelector('button[aria-pressed]:disabled'));
+  await focusComesTo(page, 'Dark');
+  await page.getByRole('checkbox', { name: /Keep recording/ }).focus();
+  await page.keyboard.press('Space');
+  await page.locator('input[type=checkbox]:disabled').first().waitFor();
+  await page.waitForFunction(() => !document.querySelector('input[type=checkbox]:disabled'));
+  await focusComesTo(page, 'Keep recording, in the menu bar');
+  assert.deepEqual(errors, []);
+  await close();
+});
+
+test('Refresh and Measure on Images and Volumes keep focus while they work', async () => {
+  const { page, errors, close } = await open('/images', {
+    // Lists that take a moment to come, as a busy VM's do.
+    init: () => {
+      window.__fakeAnswer = (cmd, args, answer) => (cmd === 'images' || cmd === 'volumes' ? new Promise((r) => setTimeout(() => r(answer), 300)) : answer);
+    },
+  });
+  for (const path of ['/images', '/volumes']) {
+    if (path !== '/images') await page.goto(base + path);
+    const measure = page.getByRole('button', { name: 'Measure again' });
+    await measure.waitFor();
+    await measure.focus();
+    await page.keyboard.press('Enter');
+    await page.getByRole('button', { name: 'Measuring…' }).waitFor();
+    await focusComesTo(page, 'Measure again');
+    await page.getByRole('button', { name: 'Refresh', exact: true }).focus();
+    await page.keyboard.press('Enter');
+    await page.getByRole('button', { name: 'Refreshing…' }).waitFor();
+    await focusComesTo(page, 'Refresh');
+  }
+  assert.deepEqual(errors, []);
+  await close();
+});

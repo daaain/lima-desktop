@@ -1,6 +1,7 @@
 <script lang="ts">
   import { goto } from '$app/navigation';
   import { page } from '$app/state';
+  import { keepFocus } from '$lib/keepFocus';
   import { live } from '$lib/live.svelte';
   import { api } from '$lib/api';
   import { age, bytes } from '$lib/format';
@@ -150,7 +151,8 @@
   </div>
 {/if}
 
-<div class="toolbar">
+<!-- Focus stays on Refresh and Measure as they work. -->
+<div class="toolbar" use:keepFocus>
   <VmSelect vms={scope.running} value={vmFilter} onchange={(vm) => goto(withParam(page.url, 'vm', vm), { replaceState: true, keepFocus: true, noScroll: true })} />
   <input type="search" placeholder="Search name" aria-label="Search volumes" bind:value={query} />
   <button onclick={() => volumes.load()} disabled={volumes.loading}>{volumes.loading ? 'Refreshing…' : 'Refresh'}</button>

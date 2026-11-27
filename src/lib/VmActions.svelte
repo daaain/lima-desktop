@@ -1,6 +1,7 @@
 <script lang="ts">
   import { api, locked, type Instance, type VmAction } from './api';
   import { live } from './live.svelte';
+  import { keepFocus } from './keepFocus';
   let {
     inst,
     error = $bindable(),
@@ -43,7 +44,8 @@
   <button class:danger {disabled} {title} aria-label={`${said} ${inst.name}`} onclick={() => run(action)}>{said}</button>
 {/snippet}
 
-<div class="actions">
+<!-- Focus stays as a button works and as Stop gives way to Start, here or where the VM is drawn next. -->
+<div class="actions" use:keepFocus={`vm ${inst.name}`}>
   {#if !running}
     {@render act('start', 'Start', 'Starting…', !!busy || !stopped || locked(inst, 'start'), why('start'))}
   {:else}

@@ -7,6 +7,7 @@
     api, DRAWINGS, INTERVALS, THEMES, WARN_FREE_GB, WARN_PCTS, type Drawing, type MenuBar, type MenuBarItem, type Settings, type Theme,
     type Warn,
   } from '$lib/api';
+  import { keepFocus } from '$lib/keepFocus';
   import { live } from '$lib/live.svelte';
   import { intervalPhrase } from '$lib/almanac';
   import { theme } from '$lib/theme.svelte';
@@ -36,6 +37,7 @@
   // A Linux panel shows an item's image alone (its title only with GNOME's AppIndicator extension),
   // so there an item is its drawing, with no figure or name to choose (menubar.rs's parts_here).
   let drawingsOnly = $state(false);
+  // Every control is disabled while a choice is saved; each panel keeps focus through it (keepFocus).
   let saving = $state(false);
   let error = $state<string | null>(null);
 
@@ -71,7 +73,7 @@
 {:else}
   <h1 class="headline">Each running VM is measured {intervalPhrase(settings.intervalSecs)}.</h1>
 
-  <section class="panel">
+  <section class="panel" use:keepFocus>
     <h2 class="head">How often</h2>
     <div class="choices" role="group" aria-label="Measure each running VM every">
       {#each INTERVALS as s}
@@ -87,7 +89,7 @@
     </p>
   </section>
 
-  <section class="panel">
+  <section class="panel" use:keepFocus>
     <h2 class="head">Theme</h2>
     <div class="choices" role="group" aria-label="Theme">
       {#each THEMES as t}
@@ -98,7 +100,7 @@
     <p class="note">System is light or dark as this computer is, and follows it when it changes.</p>
   </section>
 
-  <section class="panel">
+  <section class="panel" use:keepFocus>
     <h2 class="head">In the menu bar</h2>
     <div class="items">
       {#each ITEMS as item (item.key)}
@@ -159,7 +161,7 @@
     </p>
   </section>
 
-  <section class="panel">
+  <section class="panel" use:keepFocus>
     <h2 class="head">When the window is closed</h2>
     <label class="check">
       <input type="checkbox" checked={settings.keepRunning} disabled={saving} onchange={(e) => save({ keepRunning: e.currentTarget.checked })} />
@@ -171,7 +173,7 @@
     </p>
   </section>
 
-  <section class="panel">
+  <section class="panel" use:keepFocus>
     <h2 class="head">New versions</h2>
     <label class="check">
       <input type="checkbox" checked={settings.checkUpdates} disabled={saving}
