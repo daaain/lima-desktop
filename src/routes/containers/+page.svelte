@@ -23,7 +23,7 @@
   import SortHead from '$lib/SortHead.svelte';
   import { glide, unfold } from '$lib/motion';
   import { detailId } from '$lib/opener';
-  import { focusIn } from '$lib/focusIn';
+  import { focusWithin, Held } from '$lib/heldOrder';
   import { Ordering } from '$lib/ordering.svelte';
   import { folds, vmFolds } from '$lib/folds.svelte';
   import { listsLines } from '$lib/folds';
@@ -73,8 +73,15 @@
   const sorted = $derived(groupContainers(rows, ordering.current));
   // While the keyboard is in the list, its lines keep the order they had as it came in, so the one
   // it's on doesn't jump away (or lose the focus) as the memory each uses changes (heldOrder.ts).
-  let held = $state<ContainerGroup[] | null>(null);
-  const groups = $derived((held ? holdGroups(sorted, held) : sorted).map((g) => ({ ...g, live: live.vm(g.vm) })));
+  // Where the focus is, is looked at each poll and as it moves in or out of the list.
+  let list = $state<HTMLElement>();
+  let focusMoved = $state(0);
+  const held = new Held<ContainerGroup[]>();
+  const groups = $derived.by(() => {
+    void focusMoved;
+    const was = held.was(sorted, focusWithin(list));
+    return (was ? holdGroups(sorted, was) : sorted).map((g) => ({ ...g, live: live.vm(g.vm) }));
+  });
   const heads = $derived<{ key: ContainerSort; text: string; span?: number }[]>([
     { key: 'name', text: `${countWord(groups.length)} ${groups.length === 1 ? 'VM' : 'VMs'}` },
     { key: 'memory', text: 'Memory', span: 2 },
@@ -151,7 +158,7 @@
       </div>
     {/each}
   {/snippet}
-  <div class="lines" use:focusIn={{ inside: (inside) => (held = inside ? (held ?? sorted) : null) }}>
+  <div class="lines" bind:this={list} onfocusin={() => focusMoved++} onfocusout={() => focusMoved++}>
     {#each groups as g (g.vm)}
       {@const listed = listsLines({ folded: vmFolds.containers.has(g.vm), searching: searching || urlFilter.vm != null })}
       <section animate:glide>

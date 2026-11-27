@@ -2798,3 +2798,29 @@ test("A container's log and a volume's file are named regions the keyboard reach
   assert.deepEqual(vol.errors, []);
   await vol.close();
 });
+
+test("A list's order held under the keyboard lets go once the focus has gone, even with what had it taken away", async () => {
+  const { page, errors, close } = await open('/');
+  await page.getByRole('group', { name: 'Order the VMs by' }).getByRole('button', { name: /memory/i }).click();
+  const order = () => page.locator('.fleet article.row.vm a.name').allInnerTexts();
+  await page.getByRole('button', { name: 'Stop harbor', exact: true }).focus();
+  await page.keyboard.press('Enter');
+  // harbor stops: its buttons go to the stopped list, and the focus with them (handOver).
+  await changeSnapshot(page, 'harbor', 'stop');
+  await focusComesTo(page, 'Start harbor');
+  const before = await order();
+  const last = before.at(-1);
+  // Now the last running VM uses nearly all its memory: it belongs first, focus or not, as the
+  // keyboard has left the running list.
+  await page.evaluate((last) => {
+    const was = window.__fakeAnswer;
+    window.__fakeAnswer = (cmd, args, answer) => {
+      const a = was(cmd, args, answer);
+      if (cmd !== 'snapshot') return a;
+      return { ...a, vms: a.vms.map((v) => (v.instance.name !== last ? v : { ...v, latest: { ...v.latest, mem_used: (v.latest.mem_total ?? v.instance.memory) * 0.99 } })) };
+    };
+  }, last);
+  await page.waitForFunction((last) => document.querySelector('.fleet article.row.vm a.name')?.textContent === last, last, { timeout: 5000 });
+  assert.deepEqual(errors, []);
+  await close();
+});

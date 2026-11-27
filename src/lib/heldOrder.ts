@@ -10,3 +10,25 @@ export function heldOrder<T, W>(now: readonly T[], was: readonly W[], key: (t: T
   const known = now.filter((t) => rank.has(key(t))).sort((a, b) => rank.get(key(a))! - rank.get(key(b))!);
   return [...known, ...now.filter((t) => !rank.has(key(t)))];
 }
+
+/**
+ * What a list was ordered by as the focus came into it, for `heldOrder`, while the focus is still
+ * there. Asked each time the order is worked out (every poll, and as the focus moves) whether the
+ * focus is inside, as looked at then (`focusWithin`): a control taken out of the page with the
+ * focus says nothing in WebKit, so only looking tells that the keyboard has gone.
+ */
+export class Held<T> {
+  #was: T | null = null;
+
+  /** While `inside`, the `now` it first came with; else nothing, forgotten. */
+  was(now: T, inside: boolean): T | null {
+    this.#was = inside ? (this.#was ?? now) : null;
+    return this.#was;
+  }
+}
+
+/** Whether the focus is in `node`, and, given `within`, in an element under it that matches it. */
+export function focusWithin(node: Element | undefined | null, within?: string): boolean {
+  const at = document.activeElement;
+  return !!node && !!at && node.contains(at) && (!within || !!at.closest(within));
+}
