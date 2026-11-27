@@ -125,7 +125,9 @@
       <p class="muted num">
         A text file of {bytes(peek.size)}{#if peek.truncated}; only the first {bytes(SHOWN)} is shown{/if}.
       </p>
-      <pre tabindex="-1" data-arrive>{peek.text}</pre>
+      <!-- A Tab stop, as WebKit doesn't let the keyboard scroll a box that isn't (axe's scrollable-region-focusable). -->
+      <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+      <pre tabindex="0" role="region" aria-label={peek.path.split('/').pop()} data-arrive>{peek.text}</pre>
     {/if}
   {:else if listing}
     {#if listing.entries.length}

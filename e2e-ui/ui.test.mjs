@@ -2408,11 +2408,12 @@ test('A labelled element keeps its tooltip as its description once the pointer h
   await close();
 });
 
-/** The focused element's role and accessible name, as a screen reader would say it. */
-const focused = (page) => page.evaluate(() => {
-  const el = document.activeElement;
-  return el ? `${el.getAttribute('role') ?? el.tagName.toLowerCase()}: ${el.getAttribute('aria-label') ?? el.textContent.trim()}` : null;
-});
+// What has focus, by its label, else its text; BODY when nothing has.
+const focused = (page) =>
+  page.evaluate(() => {
+    const el = document.activeElement;
+    return !el || el === document.body ? 'BODY' : el.getAttribute('aria-label') ?? (el.labels?.[0] ?? el).textContent.trim();
+  });
 
 test("The popover's tabs are one Tab stop, chosen with the arrow keys, Home and End, each labelling its panel", async () => {
   const { page, errors, close } = await open('/menubar?tab=mem', { width: 396, height: 560 });
@@ -2420,17 +2421,17 @@ test("The popover's tabs are one Tab stop, chosen with the arrow keys, Home and 
   await page.locator('.legend .row[data-vm]').first().waitFor();
   await tab('Memory').focus();
   await page.keyboard.press('ArrowRight');
-  assert.equal(await focused(page), 'tab: CPU');
+  assert.equal(await focused(page), 'CPU');
   assert.equal(await tab('CPU').getAttribute('aria-selected'), 'true');
   assert.equal(await page.getByRole('tabpanel', { name: 'CPU' }).count(), 1);
   await page.keyboard.press('End');
-  assert.equal(await focused(page), 'tab: Disk');
+  assert.equal(await focused(page), 'Disk');
   await page.keyboard.press('ArrowRight');
-  assert.equal(await focused(page), 'tab: Memory', 'round from the end');
+  assert.equal(await focused(page), 'Memory', 'round from the end');
   await page.keyboard.press('ArrowLeft');
-  assert.equal(await focused(page), 'tab: Disk');
+  assert.equal(await focused(page), 'Disk');
   await page.keyboard.press('Home');
-  assert.equal(await focused(page), 'tab: Memory');
+  assert.equal(await focused(page), 'Memory');
   // Tab leaves the row for the panel, not the next tab.
   await page.keyboard.press('Tab');
   assert.notEqual(await page.evaluate(() => document.activeElement?.getAttribute('role')), 'tab');
@@ -2449,7 +2450,7 @@ test("A container's detail's tabs say which is chosen, and the arrow keys choose
   assert.equal(await tabs.getByRole('tab', { name: 'metrics' }).getAttribute('aria-selected'), 'true');
   await tabs.getByRole('tab', { name: 'metrics' }).focus();
   await page.keyboard.press('ArrowRight');
-  assert.equal(await focused(page), 'tab: logs');
+  assert.equal(await focused(page), 'logs');
   assert.equal(await tabs.getByRole('tab', { name: 'logs' }).getAttribute('aria-selected'), 'true');
   await detail.getByRole('tabpanel', { name: 'logs' }).waitFor();
   assert.deepEqual(errors, []);
@@ -2462,7 +2463,7 @@ test("An OOM kill's container is a button, so the keyboard opens its detail too"
   await app.focus();
   await page.keyboard.press('Enter');
   await page.locator('[id^="detail-"]').waitFor();
-  assert.equal(await focused(page), 'button: app', 'focus stays on it');
+  assert.equal(await focused(page), 'app', 'focus stays on it');
   // A removed container has no detail to open, so it isn't a button.
   assert.equal(await page.locator('#oom tbody tr:not(.clickable) button').count(), 0);
   assert.deepEqual(errors, []);
@@ -2524,12 +2525,6 @@ test('Each action button is named for what it acts on, its visible word first', 
   await close();
 });
 
-// What has focus, by its label, else its text; BODY when nothing has.
-const focused = (page) =>
-  page.evaluate(() => {
-    const el = document.activeElement;
-    return !el || el === document.body ? 'BODY' : el.getAttribute('aria-label') ?? (el.labels?.[0] ?? el).textContent.trim();
-  });
 /** Waits for focus to come to rest on `name`, else fails saying where it is. */
 async function focusComesTo(page, name, timeout = 3000) {
   const until = Date.now() + timeout;
@@ -2682,7 +2677,7 @@ test('The full-window log gives focus back to its Full window button as it close
   await line.focus();
   await page.keyboard.press('Enter');
   const detail = page.locator('section.detail');
-  await detail.getByRole('button', { name: 'logs' }).focus();
+  await detail.getByRole('tab', { name: 'logs' }).focus();
   await page.keyboard.press('Enter');
   await detail.locator('.ln').first().waitFor();
   const win = page.getByRole('dialog', { name: /frontend-1's log$/ });
@@ -2735,7 +2730,7 @@ test("Each step through a folder's files puts focus on what it opened: the first
   await focusComesTo(page, 'base/');
   await step(files.getByRole('button', { name: 'postgresql.conf' }));
   await page.waitForFunction(() => document.activeElement?.tagName === 'PRE');
-  assert.match(await focused(page), /^# PostgreSQL configuration file/);
+  assert.equal(await focused(page), 'postgresql.conf');
   // A link to a folder lists it.
   await step(files.getByRole('button', { name: 'Back to the folder' }));
   await step(files.getByRole('button', { name: /^current/ }));
@@ -2743,4 +2738,31 @@ test("Each step through a folder's files puts focus on what it opened: the first
   assert.match(await files.locator('nav.path').innerText(), /atlas_pgdata\s*\/\s*current/);
   assert.deepEqual(errors, []);
   await close();
+});
+
+test("A container's log and a volume's file are named regions the keyboard reaches and scrolls", async () => {
+  const { page, errors, close } = await open('/containers', { height: 900 });
+  await page.locator('.line', { has: page.locator('.name', { hasText: /^frontend/ }) }).first().click();
+  const detail = page.locator('section.detail');
+  await detail.getByRole('tab', { name: 'logs' }).click();
+  const log = detail.getByRole('region', { name: 'Log' });
+  await log.waitFor();
+  assert.equal(await log.getAttribute('tabindex'), '0');
+  // It opens at its newest line; Home takes it to the top.
+  await page.waitForFunction(() => document.querySelector('section.detail .log').scrollTop > 0);
+  await log.focus();
+  await page.keyboard.press('Home');
+  await page.waitForFunction(() => document.querySelector('section.detail .log').scrollTop === 0);
+  assert.deepEqual(errors, []);
+  await close();
+
+  const vol = await open('/volumes');
+  await vol.page.locator('.line', { has: vol.page.locator('.name', { hasText: /^atlas_pgdata$/ }) }).first().click();
+  const files = vol.page.locator('section.detail');
+  await files.getByRole('button', { name: 'postgresql.conf' }).click();
+  const file = files.getByRole('region', { name: 'postgresql.conf' });
+  await file.waitFor();
+  assert.equal(await file.getAttribute('tabindex'), '0');
+  assert.deepEqual(vol.errors, []);
+  await vol.close();
 });

@@ -203,7 +203,9 @@
       {#if filtering}<span class="shown">{shownSentence(shown.length, lines.length, drawn.length)}</span>{/if}
     </p>
   {/if}
-  <div class="log" class:full bind:this={logBox}>
+  <!-- A Tab stop, as WebKit doesn't let the keyboard scroll a box that isn't (axe's scrollable-region-focusable). -->
+  <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+  <div class="log" class:full bind:this={logBox} tabindex="0" role="region" aria-label="Log">
     {#if lines == null}…{/if}
     {#each drawn as s (s.n)}
       {#if s.day}<div class="day">{s.day}</div>{/if}
