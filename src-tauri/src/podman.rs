@@ -835,11 +835,15 @@ fn logs_path(id: &str, tail: u32, since: Option<i64>, until: Option<i64>) -> Res
     let (tail, until) = match until {
         None => (tail.to_string(), String::new()),
         Some(ms) => {
-            let end = ms.checked_add(1).and_then(chrono::DateTime::from_timestamp_millis).ok_or(PodmanError::BadTime(ms))?;
+            let end =
+                ms.checked_add(1).and_then(chrono::DateTime::from_timestamp_millis).ok_or(PodmanError::BadTime(ms))?;
             ("all".into(), format!("&until={}", end.to_rfc3339_opts(chrono::SecondsFormat::Nanos, true)))
         }
     };
-    Ok(format!("/containers/{}/logs?stdout=true&stderr=true&timestamps=true&tail={tail}{since}{until}", encode_component(id)))
+    Ok(format!(
+        "/containers/{}/logs?stdout=true&stderr=true&timestamps=true&tail={tail}{since}{until}",
+        encode_component(id)
+    ))
 }
 
 fn encode_component(s: &str) -> String {
@@ -1017,7 +1021,13 @@ impl Libpod {
     /// space; with `since` (Unix seconds), only those written since then; with `until` (Unix ms),
     /// only those written up to the end of that millisecond ([`logs_path`]). Read as it comes, and
     /// only the newest `MAX_LOG_BYTES` of it kept ([`LogTail`]).
-    pub async fn logs(&self, id: &str, tail: u32, since: Option<i64>, until: Option<i64>) -> Result<Vec<LogLine>, PodmanError> {
+    pub async fn logs(
+        &self,
+        id: &str,
+        tail: u32,
+        since: Option<i64>,
+        until: Option<i64>,
+    ) -> Result<Vec<LogLine>, PodmanError> {
         let path = logs_path(id, tail, since, until)?;
         self.exchange(Method::GET, &path, |mut body| async move {
             let mut lines = LogTail::new(tail as usize, MAX_LOG_BYTES);
@@ -1652,7 +1662,10 @@ mod tests {
     fn a_logs_query_asks_for_the_newest_lines_or_those_up_to_a_moment() {
         let base = "/containers/ab%2Fc/logs?stdout=true&stderr=true&timestamps=true";
         assert_eq!(logs_path("ab/c", 500, None, None).unwrap(), format!("{base}&tail=500"));
-        assert_eq!(logs_path("ab/c", 500, Some(1_794_823_200), None).unwrap(), format!("{base}&tail=500&since=1794823200"));
+        assert_eq!(
+            logs_path("ab/c", 500, Some(1_794_823_200), None).unwrap(),
+            format!("{base}&tail=500&since=1794823200")
+        );
         // Up to a moment: every line (k8s-file takes the tail before `until`, so the newest lines
         // before it are kept here), up to the end of its millisecond, said to the nanosecond.
         assert_eq!(
