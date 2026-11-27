@@ -8,6 +8,7 @@ A desktop app (Tauri 2: Rust in `src-tauri/`, SvelteKit SPA + Svelte 5 in `src/`
 - [docs/security.md](./docs/security.md): guests and containers are **untrusted**. The threat model, and the rules for anything that reads, parses, shows or acts on what a guest says.
 - [docs/design/ui.md](./docs/design/ui.md): how the UI looks and speaks (its sentences live in `src/lib/almanac.ts`).
 - [docs/design/metrics-storage.md](./docs/design/metrics-storage.md): the history's store; [docs/design/managed-by.md](./docs/design/managed-by.md): the managed-by marker; [docs/supported-versions.md](./docs/supported-versions.md): Lima, podman (5+) and guests.
+- [docs/accessibility.md](./docs/accessibility.md): what keyboard and screen-reader users can and can't reach, the contrast of the charts' marks, and the order of work on it (#28).
 - [.claude/commands/pr-review.md](./.claude/commands/pr-review.md): what a review checks (CI runs it on every ready PR).
 
 ## Commands
