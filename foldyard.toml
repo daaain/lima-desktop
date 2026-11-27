@@ -267,8 +267,9 @@ live test is safe against it
 # The README's Linux menu bar pictures (just readme-menubar-linux): a real panel under Xvfb
 # (xfce4-panel, whose tray is a StatusNotifierItem host as KDE's and GNOME's AppIndicator extension
 # are), the items shown in it through libayatana-appindicator (python3-gi), its clock held at the
-# README's moment (faketime), and the pictures as lossless WebP (webp).
-packages = ["tmux", "xfce4-panel", "python3-gi", "faketime", "webp"]
+# README's moment (faketime), and the pictures as lossless WebP (webp). gh: pull requests and CI,
+# given a GitHub credential in your own foldyard.local.toml (`fy docs github-app`).
+packages = ["tmux", "xfce4-panel", "python3-gi", "faketime", "webp", "gh"]
 # Rust + Node/pnpm + Tauri's Linux build deps + Xvfb: box.Dockerfile says what and why.
 image = { dockerfile = "box.Dockerfile", tag = "lima-desktop-box:latest" }
 # The Mac builds into these same dirs (macOS binaries, its own node_modules): the box gets its own.
