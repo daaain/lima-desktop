@@ -43,6 +43,21 @@ after(async () => {
   server?.kill();
 });
 
+/**
+ * Waits until the settings the fake backend holds satisfy `ok` (run here, on what it answers), and
+ * gives them. Not `waitForFunction` with an async function: the promise it returns is truthy, so it
+ * would pass at once.
+ */
+async function settingsCome(page, ok, timeout = 3000) {
+  const until = Date.now() + timeout;
+  for (;;) {
+    const s = await page.evaluate(() => window.__TAURI_INTERNALS__.invoke('settings'));
+    if (ok(s)) return s;
+    if (Date.now() > until) assert.fail(`the settings never came to that: ${JSON.stringify(s)}`);
+    await new Promise((r) => setTimeout(r, 50));
+  }
+}
+
 /** `init`, if given, runs in the page before the app does (after the fake backend is set up). */
 async function open(path, { dark = false, width = 1320, height = 900, init } = {}) {
   const context = await browser.newContext({
@@ -508,11 +523,11 @@ test('Settings chooses when each menu bar item warns: memory and CPU by the perc
   ]);
 
   await warns('Memory').selectOption({ label: 'past 90 %' });
-  await page.waitForFunction(async () => (await window.__TAURI_INTERNALS__.invoke('settings')).menuBar.warn.memoryPct === 90);
+  await settingsCome(page, (s) => s.menuBar.warn.memoryPct === 90);
   await warns('CPU').selectOption({ label: 'never' });
-  await page.waitForFunction(async () => (await window.__TAURI_INTERNALS__.invoke('settings')).menuBar.warn.cpuPct === null);
+  await settingsCome(page, (s) => s.menuBar.warn.cpuPct === null);
   await warns('Disk').selectOption({ label: 'under 200 GB free' });
-  await page.waitForFunction(async () => (await window.__TAURI_INTERNALS__.invoke('settings')).menuBar.warn.diskFreeGb === 200);
+  await settingsCome(page, (s) => s.menuBar.warn.diskFreeGb === 200);
   assert.deepEqual((await page.evaluate(() => window.__TAURI_INTERNALS__.invoke('settings'))).menuBar.warn, {
     memoryPct: 90, cpuPct: null, diskFreeGb: 200,
   });
@@ -552,7 +567,7 @@ test('Settings chooses each menu bar item\'s drawing and figure, and whether clo
   await memory.getByRole('button', { name: 'None' }).click();
   await page.waitForFunction(() => document.querySelector('[aria-label="Memory drawn in the menu bar as"] [aria-pressed="true"]')?.textContent === 'None');
   await figure('CPU').click();
-  await page.waitForFunction(async () => !(await window.__TAURI_INTERNALS__.invoke('settings')).menuBar.cpu.figure);
+  await settingsCome(page, (s) => !s.menuBar.cpu.figure);
   assert.equal(await figure('CPU').isChecked(), false);
   assert.deepEqual((await stored()).menuBar, {
     memory: { drawing: 'off', figure: true },
@@ -565,12 +580,12 @@ test('Settings chooses each menu bar item\'s drawing and figure, and whether clo
   const names = page.getByRole('checkbox', { name: /Name each one/ });
   assert.equal(await names.isChecked(), true);
   await names.click();
-  await page.waitForFunction(async () => !(await window.__TAURI_INTERNALS__.invoke('settings')).menuBar.names);
+  await settingsCome(page, (s) => !s.menuBar.names);
 
   const keep = page.getByRole('checkbox', { name: 'Keep recording, in the menu bar' });
   assert.equal(await keep.isChecked(), true);
   await keep.click();
-  await page.waitForFunction(async () => !(await window.__TAURI_INTERNALS__.invoke('settings')).keepRunning);
+  await settingsCome(page, (s) => !s.keepRunning);
   assert.equal(await keep.isChecked(), false);
   assert.deepEqual(errors, []);
   await close();
@@ -622,11 +637,11 @@ test('The new version opens its release page, stays dismissed, and a later one s
   const check = page.getByRole('checkbox', { name: 'Say when a new version is out' });
   assert.equal(await check.isChecked(), true);
   await check.click();
-  await page.waitForFunction(async () => !(await window.__TAURI_INTERNALS__.invoke('settings')).checkUpdates);
+  await settingsCome(page, (s) => !s.checkUpdates);
   await asked(page, 2);
   assert.equal(await notice.count(), 0, 'nothing is said with the check off');
   await check.click();
-  await page.waitForFunction(async () => (await window.__TAURI_INTERNALS__.invoke('settings')).checkUpdates);
+  await settingsCome(page, (s) => s.checkUpdates);
   await notice.getByText('Lima Desktop 0.4.0 is out').waitFor();
   assert.deepEqual(errors, []);
   await close();
@@ -2556,9 +2571,16 @@ function changeSnapshot(page, vm, change) {
 test("A VM's Stop keeps focus while it works, and hands it to Start once the VM has stopped", async () => {
   // On the overview a stopped VM moves to the list below, its buttons drawn afresh there.
   const { page, errors, close } = await open('/');
+  // A stop that takes a moment, as a real one does.
+  await page.evaluate(() => (window.__fakeAnswer = (cmd, args, answer) => (cmd === 'vm_action' ? new Promise((r) => setTimeout(() => r(answer), 1000)) : answer)));
   await page.getByRole('button', { name: 'Stop harbor', exact: true }).focus();
   await page.keyboard.press('Enter');
   await page.getByRole('button', { name: 'Stopping… harbor', exact: true }).waitFor();
+  await focusComesTo(page, 'Stopping… harbor');
+  // Still a Tab stop while it works, but pressed again it does nothing more.
+  assert.equal(await page.getByRole('button', { name: 'Stopping… harbor' }).getAttribute('aria-disabled'), 'true');
+  await page.keyboard.press('Enter');
+  assert.equal((await page.evaluate(() => window.__fakeCalls.filter((c) => c.cmd === 'vm_action'))).length, 1);
   await focusComesTo(page, 'Stop harbor');
   await changeSnapshot(page, 'harbor', 'stop');
   await focusComesTo(page, 'Start harbor');
@@ -2581,40 +2603,50 @@ test("A VM's Stop keeps focus while it works, and hands it to Start once the VM 
   await close();
 });
 
-test("A container's Stop keeps focus while it works and as its line moves, and hands it to Start once it has stopped", async () => {
+test("A container's Stop keeps focus while it works and turns into Start, its line keeping its place while focus is in the list", async () => {
   const { page, errors, close } = await open('/containers');
   await page.getByRole('button', { name: 'Stop atlas-graph-api-1', exact: true }).focus();
   await page.keyboard.press('Enter');
   await focusComesTo(page, 'Stop atlas-graph-api-1');
-  // The largest first: shrunk, its line moves down (taken out and put back) with focus still on its Stop.
   const at = async () => (await page.locator('.line .name').allInnerTexts()).indexOf('graph-api');
   const before = await at();
+  // The largest first: shrunk, then stopped, it would move down, but not under the keyboard.
   await changeSnapshot(page, 'atlas', ['atlas-graph-api-1', 'shrunk']);
-  await page.waitForFunction((before) => [...document.querySelectorAll('.line .name')].map((n) => n.innerText).indexOf('graph-api') > before, before);
-  await focusComesTo(page, 'Stop atlas-graph-api-1');
-  // Stopped, it uses no memory, and moves to the end of its project's lines.
+  await page.waitForTimeout(2500);
+  assert.equal(await at(), before, 'its line stays put while focus is on it');
+  assert.equal(await focused(page), 'Stop atlas-graph-api-1');
   await changeSnapshot(page, 'atlas', ['atlas-graph-api-1', 'exited']);
   await focusComesTo(page, 'Start atlas-graph-api-1');
-  assert.ok((await at()) > before, 'its line moved down');
+  assert.equal(await at(), before);
   await page.keyboard.press('Tab');
   assert.equal(await focused(page), 'Remove atlas-graph-api-1');
+  // Focus gone from the list (to its search), it takes its place among the stopped.
+  await page.getByRole('searchbox', { name: 'Search containers' }).focus();
+  await page.waitForFunction((before) => [...document.querySelectorAll('.line .name')].map((n) => n.innerText).indexOf('graph-api') > before, before);
   assert.deepEqual(errors, []);
   await close();
 });
 
-test('A Settings control keeps focus while what it chose is saved', async () => {
+test('A Settings control keeps focus as what it chose is saved, and choices made at once are each saved', async () => {
   const { page, errors, close } = await open('/settings');
   await page.getByRole('heading', { level: 1 }).waitFor();
-  await page.getByRole('group', { name: 'Theme' }).getByRole('button', { name: 'Dark' }).focus();
+  const dark = page.getByRole('group', { name: 'Theme' }).getByRole('button', { name: 'Dark' });
+  await dark.focus();
   await page.keyboard.press('Enter');
-  await page.locator('button[aria-pressed]:disabled').first().waitFor();
-  await page.waitForFunction(() => !document.querySelector('button[aria-pressed]:disabled'));
-  await focusComesTo(page, 'Dark');
+  await page.waitForFunction((el) => el.getAttribute('aria-pressed') === 'true', await dark.elementHandle());
+  assert.equal(await focused(page), 'Dark');
   await page.getByRole('checkbox', { name: /Keep recording/ }).focus();
   await page.keyboard.press('Space');
-  await page.locator('input[type=checkbox]:disabled').first().waitFor();
-  await page.waitForFunction(() => !document.querySelector('input[type=checkbox]:disabled'));
-  await focusComesTo(page, 'Keep recording, in the menu bar');
+  await page.waitForTimeout(400);
+  assert.equal(await focused(page), 'Keep recording, in the menu bar');
+  // Two at once, the second sent before the first is saved: neither is lost to the other.
+  const boxes = page.locator('input[type=checkbox]');
+  const was = await boxes.evaluateAll((bs) => bs.map((b) => b.checked));
+  await boxes.evaluateAll((bs) => { bs.at(-1).click(); bs.at(-2).click(); });
+  await page.waitForTimeout(600);
+  // What's stored, not what the boxes show: a box shows its click even where the choice was dropped.
+  const stored = await page.evaluate(() => window.__TAURI_INTERNALS__.invoke('settings'));
+  assert.deepEqual([stored.checkUpdates, stored.keepRunning], was.slice(-2).map((c) => !c).reverse());
   assert.deepEqual(errors, []);
   await close();
 });

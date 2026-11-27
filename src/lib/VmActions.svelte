@@ -1,7 +1,7 @@
 <script lang="ts">
   import { api, locked, type Instance, type VmAction } from './api';
   import { live } from './live.svelte';
-  import { keepFocus } from './keepFocus';
+  import { handOver } from './handOver';
   let {
     inst,
     error = $bindable(),
@@ -38,21 +38,30 @@
   }
 </script>
 
-<!-- Each button named for its VM too, its own word first, as a list of VMs has many a Stop. -->
+<!-- Each button named for its VM too, its own word first, as a list of VMs has many a Stop. While
+     one works, every button stays a Tab stop, marked unavailable and ignoring presses: disabled,
+     the one pressed would drop the keyboard's focus. -->
 {#snippet act(action: VmAction, word: string, working: string, disabled: boolean, title: string | undefined, danger = false)}
   {@const said = busy === action ? working : word}
-  <button class:danger {disabled} {title} aria-label={`${said} ${inst.name}`} onclick={() => run(action)}>{said}</button>
+  <button class:danger {disabled} aria-disabled={busy ? true : undefined} {title} aria-label={`${said} ${inst.name}`}
+    onclick={() => !busy && run(action)}>{said}</button>
 {/snippet}
 
-<!-- Focus stays as a button works and as Stop gives way to Start, here or where the VM is drawn next. -->
-<div class="actions" use:keepFocus={`vm ${inst.name}`}>
-  {#if !running}
-    {@render act('start', 'Start', 'Starting…', !!busy || !stopped || locked(inst, 'start'), why('start'))}
-  {:else}
-    {@render act('stop', 'Stop', 'Stopping…', !!busy || locked(inst, 'stop'), why('stop'))}
-    {@render act('restart', 'Restart', 'Restarting…', !!busy || locked(inst, 'stop') || locked(inst, 'start'), why('stop') ?? why('start'))}
+<!-- Stop and Start are one button, its word following the VM, so the focus stays on it as the VM
+     stops; on the overview the VM's buttons are drawn afresh in the stopped list, and take it over
+     there (handOver). -->
+<div class="actions" use:handOver={`vm ${inst.name}`}>
+  {@render act(
+    running ? 'stop' : 'start',
+    running ? 'Stop' : 'Start',
+    running ? 'Stopping…' : 'Starting…',
+    running ? locked(inst, 'stop') : !stopped || locked(inst, 'start'),
+    running ? why('stop') : why('start'),
+  )}
+  {#if running}
+    {@render act('restart', 'Restart', 'Restarting…', locked(inst, 'stop') || locked(inst, 'start'), why('stop') ?? why('start'))}
   {/if}
-  {@render act('delete', 'Delete', 'Deleting…', !!busy || running || locked(inst, 'delete'), running ? 'Stop it first' : why('delete'), true)}
+  {@render act('delete', 'Delete', 'Deleting…', running || locked(inst, 'delete'), running ? 'Stop it first' : why('delete'), true)}
 </div>
 {#if error && inlineError}<p class="error">{error}</p>{/if}
 

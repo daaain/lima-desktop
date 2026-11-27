@@ -1,7 +1,6 @@
 <script lang="ts">
   import { goto } from '$app/navigation';
   import { page } from '$app/state';
-  import { keepFocus } from '$lib/keepFocus';
   import { live } from '$lib/live.svelte';
   import { api } from '$lib/api';
   import { age, bytes } from '$lib/format';
@@ -153,11 +152,11 @@
 {/if}
 
 <!-- Focus stays on Refresh and Measure as they work. -->
-<div class="toolbar" use:keepFocus>
+<div class="toolbar">
   <VmSelect vms={scope.running} value={vmFilter} onchange={(vm) => goto(withParam(page.url, 'vm', vm), { replaceState: true, keepFocus: true, noScroll: true })} />
   <input type="search" placeholder="Search name" aria-label="Search volumes" bind:value={query} />
-  <button onclick={() => volumes.load()} disabled={volumes.loading}>{volumes.loading ? 'Refreshing…' : 'Refresh'}</button>
-  <button onclick={() => measured.measure(shown)} disabled={measured.measuring || shown.length === 0} title="Sizes and users from podman's system df: it walks every volume, so it can take a few seconds">
+  <button onclick={() => !volumes.loading && volumes.load()} aria-disabled={volumes.loading || undefined}>{volumes.loading ? 'Refreshing…' : 'Refresh'}</button>
+  <button onclick={() => !measured.measuring && measured.measure(shown)} disabled={shown.length === 0} aria-disabled={measured.measuring || undefined} title="Sizes and users from podman's system df: it walks every volume, so it can take a few seconds">
     {measured.measuring ? 'Measuring…' : measuredAt ? 'Measure again' : 'Measure sizes'}
   </button>
   <span class="muted num">{rows.length} of {all.length}{#if measuredAt}{` · measured ${age(measuredAt / 1000)}`}{/if}</span>

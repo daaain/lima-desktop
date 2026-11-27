@@ -6,7 +6,7 @@
   import { History } from '$lib/history.svelte';
   import { range, rangeWindow } from '$lib/range.svelte';
   import { theLast } from '$lib/ranges';
-  import { BY_MEMORY, CONTAINER_COLUMNS, CONTAINER_SORTS, containerRows, filterContainers, groupContainers, lineHistory, readContainerFilter, type ContainerRow, type ContainerSort } from '$lib/containers';
+  import { BY_MEMORY, CONTAINER_COLUMNS, CONTAINER_SORTS, containerRows, filterContainers, groupContainers, holdGroups, lineHistory, readContainerFilter, type ContainerGroup, type ContainerRow, type ContainerSort } from '$lib/containers';
   import type { ContainerLive } from '$lib/api';
   import { distinctKeys } from '$lib/keys';
   import Guarded from '$lib/Guarded.svelte';
@@ -23,6 +23,7 @@
   import SortHead from '$lib/SortHead.svelte';
   import { glide, unfold } from '$lib/motion';
   import { detailId } from '$lib/opener';
+  import { focusIn } from '$lib/focusIn';
   import { Ordering } from '$lib/ordering.svelte';
   import { folds, vmFolds } from '$lib/folds.svelte';
   import { listsLines } from '$lib/folds';
@@ -69,7 +70,11 @@
   // the VM using the most memory first, then its projects, then the largest container in each; a
   // column head orders all three by its column (containers.ts).
   const ordering = new Ordering('containers', CONTAINER_SORTS, BY_MEMORY);
-  const groups = $derived(groupContainers(rows, ordering.current).map((g) => ({ ...g, live: live.vm(g.vm) })));
+  const sorted = $derived(groupContainers(rows, ordering.current));
+  // While the keyboard is in the list, its lines keep the order they had as it came in, so the one
+  // it's on doesn't jump away (or lose the focus) as the memory each uses changes (heldOrder.ts).
+  let held = $state<ContainerGroup[] | null>(null);
+  const groups = $derived((held ? holdGroups(sorted, held) : sorted).map((g) => ({ ...g, live: live.vm(g.vm) })));
   const heads = $derived<{ key: ContainerSort; text: string; span?: number }[]>([
     { key: 'name', text: `${countWord(groups.length)} ${groups.length === 1 ? 'VM' : 'VMs'}` },
     { key: 'memory', text: 'Memory', span: 2 },
@@ -146,7 +151,7 @@
       </div>
     {/each}
   {/snippet}
-  <div class="lines">
+  <div class="lines" use:focusIn={{ inside: (inside) => (held = inside ? (held ?? sorted) : null) }}>
     {#each groups as g (g.vm)}
       {@const listed = listsLines({ folded: vmFolds.containers.has(g.vm), searching: searching || urlFilter.vm != null })}
       <section animate:glide>

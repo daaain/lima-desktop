@@ -18,13 +18,19 @@
   import SortHead from '$lib/SortHead.svelte';
   import { glide } from '$lib/motion';
   import { Ordering } from '$lib/ordering.svelte';
+  import { focusIn } from '$lib/focusIn';
+  import { heldOrder } from '$lib/heldOrder';
   import { BY_NAME, sortRunning, sortStopped, VM_COLUMNS, VM_SORTS, type VmSort } from '$lib/vmSort';
 
   const vms = $derived(live.snapshot?.vms ?? []);
   // By name unless a column head was chosen; the choice is kept for next time. A live order (the
   // fullest memory first, say) can change at every measurement: the rows glide to their places.
   const ordering = new Ordering('vms', VM_SORTS, BY_NAME);
-  const running = $derived(sortRunning(vms.filter((v) => v.instance.status === 'Running'), ordering.current));
+  const sorted = $derived(sortRunning(vms.filter((v) => v.instance.status === 'Running'), ordering.current));
+  // While the keyboard is in a VM's row, the rows keep the order they had as it came in, so the one
+  // it's on doesn't jump away (or lose the focus) as a live order changes (heldOrder.ts).
+  let held = $state<VmLive[] | null>(null);
+  const running = $derived(held ? heldOrder(sorted, held, (v) => v.instance.name) : sorted);
   const others = $derived(sortStopped(vms.filter((v) => v.instance.status !== 'Running'), ordering.current));
   const heads = $derived<{ key: VmSort; text: string }[]>([
     { key: 'name', text: `${countWord(running.length)} ${running.length === 1 ? 'is' : 'are'} running` },
@@ -97,7 +103,7 @@
   </div>
 
   {#if running.length}
-    <section class="fleet">
+    <section class="fleet" use:focusIn={{ within: 'article.row.vm', inside: (inside) => (held = inside ? (held ?? sorted) : null) }}>
       <!-- A head orders the list by its column: the rule under the chosen one is drawn heavier. -->
       <div class="row heads column-heads" role="group" aria-label="Order the VMs by">
         {#each heads as h (h.key)}

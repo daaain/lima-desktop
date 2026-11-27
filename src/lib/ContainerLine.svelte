@@ -12,7 +12,6 @@
   import { range } from './range.svelte';
   import Bar from './Bar.svelte';
   import ContainerActions from './ContainerActions.svelte';
-  import { keepFocus } from './keepFocus';
   import MemoryShare from './MemoryShare.svelte';
   import Sketch from './Sketch.svelte';
 
@@ -66,7 +65,7 @@
     <span class="state label">{c.state}</span>
   {/if}
   <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-  <span class="acts" onclick={(e) => e.stopPropagation()} use:keepFocus>
+  <span class="acts" onclick={(e) => e.stopPropagation()}>
     <ContainerActions {vm} {c} {onerror} />
   </span>
 </div>

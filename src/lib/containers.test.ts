@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { byProject, containerRows, filterContainers, groupContainers, lineHistory, portLinks, portsElsewhere, projectTotals, readContainerFilter } from './containers';
+import { byProject, containerRows, filterContainers, groupContainers, holdGroups, lineHistory, portLinks, portsElsewhere, projectTotals, readContainerFilter } from './containers';
 import type { Port } from './api';
 import { container, snapshot, vm } from './testing';
 
@@ -70,6 +70,16 @@ describe('groupContainers', () => {
 
   it('by CPU: groups by what their containers add up to', () => {
     expect(shape({ by: 'cpu', reversed: false })).toEqual([['shop', 'wdx'], ['blog', 'h']]);
+  });
+
+  it('held: each VM, project and line keeps the place it had, what is new after', () => {
+    const was = groupContainers(rows, { by: 'name', reversed: false });
+    const now = groupContainers(rows, { by: 'memory', reversed: false });
+    const held = (gs: ReturnType<typeof groupContainers>) => gs.map((g) => [g.vm, g.projects.flatMap((p) => p.rows).map((r) => r.c.id).join('')]);
+    expect(held(holdGroups(now, was))).toEqual([['blog', 'h'], ['shop', 'dxw']]);
+    // A line that wasn't there joins the end of its own group.
+    const more = containerRows(snapshot([vm({ name: 'blog' }, [container({ id: 'h', name: 'hugo' }), container({ id: 'a', name: 'atom', latest: { mem: 999 * MiB } })])]));
+    expect(held(holdGroups(groupContainers(more, { by: 'memory', reversed: false }), was))).toEqual([['blog', 'ha']]);
   });
 
   it('by time up: the longest up first, what is not up last either way; groups as by memory', () => {

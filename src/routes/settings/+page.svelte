@@ -7,7 +7,6 @@
     api, DRAWINGS, INTERVALS, THEMES, WARN_FREE_GB, WARN_PCTS, type Drawing, type MenuBar, type MenuBarItem, type Settings, type Theme,
     type Warn,
   } from '$lib/api';
-  import { keepFocus } from '$lib/keepFocus';
   import { live } from '$lib/live.svelte';
   import { intervalPhrase } from '$lib/almanac';
   import { theme } from '$lib/theme.svelte';
@@ -21,8 +20,10 @@
     { key: 'cpu', label: 'CPU' },
     { key: 'disk', label: 'Disk' },
   ];
-  const menuBar = (change: Partial<MenuBar>) => save({ menuBar: { ...settings!.menuBar, ...change } });
-  const menuItem = (key: ItemKey, change: Partial<MenuBarItem>) => menuBar({ [key]: { ...settings!.menuBar[key], ...change } });
+  // Each worked out from the menu bar's settings as they are when it's saved, after any choice before it.
+  const menuBar = (change: Partial<MenuBar> | ((m: MenuBar) => Partial<MenuBar>)) =>
+    save((s) => ({ menuBar: { ...s.menuBar, ...(typeof change === 'function' ? change(s.menuBar) : change) } }));
+  const menuItem = (key: ItemKey, change: Partial<MenuBarItem>) => menuBar((m) => ({ [key]: { ...m[key], ...change } }));
   // When each item warns: memory and CPU past a percent in use, the disk with less than so many GB
   // free; or never.
   const WARN_KEYS: Record<ItemKey, keyof Warn> = { memory: 'memoryPct', cpu: 'cpuPct', disk: 'diskFreeGb' };
@@ -31,14 +32,12 @@
       ? WARN_FREE_GB.map((gb) => ({ value: gb, label: `under ${gb} GB free` }))
       : WARN_PCTS.map((pct) => ({ value: pct, label: `past ${pct} %` }));
   const warnItem = (key: ItemKey, value: string) =>
-    menuBar({ warn: { ...settings!.menuBar.warn, [WARN_KEYS[key]]: value === '' ? null : Number(value) } });
+    menuBar((m) => ({ warn: { ...m.warn, [WARN_KEYS[key]]: value === '' ? null : Number(value) } }));
 
   let settings = $state<Settings | null>(null);
   // A Linux panel shows an item's image alone (its title only with GNOME's AppIndicator extension),
   // so there an item is its drawing, with no figure or name to choose (menubar.rs's parts_here).
   let drawingsOnly = $state(false);
-  // Every control is disabled while a choice is saved; each panel keeps focus through it (keepFocus).
-  let saving = $state(false);
   let error = $state<string | null>(null);
 
   onMount(async () => {
@@ -51,19 +50,25 @@
     }
   });
 
-  /** Saves `change`; each setting then takes effect where it shows. */
-  async function save(change: Partial<Settings>) {
-    if (!settings || saving) return;
-    saving = true;
+  // Choices are saved one after another, each on what the last left: each save sends the whole
+  // settings, so two at once would have the second undo the first. Nothing waits disabled for a
+  // save, which would take the keyboard's focus with it.
+  let saved = Promise.resolve();
+  /** Saves `change` after any choice before it (given as a function, worked out from the settings as
+   * they are then); each setting then takes effect where it shows. */
+  function save(change: Partial<Settings> | ((s: Settings) => Partial<Settings>)): Promise<void> {
+    return (saved = saved.then(() => store(change)));
+  }
+  async function store(asked: Partial<Settings> | ((s: Settings) => Partial<Settings>)) {
+    if (!settings) return;
     error = null;
+    const change = typeof asked === 'function' ? asked(settings) : asked;
     try {
       settings = await api.setSettings({ ...settings, ...change });
       if (change.intervalSecs != null) live.poke();
       theme.apply(settings.theme);
     } catch (e) {
       error = String(e);
-    } finally {
-      saving = false;
     }
   }
 </script>
@@ -73,12 +78,12 @@
 {:else}
   <h1 class="headline">Each running VM is measured {intervalPhrase(settings.intervalSecs)}.</h1>
 
-  <section class="panel" use:keepFocus>
+  <section class="panel">
     <h2 class="head">How often</h2>
     <div class="choices" role="group" aria-label="Measure each running VM every">
       {#each INTERVALS as s}
         <button class="choice num" class:active={settings.intervalSecs === s} aria-pressed={settings.intervalSecs === s}
-          disabled={saving} onclick={() => settings!.intervalSecs !== s && save({ intervalSecs: s })}>{s} s</button>
+          onclick={() => settings!.intervalSecs !== s && save({ intervalSecs: s })}>{s} s</button>
       {/each}
     </div>
     <p class="note">
@@ -89,18 +94,18 @@
     </p>
   </section>
 
-  <section class="panel" use:keepFocus>
+  <section class="panel">
     <h2 class="head">Theme</h2>
     <div class="choices" role="group" aria-label="Theme">
       {#each THEMES as t}
         <button class="choice" class:active={settings.theme === t} aria-pressed={settings.theme === t}
-          disabled={saving} onclick={() => settings!.theme !== t && save({ theme: t })}>{THEME_LABELS[t]}</button>
+          onclick={() => settings!.theme !== t && save({ theme: t })}>{THEME_LABELS[t]}</button>
       {/each}
     </div>
     <p class="note">System is light or dark as this computer is, and follows it when it changes.</p>
   </section>
 
-  <section class="panel" use:keepFocus>
+  <section class="panel">
     <h2 class="head">In the menu bar</h2>
     <div class="items">
       {#each ITEMS as item (item.key)}
@@ -111,19 +116,19 @@
             <div class="choices" role="group" aria-label="{item.label} drawn in the menu bar as">
               {#each DRAWINGS as d}
                 <button class="choice small" class:active={chosen.drawing === d} aria-pressed={chosen.drawing === d}
-                  disabled={saving} onclick={() => chosen.drawing !== d && menuItem(item.key, { drawing: d })}>{DRAWING_LABELS[d]}</button>
+                  onclick={() => chosen.drawing !== d && menuItem(item.key, { drawing: d })}>{DRAWING_LABELS[d]}</button>
               {/each}
             </div>
             {#if !drawingsOnly}
               <label class="check">
-                <input type="checkbox" checked={chosen.figure} disabled={saving} aria-label="{item.label} figure"
+                <input type="checkbox" checked={chosen.figure} aria-label="{item.label} figure"
                   onchange={(e) => menuItem(item.key, { figure: e.currentTarget.checked })} />
                 Figure
               </label>
             {/if}
             <label class="warn">
               Warn
-              <select aria-label="{item.label} warns" disabled={saving} value={String(settings.menuBar.warn[WARN_KEYS[item.key]] ?? '')}
+              <select aria-label="{item.label} warns" value={String(settings.menuBar.warn[WARN_KEYS[item.key]] ?? '')}
                 onchange={(e) => warnItem(item.key, e.currentTarget.value)}>
                 {#each warnChoices(item.key) as c (c.value)}<option value={String(c.value)}>{c.label}</option>{/each}
                 <option value="">never</option>
@@ -142,7 +147,7 @@
       </p>
     {:else}
       <label class="check">
-        <input type="checkbox" checked={settings.menuBar.names} disabled={saving} onchange={(e) => menuBar({ names: e.currentTarget.checked })} />
+        <input type="checkbox" checked={settings.menuBar.names} onchange={(e) => menuBar({ names: e.currentTarget.checked })} />
         Name each one (“mem”, “cpu”, “disk”)
       </label>
       <p class="note">
@@ -161,10 +166,10 @@
     </p>
   </section>
 
-  <section class="panel" use:keepFocus>
+  <section class="panel">
     <h2 class="head">When the window is closed</h2>
     <label class="check">
-      <input type="checkbox" checked={settings.keepRunning} disabled={saving} onchange={(e) => save({ keepRunning: e.currentTarget.checked })} />
+      <input type="checkbox" checked={settings.keepRunning} onchange={(e) => save({ keepRunning: e.currentTarget.checked })} />
       Keep recording, in the menu bar
     </label>
     <p class="note">
@@ -173,10 +178,10 @@
     </p>
   </section>
 
-  <section class="panel" use:keepFocus>
+  <section class="panel">
     <h2 class="head">New versions</h2>
     <label class="check">
-      <input type="checkbox" checked={settings.checkUpdates} disabled={saving}
+      <input type="checkbox" checked={settings.checkUpdates}
         onchange={(e) => save({ checkUpdates: e.currentTarget.checked }).then(() => update.refresh())} />
       Say when a new version is out
     </label>

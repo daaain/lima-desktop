@@ -717,7 +717,7 @@
     },
     // The opener plugin's command (a link opened in the browser): a test reads it from __fakeCalls.
     'plugin:opener|open_url': (args) => void calls.push({ cmd: 'open_url', args }),
-    vm_action: () => later(),
+    vm_action: (args) => (calls.push({ cmd: 'vm_action', args }), later()),
     vm_resize: () => later(),
     container_action: () => later(),
     image_remove: () => later(),

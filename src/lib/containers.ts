@@ -3,6 +3,7 @@ import type { ContainerLive, HistoryOf, Port, Snapshot } from './api';
 import { podmanScope } from './perVm';
 import { matches } from './search';
 import { AMOUNTS, byText, most, named, NAMES, sortBy, type Column, type Compare, type Order } from './order';
+import { heldOrder } from './heldOrder';
 
 export interface ContainerRow {
   vm: string;
@@ -203,4 +204,18 @@ export function groupContainers(rows: ContainerRow[], o: Order<ContainerSort>): 
   }
   const groups = [...byVm.entries()].map(([vm, rs]) => ({ vm, rows: rs, projects: byProject(rs, (r) => r.c, o) }));
   return sortBy(groups, GROUP_ORDER, o);
+}
+
+/** `groups` held in the order `was` had them, at each level: VMs, their projects, each project's lines (heldOrder.ts). */
+export function holdGroups(groups: ContainerGroup[], was: readonly ContainerGroup[]): ContainerGroup[] {
+  const line = (r: ContainerRow) => `${r.vm}/${r.c.id}`;
+  const project = (p: ProjectGroup<ContainerRow>) => p.project ?? '';
+  return heldOrder(groups, was, (g) => g.vm).map((g) => {
+    const before = was.find((w) => w.vm === g.vm)?.projects ?? [];
+    const projects = heldOrder(g.projects, before, project).map((p) => ({
+      ...p,
+      rows: heldOrder(p.rows, before.find((b) => project(b) === project(p))?.rows ?? [], line),
+    }));
+    return { ...g, projects };
+  });
 }
