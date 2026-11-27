@@ -52,7 +52,7 @@ replay-headless snapshot=(snapshots + "/latest") seconds="20":
 fixture snapshot=(snapshots + "/latest") name="snapshot-1" seconds="10":
     node tools/anonymise-snapshot.mjs "{{snapshot}}" "{{fixtures}}/{{name}}" --seconds {{seconds}}
 
-# End to end against this host's Lima: 2 small VMs in their own LIMA_HOME, deleted after (unless --keep)
+# End to end against this host's Lima: 3 small VMs (or those --guest picks) in their own LIMA_HOME, deleted after (unless --keep)
 e2e *args:
     #!/usr/bin/env bash
     set -euo pipefail

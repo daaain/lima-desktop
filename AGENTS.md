@@ -15,7 +15,7 @@ A desktop app (Tauri 2: Rust in `src-tauri/`, SvelteKit SPA + Svelte 5 in `src/`
 ```bash
 just check        # everything CI checks: svelte-check, Prettier (Markdown), rustfmt, vitest, cargo test
 just ui-e2e       # the built UI in Playwright against e2e-ui/fake-backend.js
-just e2e          # against a real Lima: two throwaway VMs
+just e2e          # against a real Lima: three throwaway VMs (`--guest deb13` for one)
 just --list       # the rest (snapshot → replay → fixture, screenshots, release)
 ```
 
