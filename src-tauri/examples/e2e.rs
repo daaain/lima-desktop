@@ -648,15 +648,15 @@ podman inspect -f '{{{{.Name}}}} {{{{.Id}}}}' {WEB} {CLIENT}
 async fn check_podman(ctx: &mut Ctx, vm: &'static str) -> Outcome {
     let who = ctx.who(vm);
     let Some(sock) = ctx.vm(vm).and_then(|i| i.podman_socket.clone()) else {
-        return skip(format!("podman {who}: it isn't up"));
+        return skip(format!("libpod {who}: it isn't up"));
     };
     let pod = Libpod::new(&sock);
     if let Err(e) = pod.ensure_supported().await {
-        return fail(format!("podman {who}: ensure_supported refused it"), vec![e.to_string()]);
+        return fail(format!("libpod {who}: ensure_supported refused it"), vec![e.to_string()]);
     }
     let out = shell(vm, &containers_script(&image()), Duration::from_secs(300)).await;
     if !out.ok {
-        return fail(format!("podman {who}: couldn't start the test containers"), out.evidence());
+        return fail(format!("libpod {who}: couldn't start the test containers"), out.evidence());
     }
     for line in out.stdout.lines() {
         if let Some((name, id)) = line.split_once(' ') {
@@ -669,13 +669,13 @@ async fn check_podman(ctx: &mut Ctx, vm: &'static str) -> Outcome {
     }
     let mut list = match pod.containers().await {
         Ok(l) => l,
-        Err(e) => return fail(format!("podman {who}: containers() failed"), vec![e.to_string()]),
+        Err(e) => return fail(format!("libpod {who}: containers() failed"), vec![e.to_string()]),
     };
     // As the collector does: a project is believed once the container's image, found by its id in
     // the images list, shows the config hash didn't come from it.
     match pod.image_hashes().await {
         Ok(images) => podman::trust_compose(&mut list, &images),
-        Err(e) => return fail(format!("podman {who}: image_hashes() failed"), vec![e.to_string()]),
+        Err(e) => return fail(format!("libpod {who}: image_hashes() failed"), vec![e.to_string()]),
     }
     let now = now_ms() / 1000;
     let mut problems = Vec::new();
@@ -702,11 +702,11 @@ async fn check_podman(ctx: &mut Ctx, vm: &'static str) -> Outcome {
         }
     }
     if !problems.is_empty() {
-        return fail(format!("podman {who}: containers() isn't what was started"), problems);
+        return fail(format!("libpod {who}: containers() isn't what was started"), problems);
     }
     let web = list.iter().find(|c| c.name == WEB).expect("checked");
     pass(format!(
-        "podman {who}: supported, 2 containers listed, compose {COMPOSE_PROJECT}/{}, started {} s ago",
+        "libpod {who}: supported, 2 containers listed, compose {COMPOSE_PROJECT}/{}, started {} s ago",
         web.compose_service.as_deref().unwrap_or("?"),
         now - web.started_at.unwrap_or(now)
     ))
@@ -1315,7 +1315,8 @@ async fn run_all(report: &mut Report, keep: bool, selected: Vec<&'static str>) {
         return;
     }
     report.check(check_list(&mut ctx)).await;
-    let first = ctx.selected[0];
+    // It checks the client, not the engine: any guest that came up will do.
+    let first = ctx.selected.iter().copied().find(|vm| ctx.up.contains_key(vm)).unwrap_or(ctx.selected[0]);
     report.check(check_long_socket(&mut ctx, first)).await;
     for vm in ctx.supported() {
         report.check(check_podman(&mut ctx, vm)).await;
