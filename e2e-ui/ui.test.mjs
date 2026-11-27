@@ -1480,7 +1480,7 @@ test("A container's detail says what it publishes, and opens a TCP port in the b
 test("A container's log opens at its newest line, each with podman's time", async () => {
   const { page, errors, close } = await open('/containers');
   await page.locator('.line', { has: page.locator('.name', { hasText: /^frontend/ }) }).first().click();
-  await page.locator('section.detail').getByRole('button', { name: 'logs' }).click();
+  await page.locator('section.detail').getByRole('tab', { name: 'logs' }).click();
   const log = page.locator('section.detail .log');
   await log.locator('.ln').first().waitFor();
   assert.equal(await log.locator('.ln').count(), 120);
@@ -1505,7 +1505,7 @@ test("A container's detail keeps its tabs beside its name when the name and imag
   const image = await head.locator('.image').boundingBox();
   assert.ok(image.y >= name.y + name.height - 1, 'the image is under the name');
   for (const label of ['metrics', 'logs', 'inspect', 'Close']) {
-    const b = await head.getByRole('button', { name: label, exact: true }).boundingBox();
+    const b = await head.getByRole(label === 'Close' ? 'button' : 'tab', { name: label, exact: true }).boundingBox();
     const middle = b.y + b.height / 2;
     assert.ok(middle > name.y && middle < name.y + name.height, `${label} is level with the name`);
   }
@@ -1517,7 +1517,7 @@ test("A container's log is searched by its words, filtered by level, stream and 
   const { page, errors, close } = await open('/containers');
   await page.locator('.line', { has: page.locator('.name', { hasText: /^frontend/ }) }).first().click();
   const detail = page.locator('section.detail');
-  await detail.getByRole('button', { name: 'logs' }).click();
+  await detail.getByRole('tab', { name: 'logs' }).click();
   const log = detail.locator('.log');
   await log.locator('.ln').first().waitFor();
   const note = detail.locator('.logs p.note');
@@ -1588,7 +1588,7 @@ test("A container's log is searched by its words, filtered by level, stream and 
 async function openLog(page, name) {
   await page.locator('.line', { has: page.locator('.name', { hasText: name }) }).first().click();
   const detail = page.locator('section.detail');
-  await detail.getByRole('button', { name: 'logs' }).click();
+  await detail.getByRole('tab', { name: 'logs' }).click();
   const log = detail.locator('.log');
   await log.locator('.ln').first().waitFor();
   return { detail, log, note: detail.locator('.logs p.note') };
@@ -2369,7 +2369,7 @@ for (const engine of ['chromium', 'webkit']) {
         await page.locator('.uplot').first().waitFor();
         await page.locator('.line').first().click();
         await page.locator('.detail .uplot').first().waitFor();
-        await page.locator('.detail').getByRole('button', { name: 'logs', exact: true }).click();
+        await page.locator('.detail').getByRole('tab', { name: 'logs', exact: true }).click();
         await page.locator('.ln').first().waitFor();
       });
       await visit('/containers', async (page) => {
@@ -2404,6 +2404,54 @@ test('A labelled element keeps its tooltip as its description once the pointer h
   await page.locator('[role=tooltip]').waitFor({ timeout: 1000 });
   assert.equal(await ranges.getAttribute('title'), null);
   assert.equal(await ranges.getAttribute('aria-description'), said);
+  assert.deepEqual(errors, []);
+  await close();
+});
+
+/** The focused element's role and accessible name, as a screen reader would say it. */
+const focused = (page) => page.evaluate(() => {
+  const el = document.activeElement;
+  return el ? `${el.getAttribute('role') ?? el.tagName.toLowerCase()}: ${el.getAttribute('aria-label') ?? el.textContent.trim()}` : null;
+});
+
+test("The popover's tabs are one Tab stop, chosen with the arrow keys, Home and End, each labelling its panel", async () => {
+  const { page, errors, close } = await open('/menubar?tab=mem', { width: 396, height: 560 });
+  const tab = (name) => page.getByRole('tab', { name });
+  await page.locator('.legend .row[data-vm]').first().waitFor();
+  await tab('Memory').focus();
+  await page.keyboard.press('ArrowRight');
+  assert.equal(await focused(page), 'tab: CPU');
+  assert.equal(await tab('CPU').getAttribute('aria-selected'), 'true');
+  assert.equal(await page.getByRole('tabpanel', { name: 'CPU' }).count(), 1);
+  await page.keyboard.press('End');
+  assert.equal(await focused(page), 'tab: Disk');
+  await page.keyboard.press('ArrowRight');
+  assert.equal(await focused(page), 'tab: Memory', 'round from the end');
+  await page.keyboard.press('ArrowLeft');
+  assert.equal(await focused(page), 'tab: Disk');
+  await page.keyboard.press('Home');
+  assert.equal(await focused(page), 'tab: Memory');
+  // Tab leaves the row for the panel, not the next tab.
+  await page.keyboard.press('Tab');
+  assert.notEqual(await page.evaluate(() => document.activeElement?.getAttribute('role')), 'tab');
+  assert.deepEqual(errors, []);
+  await close();
+});
+
+test("A container's detail's tabs say which is chosen, and the arrow keys choose another", async () => {
+  const { page, errors, close } = await open('/containers', { height: 1400 });
+  const line = page.locator('.line', { has: page.locator('.name', { hasText: /^frontend/ }) }).first();
+  await line.focus();
+  await page.keyboard.press('Enter');
+  const detail = page.locator('section.detail');
+  await detail.waitFor();
+  const tabs = detail.getByRole('tablist');
+  assert.equal(await tabs.getByRole('tab', { name: 'metrics' }).getAttribute('aria-selected'), 'true');
+  await tabs.getByRole('tab', { name: 'metrics' }).focus();
+  await page.keyboard.press('ArrowRight');
+  assert.equal(await focused(page), 'tab: logs');
+  assert.equal(await tabs.getByRole('tab', { name: 'logs' }).getAttribute('aria-selected'), 'true');
+  await detail.getByRole('tabpanel', { name: 'logs' }).waitFor();
   assert.deepEqual(errors, []);
   await close();
 });
