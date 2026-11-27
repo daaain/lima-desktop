@@ -2392,3 +2392,18 @@ for (const engine of ['chromium', 'webkit']) {
     }
   });
 }
+
+// ---- Keyboard and screen readers (#28, docs/accessibility.md) ----
+
+test('A labelled element keeps its tooltip as its description once the pointer has shown it', async () => {
+  const { page, errors, close } = await open('/');
+  const ranges = page.getByRole('group', { name: 'Time range' });
+  const said = 'Every chart, peak and verdict in the app is over this range';
+  assert.equal(await ranges.getAttribute('title'), said);
+  await ranges.hover();
+  await page.locator('[role=tooltip]').waitFor({ timeout: 1000 });
+  assert.equal(await ranges.getAttribute('title'), null);
+  assert.equal(await ranges.getAttribute('aria-description'), said);
+  assert.deepEqual(errors, []);
+  await close();
+});

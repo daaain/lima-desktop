@@ -2,8 +2,9 @@
   // The tooltip, drawn once for the whole app. The browser's own `title` tooltip takes a second or
   // more to appear; this one shows after a short rest (tips.ts). Any element's `title` becomes its
   // text: on first pointing at it the attribute moves to `data-tip`, so the browser's never shows,
-  // and to `aria-description`, so a screen reader still has it. A `title` set again later (the text
-  // changed) is taken over the same way next time.
+  // and to `aria-description`, so a screen reader still has it, as it had the `title` (an element's
+  // description where something else names it), unless it only says the label again. A `title` set
+  // again later (the text changed) is taken over the same way next time.
   // An element given a card (richTip.svelte.ts) shows it in place of its text.
   import { OWN_TIP, tooltip } from './tipState.svelte';
   import { richOf } from './richTip.svelte';
@@ -20,7 +21,7 @@
     if (title != null) {
       el.removeAttribute('title');
       el.dataset.tip = title;
-      if (!el.hasAttribute('aria-label') && !el.hasAttribute('aria-labelledby')) el.setAttribute('aria-description', title);
+      if (title !== el.getAttribute('aria-label')) el.setAttribute('aria-description', title);
     }
     return el.dataset.tip ?? '';
   }
