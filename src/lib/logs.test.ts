@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { RawLogLine } from './api';
 import {
   fetchedSentence, filterLog, joinEarlier, levelOf, logCounts, logLines, logTime, matchTerms, MAX_HELD_CHARS, MAX_HELD_LINES, mayBeEarlier,
-  parseQuery, pieces, plainText, shownSentence, tokenize, withoutOverlap,
+  pageUntil, parseQuery, pieces, plainText, shownSentence, tokenize, withoutOverlap,
   type Held, type LogFilter, type LogLine,
 } from './logs';
 
@@ -196,6 +196,36 @@ describe('paging back', () => {
   const at0 = Date.UTC(2026, 10, 10, 14, 0);
   const l = (ms: number, text: string, o: Partial<LogLine> = {}): LogLine => ({ at: at0 + ms, text, stream: 'stdout', level: null, ...o });
   const texts = (ls: LogLine[]) => ls.map((x) => `${x.at! - at0}:${x.text}${x.stream === 'stderr' ? '!' : ''}`);
+
+  it("asks up to the end of what the oldest held line's time could stand for", () => {
+    // podman 6 stamps to the nanosecond; podman 5 to the second (RFC 3339 without a fraction), so a
+    // line stamped 14:00:01 was written any time in that second.
+    const [whole, tenths, ms, ns] = logLines(raw(
+      '2026-11-10T14:00:01Z a\n2026-11-10T14:00:01.5Z b\n2026-11-10T14:00:01.123Z c\n2026-11-10T14:00:01.123456789Z d',
+    ));
+    const t = Date.UTC(2026, 10, 10, 14, 0, 1);
+    expect([whole, tenths, ms, ns].map(pageUntil)).toEqual([t + 999, t + 599, t + 123, t + 123]);
+    expect(pageUntil({ at: null, text: 'x', stream: null, level: null })).toBeNull();
+  });
+
+  it('pages back through a log stamped to the second without a gap or a repeat', () => {
+    // podman 5's log: each line's real time precise, its stamp cut to the second, and `until`
+    // applied to the real time. Three lines a second, a page of five: the oldest held line's
+    // second has a line before it that the newest page didn't reach.
+    const base = Date.UTC(2026, 10, 10, 14, 0);
+    const log = 'abcdefghi'.split('').map((text, i) => ({ real: base + Math.floor(i / 3) * 1000 + (i % 3) * 300 + 7, text }));
+    const stamp = (ms: number) => new Date(Math.floor(ms / 1000) * 1000).toISOString().replace('.000Z', 'Z');
+    const podman = (tail: number, until?: number) =>
+      log.filter((l) => until == null || l.real <= until).slice(-tail).map((l) => out(`${stamp(l.real)} ${l.text}`));
+    let held = logLines(podman(5));
+    expect(held.map((x) => x.text)).toEqual(['e', 'f', 'g', 'h', 'i']);
+    for (let pages = 0; pages < 10; pages++) {
+      const joined = joinEarlier(held, logLines(podman(5, pageUntil(held[0])!)));
+      if (joined.added === 0) break;
+      held = joined.lines;
+    }
+    expect(held.map((x) => x.text).join('')).toBe('abcdefghi');
+  });
 
   it('may find more before where the backend left some out or sent all it was asked for', () => {
     expect(mayBeEarlier([out('a'), out('b')], 2)).toBe(true);

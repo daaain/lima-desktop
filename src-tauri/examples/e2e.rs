@@ -1161,11 +1161,13 @@ async fn check_logs_until(ctx: &mut Ctx) -> Outcome {
 
 /// One driver's part of `check_logs_until`: what it found, or what was wrong.
 async fn logs_until_with(pod: &Libpod, driver: &str, name: &str) -> Result<String, String> {
-    // A burst, so many lines share a millisecond, then idle so the log stays as written.
+    // Bursts of 30 a fifth of a second apart: lines that share a stamp (conmon stamps each read, not
+    // each line) and lines that don't, then idle so the log stays as written.
     let script = format!(
         "set -e\npodman rm -f {name} >/dev/null 2>&1 || true\n\
              podman run -d --log-driver {driver} --name {name} {image} \
-             sh -c 'i=1; while [ $i -le {LOG_LINES} ]; do echo line$i; i=$((i+1)); done; sleep 3600'\n",
+             sh -c 'i=1; while [ $i -le {LOG_LINES} ]; do echo line$i; \
+             [ $((i % 30)) -eq 0 ] && sleep 0.2; i=$((i+1)); done; sleep 3600'\n",
         image = image()
     );
     let out = shell(P5, &script, Duration::from_secs(120)).await;

@@ -16,6 +16,9 @@ export type Stream = 'stdout' | 'stderr';
 export interface LogLine {
   /** Unix ms; null for a line without a time (an older backend, or a line podman didn't stamp). */
   at: number | null;
+  /** How many ms after `at` it could have been written, where its stamp is coarser than a ms: 999
+   * for one to the second, as podman 5 stamps them (`pageUntil`). */
+  span?: number;
   text: string;
   /** Null for a TTY container's, whose output is one stream. */
   stream: Stream | null;
@@ -47,6 +50,18 @@ const CONTROLS = /[\x00-\x08\x0b-\x0c\x0e-\x1f\x7f-\x9f]/g;
 export const plainText = (line: string) =>
   bidiVisible(line.replace(ESCAPES, '').replace(/[\r\n]+$/, '').replace(/[\r\n]+/g, ' ').replace(CONTROLS, ''));
 
+// How many ms a stamp could stand for past its own, by how many digits its fraction has: none (to
+// the second, as podman 5 writes them), one or two; to the ms or finer, none.
+const SPAN = [999, 99, 9];
+
+/**
+ * The time to fetch an earlier page up to: the end of what the oldest held line's stamp could stand
+ * for. podman 5 stamps lines to the second, so asking only up to the stamp itself would leave out
+ * that second's lines written before the oldest held, and no later page would reach them. What the
+ * page repeats of lines held, `withoutOverlap` drops.
+ */
+export const pageUntil = (l: LogLine): number | null => (l.at == null ? null : l.at + (l.span ?? 0));
+
 const dayOf = (at: number) => new Date(at).toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' });
 
 export function logLines(raw: RawLogLine[]): LogLine[] {
@@ -65,7 +80,8 @@ export function logLines(raw: RawLogLine[]): LogLine[] {
     const day = dayOf(at);
     const first = day !== lastDay;
     lastDay = day;
-    return { at, text, stream, level, ...(first ? { day } : {}), ...flags };
+    const span = SPAN[/\.(\d+)/.exec(m[1])?.[1].length ?? 0] ?? 0;
+    return { at, text, stream, level, ...(span ? { span } : {}), ...(first ? { day } : {}), ...flags };
   });
 }
 
@@ -296,12 +312,13 @@ export const mayBeEarlier = (raw: RawLogLine[], tail: number) => !!raw[0]?.earli
 const identity = (l: LogLine) => `${l.at}\u0000${l.stream ?? ''}\u0000${l.text}`;
 
 /**
- * An earlier page without the lines it repeats. It was asked for up to the oldest held line's
- * millisecond, which podman sends whole (`podman::logs_path`), so its lines from that millisecond
- * on are lines held, and those of it before the oldest held. Lines can share a millisecond, and
- * read alike in it (a repeated message), so the held lines in that stretch are counted by their
- * time, stream and text, and as many of each are dropped from the page's newest end. Linear: a
- * guest can write as many lines to one millisecond as it likes.
+ * An earlier page without the lines it repeats. It was asked for up to the end of what the oldest
+ * held line's stamp could stand for (`pageUntil`: its millisecond, or its whole second where podman
+ * stamps to the second), which podman sends whole (`podman::logs_path`), so its lines stamped from
+ * there on are lines held, and those of that stamp written before the oldest held. Lines can share
+ * a stamp, and read alike in it (a repeated message), so the held lines in that stretch are counted
+ * by their time, stream and text, and as many of each are dropped from the page's newest end.
+ * Linear: a guest can write as many lines to one stamp as it likes.
  */
 export function withoutOverlap(page: LogLine[], held: LogLine[]): LogLine[] {
   const from = held[0]?.at;

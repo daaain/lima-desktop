@@ -6,7 +6,7 @@
   import { api } from './api';
   import { inOrder } from './inOrder';
   import {
-    CUT_SAID, CUT_TIP, fetchedSentence, filterLog, joinEarlier, LEVELS, logCounts, logLines, logTime, mayBeEarlier, pieces,
+    CUT_SAID, CUT_TIP, fetchedSentence, filterLog, joinEarlier, LEVELS, logCounts, logLines, logTime, mayBeEarlier, pageUntil, pieces,
     shownSentence, tokenize,
     type Level, type LogLine, type Stream, type Token,
   } from './logs';
@@ -70,7 +70,7 @@
   // The lines before the oldest held, as many as a fetch asks for, put before them; so search and
   // the filters reach back a page at a time.
   async function fetchEarlier() {
-    const from = lines?.[0]?.at;
+    const from = lines?.[0] ? pageUntil(lines[0]) : null;
     if (from == null || !fetched || paging) return;
     const gen = generation;
     const { tail: n, since } = fetched;
