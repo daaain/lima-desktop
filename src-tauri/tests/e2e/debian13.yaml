@@ -47,3 +47,13 @@ probes:
 portForwards:
 - guestSocket: "/run/user/{{.UID}}/podman/podman.sock"
   hostSocket: "{{.Dir}}/sock/podman.sock"
+# Nothing else: Debian 13's resolver listens for LLMNR on 5355, which CI's runner holds already,
+# and Lima's start once failed reading the status it wrote about that forward. The e2e needs only
+# the socket.
+- guestIP: "0.0.0.0"
+  guestPortRange: [1, 65535]
+  proto: any
+  ignore: true
+- guestPortRange: [1, 65535]
+  proto: any
+  ignore: true
