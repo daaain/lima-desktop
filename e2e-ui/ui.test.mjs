@@ -2419,6 +2419,14 @@ test('A labelled element keeps its tooltip as its description once the pointer h
   await page.locator('[role=tooltip]').waitFor({ timeout: 1000 });
   assert.equal(await ranges.getAttribute('title'), null);
   assert.equal(await ranges.getAttribute('aria-description'), said);
+  // Labelled by another element: a tooltip that says the same isn't said again, one that says more is.
+  await page.evaluate(() => document.body.insertAdjacentHTML('beforeend',
+    '<p style="position:fixed;bottom:0"><span id="t-name">harbor</span><button id="t-same" aria-labelledby="t-name" title="harbor">a</button><button id="t-more" aria-labelledby="t-name" title="harbor, running">b</button></p>'));
+  for (const [id, described] of [['t-same', null], ['t-more', 'harbor, running']]) {
+    await page.locator(`#${id}`).hover();
+    await page.locator('[role=tooltip]').waitFor({ timeout: 1000 });
+    assert.equal(await page.locator(`#${id}`).getAttribute('aria-description'), described, id);
+  }
   assert.deepEqual(errors, []);
   await close();
 });
@@ -2821,6 +2829,31 @@ test("A list's order held under the keyboard lets go once the focus has gone, ev
     };
   }, last);
   await page.waitForFunction((last) => document.querySelector('.fleet article.row.vm a.name')?.textContent === last, last, { timeout: 5000 });
+  assert.deepEqual(errors, []);
+  await close();
+});
+
+test("A step through a folder's files overtaken by another leaves the focus where the keyboard is", async () => {
+  const { page, errors, close } = await open('/volumes');
+  await page.locator('.line', { has: page.locator('.name', { hasText: /^atlas_pgdata$/ }) }).first().click();
+  const detail = page.locator('section.detail');
+  await detail.getByRole('button', { name: 'pg_wal/' }).waitFor();
+  // base/ answers in a moment, pg_wal/ a good while later: base/'s answer comes after pg_wal/ was asked for.
+  await page.evaluate(() => {
+    const slow = { base: 300, pg_wal: 1500 };
+    window.__fakeAnswer = (cmd, args, answer) => {
+      const ms = cmd === 'guest_files' ? slow[args.path?.replace(/\/$/, '')] : undefined;
+      return ms ? new Promise((r) => setTimeout(() => r(answer), ms)) : answer;
+    };
+  });
+  await detail.getByRole('button', { name: 'base/' }).focus();
+  await page.keyboard.press('Enter');
+  await page.keyboard.press('Tab');
+  assert.equal(await focused(page), 'pg_wal/');
+  await page.keyboard.press('Enter');
+  // base/'s answer, overtaken, isn't shown, and doesn't move the focus either.
+  await page.waitForTimeout(700);
+  assert.equal(await focused(page), 'pg_wal/');
   assert.deepEqual(errors, []);
   await close();
 });

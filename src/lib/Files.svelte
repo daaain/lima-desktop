@@ -47,18 +47,23 @@
     return parts.map((part, i) => ({ part, path: parts.slice(0, i + 1).join('/') }));
   });
 
-  /** Ask, keeping only the latest answer; the error is said, unless `quiet` (the caller handles it). */
-  async function ask<T>(call: () => Promise<T>, done: (value: T) => void, quiet = false): Promise<boolean> {
+  /**
+   * Ask, keeping only the latest answer; the error is said, unless `quiet` (the caller handles it).
+   * Says what became of it: shown, overtaken by a later step (and neither shown nor said), or failed.
+   */
+  async function ask<T>(call: () => Promise<T>, done: (value: T) => void, quiet = false): Promise<'shown' | 'overtaken' | 'failed'> {
     const n = ++asked;
     busy = true;
     error = null;
     try {
       const value = await call();
-      if (n === asked) done(value);
-      return true;
+      if (n !== asked) return 'overtaken';
+      done(value);
+      return 'shown';
     } catch (e) {
-      if (n === asked && !quiet) error = String(e);
-      return false;
+      if (n !== asked) return 'overtaken';
+      if (!quiet) error = String(e);
+      return 'failed';
     } finally {
       if (n === asked) busy = false;
     }
@@ -77,12 +82,15 @@
 
   const showList = (l: FileListing) => ((listing = l), (peek = null));
   const list = (path: string) => ask(() => api.files(vm, source, path), showList);
-  const open = async (path: string) => (await list(path)) && arrive();
-  const read = async (path: string) => (await ask(() => api.file(vm, source, path), (p) => (peek = p))) && arrive();
+  // Only a view drawn takes the focus: an answer overtaken by a later step would move it as the
+  // keyboard goes on.
+  const open = async (path: string) => (await list(path)) === 'shown' && arrive();
+  const read = async (path: string) => (await ask(() => api.file(vm, source, path), (p) => (peek = p))) === 'shown' && arrive();
   // A link may lead to a directory or a file: try it as a directory, else read it.
   async function follow(path: string) {
-    if (await ask(() => api.files(vm, source, path), showList, true)) arrive();
-    else read(path);
+    const listed = await ask(() => api.files(vm, source, path), showList, true);
+    if (listed === 'shown') arrive();
+    else if (listed === 'failed') read(path);
   }
 
   // Once, as it opens: not an effect, which would rerun (and go back to the top) whenever the

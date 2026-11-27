@@ -16,12 +16,19 @@
     return found?.hasAttribute(OWN_TIP) ? null : found;
   }
 
+  /** What names an element: its `aria-label`, else the text of the elements its `aria-labelledby` lists. */
+  function labelOf(el: Element): string | null {
+    const ids = el.getAttribute('aria-labelledby');
+    if (ids == null) return el.getAttribute('aria-label');
+    return ids.split(/\s+/).map((id) => document.getElementById(id)?.textContent?.trim() ?? '').join(' ');
+  }
+
   function textOf(el: HTMLElement | SVGElement): string {
     const title = el.getAttribute('title');
     if (title != null) {
       el.removeAttribute('title');
       el.dataset.tip = title;
-      if (title !== el.getAttribute('aria-label')) el.setAttribute('aria-description', title);
+      if (title !== labelOf(el)) el.setAttribute('aria-description', title);
     }
     return el.dataset.tip ?? '';
   }

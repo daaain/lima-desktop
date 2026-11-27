@@ -264,7 +264,7 @@
                 <td>
                   {#if who}
                     <!-- The row opens the detail for a pointer; its name is the button a keyboard reaches. -->
-                    {#if shown}<button class="open cname" onclick={() => show(shown)}><bdi>{who.name}</bdi></button>{:else}<bdi class="cname">{who.name}</bdi>{/if}{#if who.context}<bdi class="muted cid">{who.context}</bdi>{/if}
+                    {#if shown}<button class="open cname" onclick={(e) => { e.stopPropagation(); show(shown); }}><bdi>{who.name}</bdi></button>{:else}<bdi class="cname">{who.name}</bdi>{/if}{#if who.context}<bdi class="muted cid">{who.context}</bdi>{/if}
                     {#if who.removed}<span class="badge" title="This container no longer exists; its name comes from the history.">removed</span>{/if}
                   {:else if row.kill}
                     <span class="cname">not in a container</span>
