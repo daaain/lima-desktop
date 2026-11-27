@@ -1593,7 +1593,11 @@ async function openLog(page, name) {
   await log.locator('.ln').first().waitFor();
   return { detail, log, note: detail.locator('.logs p.note') };
 }
-const noteSays = (page, re) => page.waitForFunction((src) => new RegExp(src).test(document.querySelector('.logs p.note')?.textContent ?? ''), re.source);
+/** Waits for the log's note to match `re`; failing, says what it says instead. */
+const noteSays = (page, re) =>
+  page.waitForFunction((src) => new RegExp(src).test(document.querySelector('.logs p.note')?.textContent?.trim() ?? ''), re.source, { timeout: 5000 }).catch(async (e) => {
+    throw new Error(`the note didn't come to match ${re}: ${await page.locator('.logs p.note').innerText().catch(() => '(none)')}`, { cause: e });
+  });
 
 test("A long log says what the backend left out, and marks a line it cut", async () => {
   const { page, errors, close } = await open('/containers');
@@ -1611,8 +1615,48 @@ test("A long log says what the backend left out, and marks a line it cut", async
   await noteSays(page, /^The newest 5,000 lines; there may be more\./);
   await detail.getByRole('button', { name: 'Fetch up to 20,000' }).click();
   await noteSays(page, /earlier ones/);
-  assert.match(await note.innerText(), /^The newest 9,080 lines; earlier ones were too much to fetch at once\.$/);
+  assert.match(await note.innerText(), /^The newest 9,080 lines; earlier ones were too much to fetch at once\./);
+  assert.ok(await detail.getByRole('button', { name: 'Fetch earlier' }).isVisible(), 'but they can be fetched next');
   assert.equal(await detail.getByRole('button', { name: /^Fetch up to/ }).count(), 0);
+  assert.deepEqual(errors, []);
+  await close();
+});
+
+test('A log pages back a fetch at a time, search reaching every line held, each line once', async () => {
+  const { page, errors, close } = await open('/containers');
+  const { detail, log, note } = await openLog(page, /^scraper/);
+  const earlier = detail.getByRole('button', { name: 'Fetch earlier' });
+  const search = detail.getByRole('searchbox', { name: 'Search the log' });
+  // The one line about robots.txt is older than the newest 500, and than the 500 before them.
+  await search.fill('robots');
+  assert.match(await note.innerText(), /No line matches\.$/);
+  await earlier.click();
+  await noteSays(page, /^The newest 998 lines, from 14:13 to now; there may be more\./);
+  assert.match(await note.innerText(), /No line matches\.$/);
+  await earlier.click();
+  await noteSays(page, /^The newest 1,496 lines, from 14:05 to now; there may be more\./);
+  assert.match(await note.innerText(), /1 of 1,496 lines matches\.$/);
+  assert.match(await log.locator('.ln').innerText(), /page=9600 disallowed by robots\.txt/);
+
+  // Each page was asked for up to the oldest line held, whose millisecond came again, two lines
+  // alike in it: every line is there once, in order, none dropped at the joins.
+  await search.fill('');
+  const texts = await log.locator('.ln .x').allInnerTexts();
+  assert.equal(texts.length, 1496);
+  assert.deepEqual(texts.slice(0, 2), ['skipped a link already seen', 'skipped a link already seen']);
+  for (let i = 2; i < texts.length; i += 3) {
+    assert.match(texts[i], new RegExp(`page=${9502 + (i - 2) / 3}\\b`), `line ${i}`);
+    assert.deepEqual(texts.slice(i + 1, i + 3), ['skipped a link already seen', 'skipped a link already seen'], `lines ${i + 1}–${i + 2}`);
+  }
+
+  // A longer tail starts afresh, as does another time.
+  await detail.getByRole('button', { name: 'Fetch up to 5,000' }).click();
+  await noteSays(page, /^The newest 5,000 lines; there may be more\./);
+  await earlier.click();
+  await noteSays(page, /^The newest 9,998 lines, from /);
+  await detail.getByRole('combobox', { name: 'Time' }).selectOption({ label: 'last 1 h' });
+  await noteSays(page, /^All 3,600 lines of the last hour\.$/);
+  assert.equal(await detail.getByRole('button', { name: 'Fetch earlier' }).count(), 0);
   assert.deepEqual(errors, []);
   await close();
 });

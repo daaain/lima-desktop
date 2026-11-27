@@ -627,11 +627,12 @@
   // A container's log: 120 lines, every ten minutes back across midnight, as podman sends them with
   // timestamps on (an RFC 3339 time and a space before each line), each with its stream. Mostly
   // requests; some slow-query warnings and failed requests, to stderr, one with a stack trace under
-  // it. The newest `tail` of those since `since` (Unix ms), as podman would, and as the backend
-  // passes them on: within its size, the first saying when older ones were left out.
-  const containerLogs = (id, tail = 500, since = null) => {
+  // it. The newest `tail` of those since `since` and up to the end of the millisecond `until` (both
+  // Unix ms), as podman would, and as the backend passes them on: within its size, the first saying
+  // when older ones were left out.
+  const containerLogs = (id, tail = 500, since = null, until = null) => {
     const lines = isScraper(id) ? scraperLines() : frontendLines(id);
-    const asked = lines.filter((l) => since == null || l.at >= since);
+    const asked = lines.filter((l) => (since == null || l.at >= since) && (until == null || l.at < until + 1));
     const kept = [];
     let bytes = 0;
     for (let i = asked.length - 1; i >= 0 && kept.length < tail; i--) {
@@ -640,8 +641,9 @@
       kept.push(asked[i]);
     }
     kept.reverse();
-    // podman sends only the tail asked for, so only the size leaves lines out.
-    const dropped = kept.length < Math.min(tail, asked.length);
+    // podman sends only the tail asked for, so only the size leaves lines out; but up to `until`
+    // it sends them all, and the backend keeps the tail.
+    const dropped = kept.length < (until == null ? Math.min(tail, asked.length) : asked.length);
     return kept.map(({ stream, line, cut }, i) => ({ stream, line, ...(cut ? { cut } : {}), ...(i === 0 && dropped ? { earlierDropped: true } : {}) }));
   };
   const isScraper = (id) => fleet.some((v) => v.containers?.some((c) => c.id === id && c.name === 'atlas-scraper-1'));
@@ -697,7 +699,7 @@
     image_history: ({ vm, id }) => later(imageHistory(vm, id)),
     guest_files: (args) => later(guestFiles(args)),
     guest_file: (args) => later(guestFile(args)),
-    container_logs: ({ id, tail, since }) => containerLogs(id, tail, since),
+    container_logs: ({ id, tail, since, until }) => containerLogs(id, tail, since, until),
     container_inspect: ({ id }) => ({ Id: id, State: { Status: 'running' } }),
     // A newer version only when a test sets __fakeUpdate ({ version, url }), so the gallery's
     // pictures don't carry the notice; none with the check off, as updates.rs. Each asking is in

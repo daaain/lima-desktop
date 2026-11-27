@@ -6,7 +6,8 @@
   import { api } from './api';
   import { inOrder } from './inOrder';
   import {
-    CUT_SAID, CUT_TIP, fetchedSentence, filterLog, LEVELS, logCounts, logLines, logTime, pieces, shownSentence, tokenize,
+    CUT_SAID, CUT_TIP, fetchedSentence, filterLog, joinEarlier, LEVELS, logCounts, logLines, logTime, mayBeEarlier, pieces,
+    shownSentence, tokenize,
     type Level, type LogLine, type Stream, type Token,
   } from './logs';
   import { RANGES, rangeMs, theLast, type RangeKey } from './ranges';
@@ -18,12 +19,21 @@
   /** At most this many lines are drawn: the newest of those the filter leaves. */
   const DRAWN = 2000;
 
-  let lines = $state<LogLine[] | null>(null);
+  // Raw: replaced whole, never changed in place, and up to 100,000 lines, which a deep proxy would
+  // wrap one by one as the filter reads them.
+  let lines = $state.raw<LogLine[] | null>(null);
   // Each line's words, split when a query first needs them.
   let tokens: Token[][] = [];
   const tokensOf = (n: number) => (tokens[n] ??= tokenize(lines![n].text));
-  // `tooMuch`: the backend left older lines out to keep its answer within its size.
-  let fetched = $state<{ tail: number; since: number | null; over: RangeKey | null; tooMuch: boolean } | null>(null);
+  // What was asked for. `filled`: as many came as were asked for; `tooMuch`: the backend left
+  // older lines out to keep its answer within its size.
+  let fetched = $state<{ tail: number; since: number | null; over: RangeKey | null; filled: boolean; tooMuch: boolean } | null>(null);
+  // Earlier lines fetched since: how many pages, whether there may be more before the oldest held,
+  // whether the last page added any, and whether the view holds as much as it will.
+  let pages = $state({ n: 0, more: false, added: true, full: false });
+  let paging = $state(false);
+  // Which fetch the lines held came from: a page asked for before a fresh fetch is dropped.
+  let generation = 0;
   let error = $state<string | null>(null);
 
   let query = $state('');
@@ -45,13 +55,43 @@
     error = null;
     logInOrder(api.containerLogs(vm, id, want.tail, want.since)).then(
       (raw) => {
+        // A fresh start: another container, time, tail, or asked again.
+        generation++;
+        paging = false;
         tokens = [];
         lines = logLines(raw);
-        fetched = { ...want, tooMuch: !!raw[0]?.earlierDropped && raw.length < want.tail };
+        fetched = { ...want, filled: raw.length >= want.tail, tooMuch: !!raw[0]?.earlierDropped && raw.length < want.tail };
+        pages = { n: 0, more: mayBeEarlier(raw, want.tail), added: true, full: false };
       },
       (e) => (error = String(e)),
     );
   });
+
+  // The lines before the oldest held, as many as a fetch asks for, put before them; so search and
+  // the filters reach back a page at a time.
+  async function fetchEarlier() {
+    const from = lines?.[0]?.at;
+    if (from == null || !fetched || paging) return;
+    const gen = generation;
+    const { tail: n, since } = fetched;
+    paging = true;
+    error = null;
+    try {
+      const raw = await api.containerLogs(vm, id, n, since, from);
+      if (gen !== generation) return;
+      const joined = joinEarlier(lines!, logLines(raw));
+      // Each held line's words move up by as many as were put before it.
+      const moved: Token[][] = [];
+      tokens.forEach((t, i) => (moved[i + joined.added] = t));
+      tokens = moved;
+      lines = joined.lines;
+      pages = { n: pages.n + 1, more: mayBeEarlier(raw, n), added: joined.added > 0, full: joined.full };
+    } catch (e) {
+      if (gen === generation) error = String(e);
+    } finally {
+      if (gen === generation) paging = false;
+    }
+  }
 
   const counts = $derived(lines ? logCounts(lines) : null);
   const shown = $derived(lines ? filterLog(lines, tokensOf, { query, levels, streams, since: fetched?.since ?? null }) : []);
@@ -60,9 +100,12 @@
   // Level chips only when some line says one; stream chips only when both streams wrote some.
   const levelChips = $derived(counts && counts.levels.none < lines!.length ? LEVELS.filter((l) => counts.levels[l.key] > 0) : []);
   const streamChips = $derived(counts && counts.streams.stdout && counts.streams.stderr ? (['stdout', 'stderr'] as const) : []);
-  // A longer tail only where this one was full: past the backend's size, asking for more lines
-  // brings no more of them.
-  const more = $derived(lines && fetched && !fetched.tooMuch && lines.length >= fetched.tail ? TAILS.find((t) => t > fetched!.tail) : undefined);
+  // A longer tail only where this one was full, and longer than what's held: past the backend's
+  // size, asking for more lines brings no more of them. It starts afresh.
+  const more = $derived(lines && fetched?.filled && !fetched.tooMuch ? TAILS.find((t) => t > fetched!.tail && t > lines!.length) : undefined);
+  // Earlier lines where there may be some, the oldest held has a time to ask up to, the last page
+  // brought any, and the view has room.
+  const earlier = $derived(!!lines?.length && lines[0].at != null && pages.more && pages.added && !pages.full);
 
   // The newest lines are what's wanted: start at the end, and go back to it as the filter changes.
   $effect(() => {
@@ -146,7 +189,11 @@
   {#if error}<p class="error">{error}</p>{/if}
   {#if lines && fetched}
     <p class="note num">
-      {fetchedSentence({ n: lines.length, tail: fetched.tail, over: fetched.over && theLast(fetched.over), tooMuch: fetched.tooMuch })}
+      {fetchedSentence({
+        n: lines.length, tail: fetched.tail, over: fetched.over && theLast(fetched.over), tooMuch: fetched.tooMuch,
+        paged: pages.n ? { from: lines[0]?.at ?? null, more: pages.more, full: pages.full } : undefined,
+      })}
+      {#if earlier}<button class="more" onclick={fetchEarlier} disabled={paging}>Fetch earlier</button>{/if}
       {#if more}<button class="more" onclick={() => (tail = more!)}>Fetch up to {more.toLocaleString('en-GB')}</button>{/if}
       {#if filtering}<span class="shown">{shownSentence(shown.length, lines.length, drawn.length)}</span>{/if}
     </p>

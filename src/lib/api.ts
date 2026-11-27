@@ -410,9 +410,11 @@ export const api = {
     invoke<void>('vm_resize', { name, resize }),
   containerAction: (vm: string, id: string, action: ContainerAction) =>
     invoke<void>('container_action', { vm, id, action }),
-  /** A container's newest `tail` lines (at most 20,000), only those since `since` (Unix ms) if given. */
-  containerLogs: (vm: string, id: string, tail = 500, since: number | null = null) =>
-    invoke<RawLogLine[]>('container_logs', { vm, id, tail, since }),
+  /** A container's newest `tail` lines (at most 20,000), only those since `since` and up to the end
+   * of the millisecond `until` (both Unix ms) if given: `until` pages back, and sends that
+   * millisecond whole, lines already held included. */
+  containerLogs: (vm: string, id: string, tail = 500, since: number | null = null, until: number | null = null) =>
+    invoke<RawLogLine[]>('container_logs', { vm, id, tail, since, until }),
   containerInspect: (vm: string, id: string) => invoke<unknown>('container_inspect', { vm, id }),
   systemDf: (vm: string) => invoke<Record<string, unknown>>('system_df', { vm }),
   images: (vm: string) => invoke<Image[]>('images', { vm }),

@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import type { RawLogLine } from './api';
 import {
-  fetchedSentence, filterLog, levelOf, logCounts, logLines, logTime, matchTerms, parseQuery, pieces, plainText, shownSentence, tokenize,
+  fetchedSentence, filterLog, joinEarlier, levelOf, logCounts, logLines, logTime, matchTerms, MAX_HELD_CHARS, MAX_HELD_LINES, mayBeEarlier,
+  parseQuery, pieces, plainText, shownSentence, tokenize, withoutOverlap,
   type Held, type LogFilter, type LogLine,
 } from './logs';
 
@@ -190,6 +191,71 @@ describe('filterLog', () => {
   });
 });
 
+describe('paging back', () => {
+  // Lines as logLines makes them, at a millisecond `at`, from a few letters: "a" on stdout, "A" on stderr.
+  const at0 = Date.UTC(2026, 10, 10, 14, 0);
+  const l = (ms: number, text: string, o: Partial<LogLine> = {}): LogLine => ({ at: at0 + ms, text, stream: 'stdout', level: null, ...o });
+  const texts = (ls: LogLine[]) => ls.map((x) => `${x.at! - at0}:${x.text}${x.stream === 'stderr' ? '!' : ''}`);
+
+  it('may find more before where the backend left some out or sent all it was asked for', () => {
+    expect(mayBeEarlier([out('a'), out('b')], 2)).toBe(true);
+    expect(mayBeEarlier([out('a')], 2)).toBe(false);
+    expect(mayBeEarlier([{ ...out('a'), earlierDropped: true }], 2)).toBe(true);
+    expect(mayBeEarlier([], 500)).toBe(false);
+  });
+
+  it("drops what a page repeats of the oldest millisecond held, counting lines that read alike", () => {
+    // The log: 1:x, then at 2 ms "go" and two equal "same" lines, then 3:z. Held from the second
+    // "same"; the page, asked up to 2 ms, sends that millisecond whole.
+    const held = [l(2, 'same'), l(3, 'z')];
+    const page = [l(1, 'x'), l(2, 'go'), l(2, 'same'), l(2, 'same')];
+    expect(texts(withoutOverlap(page, held))).toEqual(['1:x', '2:go', '2:same']);
+    // A line alike but on the other stream is another line.
+    expect(texts(withoutOverlap([l(1, 'x'), l(2, 'same', { stream: 'stderr' }), l(2, 'same')], held))).toEqual(['1:x', '2:same!']);
+    // Nothing of that millisecond came again: all of the page is new.
+    expect(texts(withoutOverlap([l(0, 'w'), l(1, 'x')], held))).toEqual(['0:w', '1:x']);
+    // A page all of which is held already adds nothing.
+    expect(withoutOverlap([l(2, 'same')], held)).toEqual([]);
+    // Held lines without a time can't be placed: the page is kept whole.
+    expect(texts(withoutOverlap([l(1, 'x')], [{ ...l(0, 'q'), at: null }]))).toEqual(['1:x']);
+  });
+
+  it('drops the repeats in time in proportion to the lines, however many share a millisecond', () => {
+    const n = 200_000;
+    const held = Array.from({ length: n }, () => l(5, 'tick'));
+    const page = [l(4, 'before'), ...held];
+    const t = performance.now();
+    expect(texts(withoutOverlap(page, held))).toEqual(['4:before']);
+    expect(performance.now() - t).toBeLessThan(1000);
+  });
+
+  it("puts an earlier page before the lines held, a stack trace's level carried over the join", () => {
+    const held = logLines(raw('2026-11-10T10:00:01Z     at handler (/app/server.js:12:5)\n2026-11-10T10:00:02Z GET / 200'));
+    const page = logLines(raw('2026-11-10T10:00:00Z ERROR request failed\n2026-11-10T10:00:01Z     at handler (/app/server.js:12:5)'));
+    const joined = joinEarlier(held, page);
+    expect(joined.lines.map((x) => [x.text.trim(), x.level])).toEqual([
+      ['ERROR request failed', 'error'],
+      ['at handler (/app/server.js:12:5)', 'error'],
+      ['GET / 200', null],
+    ]);
+    expect([joined.added, joined.full]).toEqual([1, false]);
+    // The lines held are left as they were: a new array, new objects where they changed.
+    expect(held[0].level).toBe(null);
+  });
+
+  it("lets the oldest go past what the view holds, in lines or in text, and says so", () => {
+    const held = [l(10, 'held'), l(11, 'held')];
+    const page = [l(1, 'a'), l(2, 'b'), l(3, 'c')];
+    const byLines = joinEarlier(held, page, { lines: 4, chars: Infinity });
+    expect([texts(byLines.lines), byLines.added, byLines.full]).toEqual([['2:b', '3:c', '10:held', '11:held'], 2, true]);
+    // Each line costs its text and 48.
+    const byChars = joinEarlier(held, page, { lines: Infinity, chars: 4 * 49 + 4 });
+    expect([texts(byChars.lines), byChars.added, byChars.full]).toEqual([['3:c', '10:held', '11:held'], 1, true]);
+    expect(joinEarlier(held, page).full).toBe(false);
+    expect([MAX_HELD_LINES, MAX_HELD_CHARS]).toEqual([100_000, 32 << 20]);
+  });
+});
+
 describe('sentences', () => {
   const said = (n: number, tail: number, over: string | null = null, o: Partial<Held> = {}) => fetchedSentence({ n, tail, over, ...o });
   it('say what was fetched, and whether there may be more', () => {
@@ -202,6 +268,20 @@ describe('sentences', () => {
   it("say so when older lines were left out to keep a fetch's size down, never that it's all", () => {
     expect(said(3410, 20000, null, { tooMuch: true })).toBe('The newest 3,410 lines; earlier ones were too much to fetch at once.');
     expect(said(1, 500, 'the last hour', { tooMuch: true })).toBe('The newest line of the last hour; earlier ones were too much to fetch at once.');
+  });
+  it('say how far back the lines held reach once earlier ones are fetched, the day where it isn\'t today', () => {
+    // Local times, so the test reads the same in any timezone.
+    const now = new Date(2026, 10, 10, 14, 30).getTime();
+    const from = new Date(2026, 10, 10, 14, 5, 6).getTime();
+    const paged = (o: Partial<NonNullable<Held['paged']>>, over: string | null = null) =>
+      said(1496, 500, over, { paged: { from, more: true, full: false, ...o }, now });
+    expect(paged({})).toBe('The newest 1,496 lines, from 14:05 to now; there may be more.');
+    expect(paged({ more: false })).toBe('All 1,496 lines, from 14:05 to now.');
+    expect(paged({ more: false }, 'the last hour')).toBe('All 1,496 lines of the last hour, from 14:05 to now.');
+    expect(paged({ full: true })).toBe("The newest 1,496 lines, from 14:05 to now; that's as much as the view holds at once.");
+    expect(paged({ from: new Date(2026, 10, 9, 23, 50).getTime() })).toBe('The newest 1,496 lines, from 9 Nov 23:50 to now; there may be more.');
+    // What was fetched last says nothing of what's held.
+    expect(said(1496, 500, null, { tooMuch: true, paged: { from, more: false, full: false }, now })).toBe('All 1,496 lines, from 14:05 to now.');
   });
   it('say what the filter left', () => {
     expect(shownSentence(12, 500, 12)).toBe('12 of 500 lines match.');

@@ -277,6 +277,81 @@ export const LEVELS: { key: Level | 'none'; label: string }[] = [
   { key: 'none', label: 'no level' },
 ];
 
+// --- Paging back --------------------------------------------------------------------------------
+
+/**
+ * The most a log view holds, however far back it's paged: lines, and characters of text (a line
+ * counted as its text and 48, as the backend counts its bytes, so a log of empty lines is bounded
+ * too). Five of the longest fetches by count, or four of the backend's 8 MiB answers; search and
+ * the filters run over all of it at each keystroke, and only 2,000 of it is ever drawn.
+ */
+export const MAX_HELD_LINES = 100_000;
+export const MAX_HELD_CHARS = 32 << 20;
+const lineCost = (l: LogLine) => l.text.length + 48;
+
+/** Whether there may be lines before a fetch's oldest: the backend left some out, or it sent as
+ * many as were asked for. */
+export const mayBeEarlier = (raw: RawLogLine[], tail: number) => !!raw[0]?.earlierDropped || (raw.length > 0 && raw.length >= tail);
+
+const identity = (l: LogLine) => `${l.at}\u0000${l.stream ?? ''}\u0000${l.text}`;
+
+/**
+ * An earlier page without the lines it repeats. It was asked for up to the oldest held line's
+ * millisecond, which podman sends whole (`podman::logs_path`), so its lines from that millisecond
+ * on are lines held, and those of it before the oldest held. Lines can share a millisecond, and
+ * read alike in it (a repeated message), so the held lines in that stretch are counted by their
+ * time, stream and text, and as many of each are dropped from the page's newest end. Linear: a
+ * guest can write as many lines to one millisecond as it likes.
+ */
+export function withoutOverlap(page: LogLine[], held: LogLine[]): LogLine[] {
+  const from = held[0]?.at;
+  if (from == null) return page;
+  let start = page.length;
+  let to = from;
+  while (start > 0 && page[start - 1].at != null && page[start - 1].at! >= from) to = Math.max(to, page[--start].at!);
+  if (start === page.length) return page;
+  const counts = new Map<string, number>();
+  for (const l of held) {
+    if (l.at == null || l.at > to) break;
+    const k = identity(l);
+    counts.set(k, (counts.get(k) ?? 0) + 1);
+  }
+  const kept: LogLine[] = [];
+  for (let i = page.length - 1; i >= start; i--) {
+    const k = identity(page[i]);
+    const c = counts.get(k);
+    if (c) counts.set(k, c - 1);
+    else kept.push(page[i]);
+  }
+  return page.slice(0, start).concat(kept.reverse());
+}
+
+/**
+ * An earlier page put before the lines held: what it repeats dropped, the level of a stack trace
+ * the join cut through carried on to its lines held, and past the view's limits its oldest lines
+ * let go (`full`). `added` is how many of its lines are now held, before the lines held already.
+ */
+export function joinEarlier(
+  held: LogLine[], page: LogLine[], limit: { lines: number; chars: number } = { lines: MAX_HELD_LINES, chars: MAX_HELD_CHARS },
+): { lines: LogLine[]; added: number; full: boolean } {
+  let fresh = withoutOverlap(page, held);
+  let chars = 0;
+  for (const l of held) chars += lineCost(l);
+  let keep = 0;
+  while (keep < fresh.length && held.length + keep < limit.lines && chars + lineCost(fresh[fresh.length - 1 - keep]) <= limit.chars) {
+    chars += lineCost(fresh[fresh.length - 1 - keep]);
+    keep++;
+  }
+  const full = keep < fresh.length;
+  fresh = fresh.slice(fresh.length - keep);
+  // A stack trace's lines take the level of the line above (`logLines`), which for the first lines
+  // held was on this page.
+  const level = fresh.length ? fresh[fresh.length - 1].level : null;
+  const after = held.slice();
+  for (let i = 0; level && i < after.length && after[i].level == null && CONTINUES.test(after[i].text); i++) after[i] = { ...after[i], level };
+  return { lines: fresh.concat(after), added: fresh.length, full };
+}
+
 // --- Sentences ----------------------------------------------------------------------------------
 
 const count = (n: number) => n.toLocaleString('en-GB');
@@ -293,15 +368,35 @@ export interface Held {
   /** The backend left older lines out to keep its answer within its size (`earlierDropped` on
    * fewer lines than were asked for). */
   tooMuch?: boolean;
+  /** Set once earlier lines were fetched: the oldest held line's time, whether there may be more
+   * before it, and whether the view holds as much as it will. */
+  paged?: { from: number | null; more: boolean; full: boolean };
+  /** For saying the day only where it isn't today. */
+  now?: number;
+}
+
+/** Where the lines held start: "14:05" today, "9 Nov 23:50" another day. */
+function reachSaid(from: number, now: number): string {
+  const time = new Date(from).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+  const day = (t: number) => new Date(t).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
+  return day(from) === day(now) ? time : `${day(from)} ${time}`;
 }
 
 /**
  * What was fetched: "The newest 500 lines; there may be more." when podman may have more, "All
  * 340 lines of the last hour." when it hasn't, and never "All" when the backend left some out.
+ * Paged back, what's held and how far back it reaches: "The newest 1,496 lines, from 14:05 to now;
+ * there may be more."
  */
-export function fetchedSentence({ n, tail, over, tooMuch = false }: Held): string {
+export function fetchedSentence({ n, tail, over, tooMuch = false, paged, now = Date.now() }: Held): string {
   if (n === 0) return over ? `Nothing logged in ${over}.` : 'Nothing logged.';
   const of = over ? ` of ${over}` : '';
+  if (paged) {
+    const reach = paged.from != null ? `, from ${reachSaid(paged.from, now)} to now` : '';
+    if (paged.full) return `The newest ${lines_(n)}${of}${reach}; that's as much as the view holds at once.`;
+    if (paged.more) return `The newest ${lines_(n)}${of}${reach}; there may be more.`;
+    return `All ${lines_(n)}${of}${reach}.`;
+  }
   const newest = n === 1 ? `The newest line${of}` : `The newest ${lines_(n)}${of}`;
   if (tooMuch) return `${newest}; earlier ones were too much to fetch at once.`;
   if (n >= tail) return `${newest}; there may be more.`;
